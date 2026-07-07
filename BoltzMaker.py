@@ -571,11 +571,35 @@ def _build_family_record(name: str, fields: dict, partners: dict, statements: li
     )
 
 
+def _canonicalize_smiles(smiles: str) -> str:
+    # Silent normalization only -- an invalid SMILES is left as-is here and reported by
+    # preflight's check_smiles (parsing shouldn't fail or change error timing over a
+    # chemistry problem). A consistent canonical form flowing through the YAML, the
+    # summary table, and cif2plip's own ligand-matching (see _analyze_target_interactions)
+    # is the actual payoff, not just cosmetics.
+    try:
+        from rdkit import Chem
+        mol = Chem.MolFromSmiles(smiles)
+        return Chem.MolToSmiles(mol) if mol is not None else smiles
+    except Exception:
+        return smiles
+
+
+def _smiles_to_inchikey(smiles: str):
+    try:
+        from rdkit import Chem
+        mol = Chem.MolFromSmiles(smiles)
+        return Chem.MolToInchiKey(mol) if mol is not None else None
+    except Exception:
+        return None
+
+
 def _build_ligand_record(name: str, fields: dict, lineno: int) -> Ligand:
     has_smiles, has_ccd = "smiles" in fields, "ccd" in fields
     if has_smiles == has_ccd:  # both True (ambiguous) or both False (missing)
         raise MDParseError(f"ligand '{name}' must specify exactly one of SMILES/CCD (line {lineno})")
-    return Ligand(id=name, smiles=fields.get("smiles"), ccd=fields.get("ccd"))
+    smiles = _canonicalize_smiles(fields["smiles"]) if has_smiles else None
+    return Ligand(id=name, smiles=smiles, ccd=fields.get("ccd"))
 
 
 # ==========================================================================
@@ -1197,6 +1221,61 @@ def check_smiles(campaign: Campaign) -> CheckResult:
     return CheckResult("smiles_validity", "PASS", f"{len(smiles_ligands)} SMILES parse OK")
 
 
+def _ligand_chemistry_notes(campaign: Campaign) -> dict:
+    # Bad input chemistry (an undefined stereocentre, a salt/counterion left attached, an
+    # ionizable group whose intended protonation state is ambiguous) doesn't error --
+    # Boltz folds whatever it's given and the pose/affinity is silently wrong. Shared by
+    # preflight's check_ligand_preparation and the dashboard's "Ligand preparation" card
+    # so the two never drift out of sync. This only advises; it never blocks -- these are
+    # legitimate modelling choices the user may have already made deliberately.
+    from rdkit import Chem
+
+    ionizable_patterns = {
+        "carboxylic acid": "[CX3](=O)[OX2H1]",
+        "primary/secondary amine": "[NX3;H2,H1;!$(NC=O);!$(N=*)]",
+        "phenol": "[OX2H][cX3]",
+        "sulfonic acid": "[SX4](=O)(=O)[OX2H1]",
+    }
+    patterns = {name: Chem.MolFromSmarts(smarts) for name, smarts in ionizable_patterns.items()}
+
+    notes_by_ligand = {}
+    for lig in campaign.ligands:
+        if lig.smiles is None:
+            continue  # CCD ligands are pre-defined dictionary entries, not raw SMILES
+        mol = Chem.MolFromSmiles(lig.smiles)
+        if mol is None:
+            continue  # already reported as a FAIL by check_smiles
+
+        notes = []
+        if len(Chem.GetMolFrags(mol)) > 1:
+            notes.append("multiple disconnected fragments (salt/counterion?)")
+
+        centres = Chem.FindMolChiralCenters(mol, includeUnassigned=True, useLegacyImplementation=False)
+        unassigned = [str(idx) for idx, chirality in centres if chirality == "?"]
+        if unassigned:
+            notes.append(f"undefined stereocentre(s) at atom index {', '.join(unassigned)}")
+
+        found = [name for name, patt in patterns.items() if patt is not None and mol.HasSubstructMatch(patt)]
+        if found:
+            notes.append(f"ionizable group(s) present ({', '.join(found)}) -- verify the SMILES "
+                          "reflects your intended protonation state")
+
+        if notes:
+            notes_by_ligand[lig.id] = notes
+    return notes_by_ligand
+
+
+def check_ligand_preparation(campaign: Campaign) -> CheckResult:
+    notes_by_ligand = _ligand_chemistry_notes(campaign)
+    if notes_by_ligand:
+        issues = [f"{lig_id}: {'; '.join(notes)}" for lig_id, notes in notes_by_ligand.items()]
+        shown = issues[:5]
+        more = f" (+{len(issues) - 5} more)" if len(issues) > 5 else ""
+        return CheckResult("ligand_preparation", "WARN",
+                            f"{len(issues)} ligand(s) may need chemistry review: {shown}{more}")
+    return CheckResult("ligand_preparation", "PASS", "no stereo/protonation/fragment concerns detected")
+
+
 def check_hidden_files(input_dir: Path, dry_run: bool = False) -> CheckResult:
     # exclude BoltzMaker's own manifest -- it's bookkeeping, not Finder/OS cruft.
     hidden = [p for p in input_dir.glob(".*") if p.is_file() and p.name != MANIFEST_FILENAME]
@@ -1293,6 +1372,7 @@ def run_preflight(manifest: list, output_dir: Path, campaign: Campaign, md_path:
         check_all_materialized([md_path] + [output_dir / f"{t.stem}.yaml" for t in manifest]),
         check_yaml_validity(manifest, output_dir, campaign),
         check_smiles(campaign),
+        check_ligand_preparation(campaign),
         check_chain_id_length(campaign),
         check_memory_heuristic(campaign, manifest, memory_warn_tokens),
         check_hidden_files(output_dir),
@@ -1780,10 +1860,22 @@ def _analyze_target_interactions(t: Target, cif_path: Path, campaign: Campaign, 
 
     lig = next((l for l in campaign.ligands if l.id == t.ligand_id), None)
     chosen = None
-    if lig is not None and lig.smiles and "smiles" in summ_df.columns:
-        matches = summ_df[summ_df["smiles"] == lig.smiles]
-        if len(matches) == 1:
-            chosen = matches.iloc[0]["ligand"]
+    if lig is not None and lig.smiles:
+        # InChIKey first: cif2plip's own SMILES is re-derived from the 3D structure via
+        # PLIP/OpenBabel, whose canonicalization scheme differs from RDKit's, so an exact
+        # string match against our (RDKit-canonical) SMILES can miss even the correct
+        # ligand. InChIKey is algorithm-independent -- both tools implement the same IUPAC
+        # standard -- so it survives that mismatch; the SMILES check below is just a
+        # fallback in case InChIKey generation fails on either side.
+        lig_inchikey = _smiles_to_inchikey(lig.smiles)
+        if lig_inchikey and "inchikey" in summ_df.columns:
+            matches = summ_df[summ_df["inchikey"] == lig_inchikey]
+            if len(matches) == 1:
+                chosen = matches.iloc[0]["ligand"]
+        if chosen is None and "smiles" in summ_df.columns:
+            matches = summ_df[summ_df["smiles"] == lig.smiles]
+            if len(matches) == 1:
+                chosen = matches.iloc[0]["ligand"]
     if chosen is None and len(summ_df) == 1:
         chosen = summ_df.iloc[0]["ligand"]
 
@@ -2247,6 +2339,13 @@ def _build_campaign_summary(campaign: Campaign, campaign_dir: Path) -> list:
         ("Predict affinity", "yes" if campaign.settings.predict_affinity else "no"),
     ]
 
+    lig_notes = _ligand_chemistry_notes(campaign)
+    if lig_notes:
+        rows.append(("Ligand chemistry", f"{len(lig_notes)} of {len(campaign.ligands)} "
+                     "ligand(s) flagged -- see \"Ligand preparation\" below"))
+    else:
+        rows.append(("Ligand chemistry", "no stereo/protonation/fragment concerns detected"))
+
     history_path = campaign_dir / RUN_HISTORY_FILENAME
     if history_path.exists():
         records = [json.loads(line) for line in history_path.read_text().splitlines() if line.strip()]
@@ -2283,6 +2382,19 @@ def write_html(df: pd.DataFrame, path: Path, campaign_dir: Path, campaign: Campa
     summary_rows = _build_campaign_summary(campaign, campaign_dir)
     summary_html = pd.DataFrame(summary_rows, columns=["Field", "Value"]).to_html(index=False, na_rep="")
     parts = [f"<div class='md-card table-card'><h2>Campaign summary</h2>{summary_html}</div>"]
+
+    lig_notes = _ligand_chemistry_notes(campaign)
+    if lig_notes:
+        lig_rows = [{"Ligand": lig_id, "Chemistry notes": "; ".join(notes)} for lig_id, notes in lig_notes.items()]
+        lig_html = pd.DataFrame(lig_rows).to_html(index=False, na_rep="")
+        lig_note_text = (f"{len(lig_notes)} of {len(campaign.ligands)} ligand(s) flagged for chemistry review "
+                          "-- these are advisory, not errors; verify the input SMILES reflects what you intended "
+                          "before trusting the results below.")
+        parts.append(f"<div class='md-card table-card'><h2>Ligand preparation</h2>"
+                      f"<p>{lig_note_text}</p>{lig_html}</div>")
+    else:
+        parts.append("<div class='md-card table-card'><h2>Ligand preparation</h2>"
+                      "<p>No stereocentre, protonation-state, or disconnected-fragment concerns detected.</p></div>")
 
     table_df = df.drop(columns=[c for c in _FULL_TABLE_HIDDEN_COLS if c in df.columns])
     display_df = table_df.copy()

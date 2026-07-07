@@ -24,8 +24,11 @@ Why it matters: hand-running a Boltz-2 campaign means writing dozens of near-ide
 files by hand, remembering the right CLI flags for the hardware you're on, and manually
 digging through prediction JSONs afterwards, all repetitive, error-prone steps that don't
 need a human. BoltzMaker turns a single annotated spec into the full pipeline: generated
-inputs, environment/input validation, a monitored run with Mac-safe memory defaults, and a
-ready-to-read report. It is useful for: structural biologists and drug-discovery scientists
+inputs, environment/input validation (including ligand-chemistry sanity checks --
+undefined stereocentres, ambiguous protonation states, stray salts -- so bad input
+chemistry is caught before hours of compute, not silently mispredicted), a monitored run
+with Mac-safe memory defaults, and a ready-to-read report. It is useful for: structural
+biologists and drug-discovery scientists
 running Boltz-2 structure/affinity panels (single targets, covalent-linkage studies, or
 multi-chain SAR/selectivity campaigns) who want a repeatable, resumable, well-documented
 pipeline instead of a pile of hand-edited scripts.
@@ -50,7 +53,7 @@ See [CHANGELOG.md](CHANGELOG.md) for what's changed recently.
 |---|---|---|
 | 1. Input | -- | `boltz_input.md`: the family x partners x ligand DSL spec |
 | 2. Generate | `generate` | `boltz_yamls/*.yaml` + `.boltzmaker_manifest.json` |
-| 3. Preflight | `preflight` | PASS / WARN / FAIL checks: boltz CLI, GPU/MPS, disk, iCloud, YAML/SMILES/chain-id, memory heuristic |
+| 3. Preflight | `preflight` | PASS / WARN / FAIL checks: boltz CLI, GPU/MPS, disk, iCloud, YAML/SMILES/chain-id, ligand chemistry, memory heuristic |
 | 4. Predict | `run` (resumable) | Managed `.venv` -> `boltz predict` -> `boltz_output/predictions/`, live 2-row progress bar + memory monitor |
 | 5. Analyze | `analyze` | `boltz_summary.csv` / `.xlsx`, `boltz_dashboard.html`, `boltz_cif/`, and (if `setup-plip` has been run) `boltz_interactions.csv` + `boltz_plip/` |
 
@@ -296,7 +299,7 @@ Written next to `boltz_input.md`:
 | `boltz_plip/` (optional) | Per-target cif2plip output: the converted PDB, PLIP's XML/TXT reports, the ray-traced binding-site PNG, and the PyMOL `.pse` session -- cached here so re-running `analyze` doesn't re-profile a target that's already been done |
 | `boltz_interactions.csv` (optional) | Long format, one row per detected contact across every target: interaction type, residue, distance -- the raw data behind the dashboard's fingerprint heatmap and per-target contact tables |
 | `boltz_dashboard_sessions/` (optional) | Each target's PyMOL `.pse` session, copied here and linked from the dashboard -- this is the one thing that makes `boltz_dashboard.html` no longer a single self-contained file once interaction analysis has run; without `setup-plip`, the dashboard stays exactly as self-contained as before |
-| `boltz_dashboard.html` | A campaign summary table (input file, protein/partner/ligand/target counts, predict-affinity setting, and -- once a `run` has happened -- boltz predict runtime and the run parameters used, tracked across every `run` invocation in a small hidden sidecar file), then the full results table (rounded to 2 decimal places for display, with a subset of noisy/redundant columns hidden and a download link to the underlying CSV), then four interactive [Plotly](https://plotly.com/javascript/) charts in a 2x2 grid (ranked pIC50, ranked confidence, confidence-vs-affinity scatter, interaction counts by type -- hover/zoom/pan, loaded via the plotly.js CDN). When `setup-plip` has run: a per-family residue-interaction fingerprint heatmap (ligands clustered by similarity -- useful for SAR ranking within a series) and, per target, its binding-site image (residues labelled and interaction distances shown -- PLIP's own images have neither, so these are re-rendered from its PyMOL session with both added) side by side with a table of that target's contacts, plus a link to the full PyMOL session. |
+| `boltz_dashboard.html` | A campaign summary table (input file, protein/partner/ligand/target counts, predict-affinity setting, a one-line ligand-chemistry flag count, and -- once a `run` has happened -- boltz predict runtime and the run parameters used, tracked across every `run` invocation in a small hidden sidecar file), then a "Ligand preparation" card (the same stereocentre/protonation-state/disconnected-fragment checks as `preflight`'s `ligand_preparation` check, shown per-ligand rather than as a single summary line), then the full results table (rounded to 2 decimal places for display, with a subset of noisy/redundant columns hidden and a download link to the underlying CSV), then four interactive [Plotly](https://plotly.com/javascript/) charts in a 2x2 grid (ranked pIC50, ranked confidence, confidence-vs-affinity scatter, interaction counts by type -- hover/zoom/pan, loaded via the plotly.js CDN). When `setup-plip` has run: a per-family residue-interaction fingerprint heatmap (ligands clustered by similarity -- useful for SAR ranking within a series) and, per target, its binding-site image (residues labelled and interaction distances shown -- PLIP's own images have neither, so these are re-rendered from its PyMOL session with both added) side by side with a table of that target's contacts, plus a link to the full PyMOL session. |
 
 ## 🩹 Troubleshooting / FAQ
 
@@ -364,6 +367,8 @@ If your campaign has run `setup-plip` and used cif2plip's interaction analysis, 
 - [ ] Add a cross-target selectivity/triage view to the dashboard (confidence-vs-affinity quadrant flags for "high-confidence, high-affinity" hits)
 - [ ] Bundle Plotly.js locally instead of via CDN so the dashboard renders fully offline/air-gapped
 - [ ] Add a smoke-test suite: an end-to-end fixture run in CI plus unit tests for the `boltz_input.md` parser and JSON-metric flattening
+- [x] Add a ligand-preparation/validation step (canonicalization, stereocentre/protonation-state flagging, disconnected-fragment detection) so bad input chemistry is caught before hours of compute, not silently mispredicted
+- [ ] Add a retrospective `benchmark` mode: pull known actives/co-crystal data for a target family (ChEMBL/BindingDB/PDB) and report predicted-vs-measured pIC50 correlation + pose RMSD, so a user has a per-target-family trust score before committing to a real campaign
 
 ---
 

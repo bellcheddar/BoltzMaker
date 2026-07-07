@@ -42,6 +42,16 @@ everything so far is tracked under `Unreleased`.
   type), replacing static matplotlib images for those four.
 - `format` command: cosmetic comment-alignment/blank-line normalization for
   `boltz_input.md`, with a `--check` mode for CI-style verification.
+- Ligand-preparation validation: `boltz_input.md` ligand SMILES are canonicalized at
+  parse time (RDKit), and a new `preflight` check (`ligand_preparation`) flags undefined
+  stereocentres, disconnected fragments (salts/counterions), and ionizable groups whose
+  protonation state may need review -- all before any compute is spent.
+
+### Fixed
+- cif2plip ligand disambiguation now matches on InChIKey first, falling back to exact
+  SMILES only if that fails. PLIP's own re-derived SMILES (via OpenBabel) can differ in
+  canonical form from RDKit's, so a plain string match could silently miss the correct
+  ligand in a multi-ligand campaign even though it was chemically identical.
 
 ### Verified
 - Three real public-domain example campaigns in `examples/` (`t4_lysozyme`,
