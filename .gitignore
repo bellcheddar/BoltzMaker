@@ -1,0 +1,23 @@
+.venv/
+.plip_env/
+__pycache__/
+*.pyc
+*.log
+boltz_yamls/
+boltz_output/
+boltz_cif/
+boltz_plip/
+.boltz_plip_staging_*/
+boltz_interactions.csv
+boltz_dashboard_sessions/
+.boltzmaker_manifest.json
+boltz_summary.csv
+boltz_summary.xlsx
+boltz_dashboard.html
+.DS_Store
+
+# Elementor README forge output (regenerate with readme_forge.py as needed)
+*.polished.md
+BoltzMaker.html
+BoltzMaker.preview.html
+elementor-widget-markdown.css
