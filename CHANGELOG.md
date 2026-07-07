@@ -89,6 +89,8 @@ everything so far is tracked under `Unreleased`.
   merged "± SD" cell, since a CSV is for further analysis). The existing "Download CSV"
   link is now labelled "Download full CSV" to distinguish it from the new
   "Download summary CSV" link sitting next to it.
+- "Open PyMOL session" renamed to "Download PyMOL session" and given the HTML `download`
+  attribute, so clicking it saves the `.pse` file instead of navigating the browser to it.
 
 ### Verified
 - Three real public-domain example campaigns in `examples/` (`t4_lysozyme`,

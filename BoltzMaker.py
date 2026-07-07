@@ -2988,7 +2988,7 @@ def write_html(df: pd.DataFrame, path: Path, campaign_dir: Path, campaign: Campa
                 dest = sessions_dir / f"{row['target_id']}.pse"
                 shutil.copy2(campaign_dir / pse_rel, dest)
                 total_bytes += dest.stat().st_size
-                pse_link = f"<p><a href='boltz_dashboard_sessions/{dest.name}'>Open PyMOL session</a></p>"
+                pse_link = f"<p><a href='boltz_dashboard_sessions/{dest.name}' download>Download PyMOL session</a></p>"
             contacts_table = "<p><em>No interaction data.</em></p>"
             if interactions_df is not None:
                 tdf = interactions_df[interactions_df["target_id"] == row["target_id"]]
