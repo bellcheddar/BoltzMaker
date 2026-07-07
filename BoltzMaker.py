@@ -160,7 +160,7 @@ def cmd_setup(argv: list) -> None:
 
     subprocess.run(
         [str(pip), "install", "boltz", "rich", "pandas", "openpyxl", "pyyaml", "rdkit", "matplotlib", "psutil",
-         "scipy", "gemmi", "biopython", "plotly"],
+         "scipy", "gemmi", "biopython", "plotly", "reportlab"],
         check=True,
     )
     freeze = subprocess.run([str(pip), "freeze"], capture_output=True, text=True, check=True)
@@ -2247,6 +2247,10 @@ def _rgb_css(color: tuple) -> str:
     return f"rgb({round(color[0] * 255)},{round(color[1] * 255)},{round(color[2] * 255)})"
 
 
+def _rgb_hex(color: tuple) -> str:
+    return f"#{round(color[0] * 255):02x}{round(color[1] * 255):02x}{round(color[2] * 255):02x}"
+
+
 def _cluster_ligands_by_scaffold(mols_by_ligand: dict) -> list:
     # Two tiers, both defensible without a single hand-tuned "looks similar enough" call
     # driving what gets highlighted:
@@ -2408,11 +2412,11 @@ def _render_scaffold_thumbnail(mol) -> str:
     return base64.b64encode(drawer.GetDrawingText()).decode("ascii")
 
 
-def _build_ligand_grid_panel(campaign: Campaign) -> str:
+def _compute_ligand_grid_cells(campaign: Campaign):
+    # Shared by the HTML panel and the PDF export -- both renderers get the same
+    # per-ligand data (rendered structure, severity, badges, cluster) so they can never
+    # show different content, and the RDKit clustering/rendering work only happens once.
     from rdkit import Chem
-
-    if not campaign.ligands:
-        return ""
 
     ccd_ligands = [lig for lig in campaign.ligands if lig.smiles is None]
     mols_by_ligand = {}
@@ -2424,13 +2428,13 @@ def _build_ligand_grid_panel(campaign: Campaign) -> str:
             mols_by_ligand[lig.id] = mol
 
     if not mols_by_ligand:
-        return ""  # nothing renderable (all-CCD campaign) -- skip the panel entirely
+        return [], [], ccd_ligands, 0  # nothing renderable (all-CCD campaign)
 
     findings = _ligand_chemistry_notes(campaign)
     clusters = _cluster_ligands_by_scaffold(mols_by_ligand) if len(mols_by_ligand) >= 2 else []
     cluster_by_ligand = {m: cl for cl in clusters for m in cl["member_ids"]}
 
-    cells_html = []
+    cells = []
     for lig in campaign.ligands:
         if lig.id in mols_by_ligand:
             mol = mols_by_ligand[lig.id]
@@ -2448,25 +2452,112 @@ def _build_ligand_grid_panel(campaign: Campaign) -> str:
                 badges.append(("salt", _LIGAND_GRID_FRAGMENT_COLOR))
             for name in ionizable_atoms:
                 badges.append((_LIGAND_GRID_BADGE_LABELS.get(name, name[:2]), _LIGAND_GRID_IONIZABLE_COLOR))
-            badge_html = "".join(f"<span class='lig-badge' style='background:{_rgb_css(c)}'>{lbl}</span>"
-                                  for lbl, c in badges)
 
             img_b64 = _render_ligand_cell_image(mol, stereo_atoms, ionizable_atoms, cluster)
             desc = _ligand_grid_descriptors(mol)
+            cells.append({"lig_id": lig.id, "kind": "smiles", "img_b64": img_b64, "desc": desc,
+                          "severity": severity, "badges": badges, "cluster": cluster})
+        else:
+            cells.append({"lig_id": lig.id, "kind": "ccd", "ccd_code": lig.ccd or "?"})
+
+    return cells, clusters, ccd_ligands, len(mols_by_ligand)
+
+
+def _write_ligand_grid_pdf(cells: list, path: Path) -> None:
+    # Prints the same cells shown in the HTML grid (same 5x5 pagination, same rendered
+    # PNGs decoded and re-embedded rather than redrawn -- no duplicate RDKit work) as a
+    # PDF, matching the print-oriented output github.com/bellcheddar/smiles2grid (the
+    # tool this panel's design builds on) produces natively.
+    from reportlab.lib import colors
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.utils import ImageReader
+    from reportlab.pdfgen import canvas
+
+    smiles_cells = [c for c in cells if c["kind"] == "smiles"]
+    if not smiles_cells:
+        return
+
+    page_w, page_h = A4
+    margin, gap = 24, 8
+    cols, rows = 5, 5
+    cell_w = (page_w - 2 * margin - (cols - 1) * gap) / cols
+    cell_h = (page_h - 2 * margin - (rows - 1) * gap) / rows
+    severity_colors = {"error": colors.HexColor(_rgb_hex(_LIGAND_GRID_STEREO_COLOR)),
+                        "review": colors.HexColor(_rgb_hex(_LIGAND_GRID_IONIZABLE_COLOR)),
+                        "clean": colors.HexColor("#dde4ed")}
+
+    c = canvas.Canvas(str(path), pagesize=A4)
+    pages = [cells[i:i + rows * cols] for i in range(0, len(cells), rows * cols)]
+    for page_cells in pages:
+        for idx, cell in enumerate(page_cells):
+            row, col = divmod(idx, cols)
+            x = margin + col * (cell_w + gap)
+            y = page_h - margin - (row + 1) * cell_h - row * gap
+
+            border = (colors.HexColor(_rgb_hex(cell["cluster"]["color"])) if cell.get("cluster")
+                      else severity_colors.get(cell.get("severity"), colors.HexColor("#dde4ed")))
+            c.setLineWidth(1.2)
+            c.setStrokeColor(border)
+            c.rect(x, y, cell_w, cell_h, stroke=1, fill=0)
+
+            c.setFont("Helvetica-Bold", 9)
+            c.setFillColor(colors.black)
+            c.drawCentredString(x + cell_w / 2, y + cell_h - 12, cell["lig_id"])
+
+            if cell["kind"] == "smiles":
+                img = ImageReader(io.BytesIO(base64.b64decode(cell["img_b64"])))
+                iw, ih = img.getSize()
+                avail_w, avail_h = cell_w - 12, cell_h - 42
+                scale = min(avail_w / iw, avail_h / ih)
+                draw_w, draw_h = iw * scale, ih * scale
+                c.drawImage(img, x + (cell_w - draw_w) / 2, y + 24 + (avail_h - draw_h) / 2,
+                            width=draw_w, height=draw_h, mask="auto")
+
+                desc = cell["desc"]
+                c.setFont("Helvetica", 6.5)
+                c.drawCentredString(x + cell_w / 2, y + 12,
+                                    f"MW {desc['mw']:.0f}  cLogP {desc['clogp']:.1f}  TPSA {desc['tpsa']:.0f}")
+                if cell["badges"]:
+                    c.setFont("Helvetica-Bold", 6.5)
+                    c.setFillColor(colors.HexColor(_rgb_hex(cell["badges"][0][1])))
+                    c.drawCentredString(x + cell_w / 2, y + 4, " ".join(lbl for lbl, _ in cell["badges"]))
+                    c.setFillColor(colors.black)
+            else:
+                c.setFont("Courier-Bold", 9)
+                c.drawCentredString(x + cell_w / 2, y + cell_h / 2 + 4, cell.get("ccd_code", "?"))
+                c.setFont("Helvetica", 6.5)
+                c.drawCentredString(x + cell_w / 2, y + cell_h / 2 - 8, "No 2D structure (CCD)")
+        c.showPage()
+    c.save()
+
+
+def _build_ligand_grid_panel(campaign: Campaign, campaign_dir: Path) -> str:
+    if not campaign.ligands:
+        return ""
+
+    cells, clusters, ccd_ligands, n_smiles = _compute_ligand_grid_cells(campaign)
+    if not cells:
+        return ""  # nothing renderable (all-CCD campaign) -- skip the panel entirely
+
+    cells_html = []
+    for cell in cells:
+        if cell["kind"] == "smiles":
+            badge_html = "".join(f"<span class='lig-badge' style='background:{_rgb_css(c)}'>{lbl}</span>"
+                                  for lbl, c in cell["badges"])
+            cluster, desc = cell["cluster"], cell["desc"]
             border = f"border-color:{_rgb_css(cluster['color'])};" if cluster else ""
             cells_html.append(
-                f"<div class='lig-cell lig-severity-{severity}' style='{border}'>"
-                f"<div class='lig-cell-header'><span>{lig.id}</span><span class='lig-badges'>{badge_html}</span></div>"
-                f"<img src='data:image/png;base64,{img_b64}' alt='{lig.id} structure'>"
+                f"<div class='lig-cell lig-severity-{cell['severity']}' style='{border}'>"
+                f"<div class='lig-cell-header'><span>{cell['lig_id']}</span><span class='lig-badges'>{badge_html}</span></div>"
+                f"<img src='data:image/png;base64,{cell['img_b64']}' alt='{cell['lig_id']} structure'>"
                 f"<div class='lig-cell-desc'>MW {desc['mw']:.0f} &middot; cLogP {desc['clogp']:.1f} "
                 f"&middot; TPSA {desc['tpsa']:.0f}</div></div>"
             )
         else:
-            ccd_code = lig.ccd or "?"
             cells_html.append(
                 f"<div class='lig-cell lig-cell-ccd-wrap'>"
-                f"<div class='lig-cell-header'><span>{lig.id}</span></div>"
-                f"<div class='lig-cell-ccd'>{ccd_code}<br><small>No 2D structure (CCD ligand)</small></div></div>"
+                f"<div class='lig-cell-header'><span>{cell['lig_id']}</span></div>"
+                f"<div class='lig-cell-ccd'>{cell['ccd_code']}<br><small>No 2D structure (CCD ligand)</small></div></div>"
             )
 
     pages = [cells_html[i:i + _LIGAND_GRID_PAGE_SIZE] for i in range(0, len(cells_html), _LIGAND_GRID_PAGE_SIZE)]
@@ -2477,7 +2568,6 @@ def _build_ligand_grid_panel(campaign: Campaign) -> str:
                   "<span id='lig-pageinfo'></span><button id='lig-next'>Next &rsaquo;</button>"
                   "<button id='lig-all'>Show all</button></div>") if len(pages) > 1 else ""
 
-    n_smiles = len(mols_by_ligand)
     legend_items = []
     for cl in clusters:
         thumb = _render_scaffold_thumbnail(cl["match_mol"])
@@ -2510,8 +2600,14 @@ def _build_ligand_grid_panel(campaign: Campaign) -> str:
                 "heavy atoms. Stereocentre/ionizable-group highlighting from this campaign's own ligand-preparation "
                 "check (see above).</p>")
 
+    pdf_link = ""
+    if any(c["kind"] == "smiles" for c in cells):
+        pdf_path = campaign_dir / "boltz_ligand_grid.pdf"
+        _write_ligand_grid_pdf(cells, pdf_path)
+        pdf_link = f"<p><a href='{pdf_path.name}' download>Download PDF</a></p>"
+
     return (f"<div class='md-card table-card'><h2>Ligand structures</h2>{commonality_note}{ccd_note}"
-            f"{legend_html}<div id='lig-grid'>{pages_html}</div>{pager_html}{footnote}</div>")
+            f"{legend_html}<div id='lig-grid'>{pages_html}</div>{pager_html}{pdf_link}{footnote}</div>")
 
 
 # marcdeller.com brand theme (see marcs-vibe-coding skill) -- keep in sync with any
@@ -2943,7 +3039,7 @@ def write_html(df: pd.DataFrame, path: Path, campaign_dir: Path, campaign: Campa
         parts.append("<div class='md-card table-card'><h2>Ligand preparation</h2>"
                       "<p>No stereocentre, protonation-state, or disconnected-fragment concerns detected.</p></div>")
 
-    ligand_grid_html = _build_ligand_grid_panel(campaign)
+    ligand_grid_html = _build_ligand_grid_panel(campaign, campaign_dir)
     if ligand_grid_html:
         parts.append(ligand_grid_html)
 
@@ -3047,8 +3143,11 @@ def write_html(df: pd.DataFrame, path: Path, campaign_dir: Path, campaign: Campa
                               "prot_resnr": "Number", "prot_chain": "Chain", "distance_A": "Distance"}
                 show_cols = [c for c in rename_map if c in tdf.columns]
                 if not tdf.empty and show_cols:
-                    contacts_table = (tdf[show_cols].sort_values("interaction_type")
-                                      .rename(columns=rename_map).to_html(index=False, na_rep=""))
+                    contacts_df = tdf[show_cols].sort_values("interaction_type").rename(columns=rename_map)
+                    contacts_table = contacts_df.to_html(index=False, na_rep="")
+                    csv_b64 = base64.b64encode(contacts_df.to_csv(index=False).encode("utf-8")).decode("ascii")
+                    contacts_table += (f"<p><a href='data:text/csv;base64,{csv_b64}' "
+                                       f"download='boltz_contacts_{target_id}.csv'>Download CSV</a></p>")
             layout_cls = "md-side-by-side md-side-3col" if viewer_col else "md-side-by-side"
             session_cards.append(
                 f"<div class='md-card'><h2>{target_id}: binding site</h2>"

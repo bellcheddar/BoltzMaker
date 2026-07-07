@@ -99,6 +99,18 @@ everything so far is tracked under `Unreleased`.
   image also gets a "Download image" link, which it didn't have before. 3Dmol.js is
   vendored (`vendor/3Dmol-2.5.5-min.js`) and inlined the same way Plotly is, only when a
   campaign actually has interaction-analysis data to show.
+- Fixed a real layout bug in the binding-site panel: the 3Dmol viewer div and its
+  "Download PyMOL session" link were separate top-level siblings, so CSS Grid auto-placed
+  them into two cells instead of one column, shifting the static image and contacts table
+  out of alignment. Both are now wrapped in one `.md-side-viewer` container. Column order
+  is now 3Dmol view / static image / contacts table, and all three columns match at a
+  consistent 260px height (the table previously used `max-height: 320px`).
+- Each target's contacts table gets its own "Download CSV" link.
+- New `boltz_ligand_grid.pdf`: the dashboard's "Ligand structures" grid (same cells,
+  pagination, severity borders, and scaffold highlighting as the HTML version -- computed
+  once and shared between both renderers) exported as a print/share-friendly PDF via
+  `reportlab`, in the style of smiles2grid's own PDF output, linked as "Download PDF"
+  from the panel. Only written when a campaign has at least one SMILES ligand.
 
 ### Verified
 - Three real public-domain example campaigns in `examples/` (`t4_lysozyme`,

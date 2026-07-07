@@ -19,6 +19,8 @@ boltz_summary_view.csv
 boltz_summary.xlsx
 boltz_dashboard.html
 !examples/*/boltz_dashboard.html
+boltz_ligand_grid.pdf
+!examples/*/boltz_ligand_grid.pdf
 .DS_Store
 
 # Elementor README forge output (regenerate with readme_forge.py as needed)
