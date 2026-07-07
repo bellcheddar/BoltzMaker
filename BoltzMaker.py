@@ -2196,9 +2196,18 @@ def _make_fingerprint_heatmaps(df: pd.DataFrame, interactions_df) -> list:
             pivot = pivot.iloc[order]
 
         div_id = f"chart-fingerprint-{re.sub(r'[^a-zA-Z0-9_-]', '_', str(family_id))}"
+        # Hard-step red/green colorscale (not a gradient) since z is strictly binary --
+        # same red/green hex pair used for flags elsewhere on the dashboard (_make_scatter).
         fig = go.Figure(go.Heatmap(z=pivot.values, x=list(pivot.columns), y=list(pivot.index),
-                                    colorscale="Blues", zmin=0, zmax=1, showscale=False,
-                                    xgap=2, ygap=2))
+                                    colorscale=[[0, "#d62728"], [0.5, "#d62728"], [0.5, "#2ca02c"], [1, "#2ca02c"]],
+                                    zmin=0, zmax=1, showscale=False, xgap=2, ygap=2))
+        # Heatmaps don't get a named-trace legend on their own -- two invisible marker
+        # traces populate one, matching the interaction-counts chart's legend styling.
+        fig.add_trace(go.Scatter(x=[None], y=[None], mode="markers",
+                                  marker=dict(size=10, color="#2ca02c"), name="Interacting"))
+        fig.add_trace(go.Scatter(x=[None], y=[None], mode="markers",
+                                  marker=dict(size=10, color="#d62728"), name="Non-interacting"))
+        fig.update_layout(legend=dict(font=dict(size=_LEGEND_FONTSIZE)))
         fig.update_xaxes(tickangle=-90, tickfont=dict(size=_TICK_FONTSIZE))
         fig.update_yaxes(tickfont=dict(size=_TICK_FONTSIZE), autorange="reversed")
         results.append((family_id, _plotly_to_div(fig, div_id)))
@@ -2583,6 +2592,7 @@ img, canvas { max-width: 100%; height: auto; }
 .md-chart-grid, .md-side-by-side { display: grid; gap: 16px; grid-template-columns: repeat(2, 1fr); margin-bottom: 24px; }
 .md-chart-grid .md-card, .md-side-by-side { margin-bottom: 0; }
 .md-chart-grid .md-card img, .md-side-image img { width: 100%; height: 260px; object-fit: contain; display: block; }
+.md-chart-grid .md-card-span2 { grid-column: 1 / -1; }
 .md-side-table { overflow: auto; max-height: 320px; }
 table { border-collapse: collapse; font-family: 'Roboto Mono', monospace; font-size: 12px; width: 100%; max-width: 100%; }
 th, td { border: 1px solid var(--md-border); padding: 5px 9px; text-align: left; white-space: nowrap; }
@@ -2805,7 +2815,7 @@ def write_html(df: pd.DataFrame, path: Path, campaign_dir: Path, campaign: Campa
         chart_cards.append(f"<div class='md-card'><h2>Interaction counts by type</h2>{ichart}</div>")
 
     for family_id, chart_html in _make_fingerprint_heatmaps(df, interactions_df):
-        chart_cards.append(f"<div class='md-card'><h2>{family_id}: residue interaction fingerprint</h2>"
+        chart_cards.append(f"<div class='md-card md-card-span2'><h2>{family_id}: residue interaction fingerprint</h2>"
                             f"{chart_html}</div>")
 
     if chart_cards:
