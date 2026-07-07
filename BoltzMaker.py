@@ -2694,7 +2694,9 @@ img, canvas { max-width: 100%; height: auto; }
 .md-chart-grid .md-card, .md-side-by-side { margin-bottom: 0; }
 .md-chart-grid .md-card img, .md-side-image img { width: 100%; height: 260px; object-fit: contain; display: block; }
 .md-chart-grid .md-card-span2 { grid-column: 1 / -1; }
-.md-side-table { overflow: auto; height: 260px; }
+.md-side-table { overflow: visible; }
+.md-side-table table { font-size: 10px; }
+.md-side-table th, .md-side-table td { padding: 3px 6px; }
 .md-3dmol-viewer { width: 100%; height: 260px; position: relative; background: #fff; border-radius: var(--md-radius); }
 table { border-collapse: collapse; font-family: 'Roboto Mono', monospace; font-size: 12px; width: 100%; max-width: 100%; }
 th, td { border: 1px solid var(--md-border); padding: 5px 9px; text-align: left; white-space: nowrap; }
