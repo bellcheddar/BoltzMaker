@@ -65,6 +65,12 @@ everything so far is tracked under `Unreleased`.
   empty even though the identical local file rendered correctly -- the CDN script wasn't
   executing in htmlpreview's injected-content context. Falls back to the CDN with a
   printed warning if the vendored file is ever missing.
+- The per-family residue-interaction fingerprint heatmap is now interactive Plotly
+  (was matplotlib) and shown for every family with interaction data, not just families
+  with 2+ ligands -- it previously required 2+ ligands per family purely because that
+  gate was inherited from the similarity-reordering step's own >=3-ligand requirement,
+  not because a single ligand's contact row is uninformative; `t4_lysozyme` and
+  `egfr_covalent` (one ligand each) were silently missing the panel entirely.
 
 ### Verified
 - Three real public-domain example campaigns in `examples/` (`t4_lysozyme`,

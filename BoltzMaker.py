@@ -2165,12 +2165,13 @@ def _make_interaction_count_chart(df: pd.DataFrame, div_id: str):
 
 
 def _make_fingerprint_heatmaps(df: pd.DataFrame, interactions_df) -> list:
-    # One heatmap per protein family with >=2 ligands tested against it: binary
-    # ligand x contacted-residue matrix, ligand axis reordered by Jaccard-distance
-    # hierarchical clustering so ligands with a similar interaction pattern group
-    # together (SAR ranking). Falls back to unclustered order for <3 ligands (not
-    # enough points for a meaningful linkage) and guards the all-zero-row case
-    # (two ligands sharing zero contacted residues -> Jaccard distance is 0/0 -> NaN).
+    # One heatmap per protein family with interaction data, even a single ligand -- a
+    # lone ligand's contacted-residue row is still useful (shows what it touches), it
+    # just can't be compared/reordered against anything else. Binary ligand x
+    # contacted-residue matrix; with >=3 ligands the ligand axis is reordered by
+    # Jaccard-distance hierarchical clustering so ligands with a similar interaction
+    # pattern group together (SAR ranking) -- guards the all-zero-row case (two ligands
+    # sharing zero contacted residues -> Jaccard distance is 0/0 -> NaN).
     if interactions_df is None or interactions_df.empty:
         return []
     target_meta = df.set_index("target_id")[["family_id", "ligand_id"]]
@@ -2178,14 +2179,12 @@ def _make_fingerprint_heatmaps(df: pd.DataFrame, interactions_df) -> list:
 
     results = []
     for family_id, fam_df in merged.groupby("family_id"):
-        if fam_df["ligand_id"].nunique() < 2:
-            continue
         fam_df = fam_df.copy()
         fam_df["residue"] = fam_df["prot_restype"].astype(str) + fam_df["prot_resnr"].astype(str)
         pivot = fam_df.pivot_table(index="ligand_id", columns="residue", values="interaction_type",
                                     aggfunc="count", fill_value=0)
         pivot = (pivot > 0).astype(int)
-        if pivot.shape[0] < 2 or pivot.shape[1] < 1:
+        if pivot.shape[0] < 1 or pivot.shape[1] < 1:
             continue
 
         if pivot.shape[0] >= 3:
@@ -2196,14 +2195,13 @@ def _make_fingerprint_heatmaps(df: pd.DataFrame, interactions_df) -> list:
             order = leaves_list(linkage(dist, method="average"))
             pivot = pivot.iloc[order]
 
-        fig, ax = plt.subplots(figsize=(0.5 * pivot.shape[1] + 3, 0.4 * pivot.shape[0] + 2))
-        ax.imshow(pivot.values, cmap="Blues", aspect="auto", vmin=0, vmax=1)
-        ax.set_xticks(range(len(pivot.columns)))
-        ax.set_xticklabels(pivot.columns, rotation=90, fontsize=_TICK_FONTSIZE)
-        ax.set_yticks(range(len(pivot.index)))
-        ax.set_yticklabels(pivot.index, fontsize=_TICK_FONTSIZE)
-        fig.tight_layout()
-        results.append((family_id, _fig_to_base64(fig)))
+        div_id = f"chart-fingerprint-{re.sub(r'[^a-zA-Z0-9_-]', '_', str(family_id))}"
+        fig = go.Figure(go.Heatmap(z=pivot.values, x=list(pivot.columns), y=list(pivot.index),
+                                    colorscale="Blues", zmin=0, zmax=1, showscale=False,
+                                    xgap=2, ygap=2))
+        fig.update_xaxes(tickangle=-90, tickfont=dict(size=_TICK_FONTSIZE))
+        fig.update_yaxes(tickfont=dict(size=_TICK_FONTSIZE), autorange="reversed")
+        results.append((family_id, _plotly_to_div(fig, div_id)))
     return results
 
 
@@ -2806,9 +2804,9 @@ def write_html(df: pd.DataFrame, path: Path, campaign_dir: Path, campaign: Campa
     if ichart:
         chart_cards.append(f"<div class='md-card'><h2>Interaction counts by type</h2>{ichart}</div>")
 
-    for family_id, b64 in _make_fingerprint_heatmaps(df, interactions_df):
+    for family_id, chart_html in _make_fingerprint_heatmaps(df, interactions_df):
         chart_cards.append(f"<div class='md-card'><h2>{family_id}: residue interaction fingerprint</h2>"
-                            f"<img src='data:image/png;base64,{b64}'></div>")
+                            f"{chart_html}</div>")
 
     if chart_cards:
         parts.append(f"<div class='md-chart-grid'>{''.join(chart_cards)}</div>")
