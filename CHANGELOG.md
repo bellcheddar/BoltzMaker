@@ -91,6 +91,14 @@ everything so far is tracked under `Unreleased`.
   "Download summary CSV" link sitting next to it.
 - "Open PyMOL session" renamed to "Download PyMOL session" and given the HTML `download`
   attribute, so clicking it saves the `.pse` file instead of navigating the browser to it.
+- Each target's binding-site panel gains an interactive, auto-rotating [3Dmol.js](https://3dmol.org)
+  view next to the existing static PyMOL image, built directly from the predicted mmCIF
+  (3Dmol.js parses mmCIF natively, so no PDB conversion is needed -- Boltz's own chain
+  names are longer than PDB's 1-character chain field allows and would need remapping
+  otherwise), with the ligand highlighted and the view auto-zoomed to it. The static
+  image also gets a "Download image" link, which it didn't have before. 3Dmol.js is
+  vendored (`vendor/3Dmol-2.5.5-min.js`) and inlined the same way Plotly is, only when a
+  campaign actually has interaction-analysis data to show.
 
 ### Verified
 - Three real public-domain example campaigns in `examples/` (`t4_lysozyme`,

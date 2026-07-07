@@ -37,6 +37,10 @@ CIF2PLIP_COMMIT = "2c3bf8b086ec022d81599b77a91b4713697a5636"
 # works when opened directly in a browser, leaving every chart card blank.
 PLOTLY_JS_PATH = SCRIPT_DIR / "vendor" / "plotly-2.35.2.min.js"
 
+# Same rationale as PLOTLY_JS_PATH -- vendored so the interactive binding-site view has
+# no external script dependency at all.
+THREEDMOL_JS_PATH = SCRIPT_DIR / "vendor" / "3Dmol-2.5.5-min.js"
+
 # cif2plip's own PLIP visualization never calls cmd.label(...) at all (checked its
 # source directly) -- the stock PNG/pse have sticks and dashed interaction lines but no
 # residue text. This small script (BoltzMaker's own, not vendored from upstream) loads
@@ -2590,10 +2594,12 @@ img, canvas { max-width: 100%; height: auto; }
 .md-card h2 { margin-top: 0; font-size: 16px; }
 .md-card.table-card { overflow-x: auto; max-width: 100%; }
 .md-chart-grid, .md-side-by-side { display: grid; gap: 16px; grid-template-columns: repeat(2, 1fr); margin-bottom: 24px; }
+.md-side-by-side.md-side-3col { grid-template-columns: repeat(3, 1fr); }
 .md-chart-grid .md-card, .md-side-by-side { margin-bottom: 0; }
 .md-chart-grid .md-card img, .md-side-image img { width: 100%; height: 260px; object-fit: contain; display: block; }
 .md-chart-grid .md-card-span2 { grid-column: 1 / -1; }
 .md-side-table { overflow: auto; max-height: 320px; }
+.md-3dmol-viewer { width: 100%; height: 260px; position: relative; background: #fff; border-radius: var(--md-radius); }
 table { border-collapse: collapse; font-family: 'Roboto Mono', monospace; font-size: 12px; width: 100%; max-width: 100%; }
 th, td { border: 1px solid var(--md-border); padding: 5px 9px; text-align: left; white-space: nowrap; }
 th { background: var(--md-bg-alt); font-weight: 600; position: sticky; top: 0; }
@@ -2640,7 +2646,7 @@ tr:nth-child(even) { background: var(--md-bg-alt); }
   .md-header-links a { font-size: 11px; padding: 3px 8px; }
   .md-main { padding: 14px; }
   .md-card { padding: 14px; }
-  .md-chart-grid, .md-side-by-side { grid-template-columns: 1fr; }
+  .md-chart-grid, .md-side-by-side, .md-side-by-side.md-side-3col { grid-template-columns: 1fr; }
   .lig-page { grid-template-columns: repeat(2, 1fr); }
 }
 """
@@ -2970,9 +2976,11 @@ def write_html(df: pd.DataFrame, path: Path, campaign_dir: Path, campaign: Campa
     if chart_cards:
         parts.append(f"<div class='md-chart-grid'>{''.join(chart_cards)}</div>")
 
+    need_3dmol = False
     if "plip_png_path" in df.columns:
         sessions_dir = campaign_dir / "boltz_dashboard_sessions"
         session_cards, total_bytes = [], 0
+        viewer_scripts = []
         for _, row in df.iterrows():
             png_rel = row.get("plip_png_path")
             if not isinstance(png_rel, str):
@@ -2980,28 +2988,70 @@ def write_html(df: pd.DataFrame, path: Path, campaign_dir: Path, campaign: Campa
             png_path = campaign_dir / png_rel
             if not png_path.exists():
                 continue
+            target_id = row["target_id"]
             b64 = base64.b64encode(png_path.read_bytes()).decode("ascii")
-            pse_link = ""
+            img_download = f"boltz_binding_site_{target_id}.png"
+            image_links = [f"<a href='data:image/png;base64,{b64}' download='{img_download}'>Download image</a>"]
+
             pse_rel = row.get("plip_pse_path")
+            pse_link_html = None
             if isinstance(pse_rel, str) and (campaign_dir / pse_rel).exists():
                 sessions_dir.mkdir(exist_ok=True)
-                dest = sessions_dir / f"{row['target_id']}.pse"
+                dest = sessions_dir / f"{target_id}.pse"
                 shutil.copy2(campaign_dir / pse_rel, dest)
                 total_bytes += dest.stat().st_size
-                pse_link = f"<p><a href='boltz_dashboard_sessions/{dest.name}' download>Download PyMOL session</a></p>"
+                pse_link_html = f"<a href='boltz_dashboard_sessions/{dest.name}' download>Download PyMOL session</a>"
+
+            # Interactive rotating structure view next to the static PyMOL image, built
+            # from the same predicted CIF -- 3Dmol.js parses mmCIF natively (format "cif"),
+            # so the raw file goes in directly; no PDB conversion needed (Boltz's own chain
+            # names, e.g. a 3-letter family id, are longer than PDB's 1-character chain
+            # field allows and would need remapping otherwise).
+            viewer_col = ""
+            cif_rel = row.get("cif_file")
+            if isinstance(cif_rel, str):
+                cif_path = campaign_dir / "boltz_cif" / cif_rel
+                if cif_path.exists():
+                    div_id = f"viewer-{re.sub(r'[^a-zA-Z0-9_-]', '_', str(target_id))}"
+                    cif_json = json.dumps(cif_path.read_text())
+                    viewer_col = f"<div class='md-3dmol-viewer' id='{div_id}'></div>"
+                    need_3dmol = True
+                    viewer_scripts.append(f"""
+(function() {{
+  var el = document.getElementById({json.dumps(div_id)});
+  if (!el || typeof $3Dmol === 'undefined') return;
+  var viewer = $3Dmol.createViewer(el, {{backgroundColor: 'white'}});
+  var model = viewer.addModel({cif_json}, 'cif');
+  viewer.setStyle({{}}, {{cartoon: {{color: 'lightgrey'}}}});
+  viewer.setStyle({{hetflag: true}}, {{stick: {{colorscheme: 'greenCarbon'}}}});
+  var lig = model.selectedAtoms({{hetflag: true}});
+  if (lig.length) {{ viewer.zoomTo({{hetflag: true}}); }} else {{ viewer.zoomTo(); }}
+  viewer.render();
+  viewer.spin('y', 1);
+}})();""")
+                    if pse_link_html:
+                        viewer_col += f"<p>{pse_link_html}</p>"
+
+            if not viewer_col and pse_link_html:
+                image_links.append(pse_link_html)
+            image_col = (f"<div class='md-side-image'><img src='data:image/png;base64,{b64}'>"
+                         f"<p>{' &middot; '.join(image_links)}</p></div>")
+
             contacts_table = "<p><em>No interaction data.</em></p>"
             if interactions_df is not None:
-                tdf = interactions_df[interactions_df["target_id"] == row["target_id"]]
+                tdf = interactions_df[interactions_df["target_id"] == target_id]
                 rename_map = {"interaction_type": "Interaction", "prot_restype": "Residue",
                               "prot_resnr": "Number", "prot_chain": "Chain", "distance_A": "Distance"}
                 show_cols = [c for c in rename_map if c in tdf.columns]
                 if not tdf.empty and show_cols:
                     contacts_table = (tdf[show_cols].sort_values("interaction_type")
                                       .rename(columns=rename_map).to_html(index=False, na_rep=""))
+            layout_cls = "md-side-by-side md-side-3col" if viewer_col else "md-side-by-side"
             session_cards.append(
-                f"<div class='md-card'><h2>{row['target_id']}: binding site</h2>"
-                f"<div class='md-side-by-side'>"
-                f"<div class='md-side-image'><img src='data:image/png;base64,{b64}'>{pse_link}</div>"
+                f"<div class='md-card'><h2>{target_id}: binding site</h2>"
+                f"<div class='{layout_cls}'>"
+                f"{image_col}"
+                f"{viewer_col}"
                 f"<div class='md-side-table'>{contacts_table}</div>"
                 f"</div></div>"
             )
@@ -3010,6 +3060,8 @@ def write_html(df: pd.DataFrame, path: Path, campaign_dir: Path, campaign: Campa
                 print(f"BoltzMaker: bundled {total_bytes / 1e6:.1f}MB of PyMOL session(s) into "
                       f"{sessions_dir} (this is why the dashboard is no longer a single file)")
             parts.extend(session_cards)
+            if viewer_scripts:
+                parts.append(f"<script>{''.join(viewer_scripts)}</script>")
 
     if PLOTLY_JS_PATH.exists():
         plotly_script = f"<script>{PLOTLY_JS_PATH.read_text()}</script>"
@@ -3021,13 +3073,21 @@ def write_html(df: pd.DataFrame, path: Path, campaign_dir: Path, campaign: Campa
               "the plotly.js CDN, which is known not to render in some HTML-preview contexts")
         plotly_script = "<script src='https://cdn.plot.ly/plotly-2.35.2.min.js'></script>"
 
+    threedmol_script = ""
+    if need_3dmol:
+        if THREEDMOL_JS_PATH.exists():
+            threedmol_script = f"<script>{THREEDMOL_JS_PATH.read_text()}</script>"
+        else:
+            print("BoltzMaker: WARNING: vendor/3Dmol-2.5.5-min.js not found -- falling back to the 3Dmol.js CDN")
+            threedmol_script = "<script src='https://cdn.jsdelivr.net/npm/3dmol@2.5.5/build/3Dmol-min.js'></script>"
+
     doc = (
         "<!DOCTYPE html><html lang='en'><head><meta charset='utf-8'>"
         "<meta name='viewport' content='width=device-width, initial-scale=1.0'>"
         "<title>BoltzMaker Report | Marc C. Deller</title>"
         "<link href='https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700"
         "&family=Roboto+Mono:wght@400;500&display=swap' rel='stylesheet'>"
-        + plotly_script
+        + plotly_script + threedmol_script
         + f"<style>{_BRAND_CSS}</style></head><body>"
         + _BRAND_HEADER + "<main class='md-main'>" + "".join(parts) + "</main>" + _BRAND_FOOTER
         + f"<script>{_LIGAND_GRID_PAGER_JS}</script>"
