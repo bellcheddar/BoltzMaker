@@ -31,6 +31,12 @@ VENV_DIR = SCRIPT_DIR / ".venv"
 PLIP_VENV_DIR = SCRIPT_DIR / ".plip_env"
 CIF2PLIP_COMMIT = "2c3bf8b086ec022d81599b77a91b4713697a5636"
 
+# Vendored (not CDN-linked) so the dashboard's charts render in contexts that don't
+# execute a cross-origin <script src>, e.g. htmlpreview.github.io -- confirmed empirically
+# that a CDN-loaded plotly.js silently fails to run there even though the exact same file
+# works when opened directly in a browser, leaving every chart card blank.
+PLOTLY_JS_PATH = SCRIPT_DIR / "vendor" / "plotly-2.35.2.min.js"
+
 # cif2plip's own PLIP visualization never calls cmd.label(...) at all (checked its
 # source directly) -- the stock PNG/pse have sticks and dashed interaction lines but no
 # residue text. This small script (BoltzMaker's own, not vendored from upstream) loads
@@ -2848,14 +2854,24 @@ def write_html(df: pd.DataFrame, path: Path, campaign_dir: Path, campaign: Campa
                       f"{sessions_dir} (this is why the dashboard is no longer a single file)")
             parts.extend(session_cards)
 
+    if PLOTLY_JS_PATH.exists():
+        plotly_script = f"<script>{PLOTLY_JS_PATH.read_text()}</script>"
+    else:
+        # Fresh checkouts always have vendor/plotly-2.35.2.min.js committed; this is only
+        # a safety net (e.g. a shallow/sparse clone), and it reintroduces the exact
+        # htmlpreview-breaking failure mode the vendored copy exists to avoid.
+        print("BoltzMaker: WARNING: vendor/plotly-2.35.2.min.js not found -- falling back to "
+              "the plotly.js CDN, which is known not to render in some HTML-preview contexts")
+        plotly_script = "<script src='https://cdn.plot.ly/plotly-2.35.2.min.js'></script>"
+
     doc = (
         "<!DOCTYPE html><html lang='en'><head><meta charset='utf-8'>"
         "<meta name='viewport' content='width=device-width, initial-scale=1.0'>"
         "<title>BoltzMaker Report | Marc C. Deller</title>"
         "<link href='https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700"
         "&family=Roboto+Mono:wght@400;500&display=swap' rel='stylesheet'>"
-        "<script src='https://cdn.plot.ly/plotly-2.35.2.min.js'></script>"
-        f"<style>{_BRAND_CSS}</style></head><body>"
+        + plotly_script
+        + f"<style>{_BRAND_CSS}</style></head><body>"
         + _BRAND_HEADER + "<main class='md-main'>" + "".join(parts) + "</main>" + _BRAND_FOOTER
         + f"<script>{_LIGAND_GRID_PAGER_JS}</script>"
         + "</body></html>"

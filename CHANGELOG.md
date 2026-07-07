@@ -59,6 +59,12 @@ everything so far is tracked under `Unreleased`.
   SMILES only if that fails. PLIP's own re-derived SMILES (via OpenBabel) can differ in
   canonical form from RDKit's, so a plain string match could silently miss the correct
   ligand in a multi-ligand campaign even though it was chemically identical.
+- Plotly.js is now vendored (`vendor/plotly-2.35.2.min.js`) and inlined into every
+  generated dashboard instead of loaded from a CDN `<script src>`. The example dashboard
+  linked from the README (viewed via htmlpreview.github.io) showed every chart card
+  empty even though the identical local file rendered correctly -- the CDN script wasn't
+  executing in htmlpreview's injected-content context. Falls back to the CDN with a
+  printed warning if the vendored file is ever missing.
 
 ### Verified
 - Three real public-domain example campaigns in `examples/` (`t4_lysozyme`,
