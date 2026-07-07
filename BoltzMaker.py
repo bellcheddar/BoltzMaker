@@ -47,15 +47,28 @@ session_path, output_path = sys.argv[1], sys.argv[2]
 residues = [r.split(":") for r in sys.argv[3:]]
 
 cmd.load(session_path)
+
+# Residue (CA) labels: offset away from the atom (screen-space, so it holds
+# regardless of viewing angle) so the text doesn't sit on top of the residue
+# itself or its stick representation.
 cmd.set("label_size", 18)
 cmd.set("label_color", "black")
 cmd.set("label_outline_color", "white")
 cmd.set("label_font_id", 7)  # sans-serif bold -- more legible than PyMOL's default serif
+cmd.set("label_position", (2.2, 2.2, 0))
 
 for chain, resnr, restype in residues:
     sel = f"chain {chain} and resi {resnr} and name CA"
     if cmd.count_atoms(sel) > 0:
         cmd.label(sel, f'"{restype}{resnr}"')
+
+# Interaction-line distance labels: PLIP draws each interaction via
+# cmd.distance() (which computes and can show the actual measured distance)
+# but hides the label by default. Show them, styled distinctly (smaller,
+# grey) from the residue labels so the two don't visually compete.
+cmd.set("label_size", 14, "Interactions")
+cmd.set("label_color", "gray30", "Interactions")
+cmd.show("labels", "Interactions")
 
 cmd.set("ray_opaque_background", 0)
 cmd.png(output_path, width=1200, height=900, dpi=150, ray=1)
@@ -137,7 +150,7 @@ def cmd_setup(argv: list) -> None:
 
     subprocess.run(
         [str(pip), "install", "boltz", "rich", "pandas", "openpyxl", "pyyaml", "rdkit", "matplotlib", "psutil",
-         "scipy", "gemmi", "biopython"],
+         "scipy", "gemmi", "biopython", "plotly"],
         check=True,
     )
     freeze = subprocess.run([str(pip), "freeze"], capture_output=True, text=True, check=True)
@@ -309,6 +322,9 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
+import plotly.graph_objects as go
+import plotly.io as pio
+
 
 # ==========================================================================
 # Data model
@@ -370,6 +386,7 @@ class Target:
 
 
 MANIFEST_FILENAME = ".boltzmaker_manifest.json"
+RUN_HISTORY_FILENAME = ".boltzmaker_run_history.jsonl"
 
 
 class MDParseError(Exception):
@@ -1427,6 +1444,7 @@ def run_boltz(yaml_dir: Path, out_dir: Path, manifest: list, workers: int, accel
     print(f"BoltzMaker: {len(complete)}/{len(manifest)} already complete; running {len(pending)} target(s).")
     print(f"BoltzMaker: log -> {log_path}")
 
+    run_start = time.time()
     proc = subprocess.Popen(cmd, cwd=str(yaml_dir), env=env, stdout=subprocess.PIPE,
                              stderr=subprocess.STDOUT, text=True, bufsize=1)
     latest_line = {"text": ""}
@@ -1521,9 +1539,27 @@ def run_boltz(yaml_dir: Path, out_dir: Path, manifest: list, workers: int, accel
         raise
     finally:
         stop_monitor.set()
+        run_end = time.time()
         elapsed = time.strftime('%a %b %d %H:%M:%S %Y')
         log_f.write(f"=== Finished at {elapsed} ===\n")
         log_f.close()
+
+        # Recorded even on interrupt (partial progress is still worth knowing) -- read
+        # back by write_html() to show run parameters/runtime in the summary table.
+        completed_count = sum(1 for t in pending if _target_complete(pred_dir, t.stem, need_affinity))
+        record = {
+            "started_at": time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(run_start)),
+            "finished_at": time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(run_end)),
+            "duration_seconds": round(run_end - run_start, 1),
+            "workers": workers, "accelerator": accelerator, "mps_watermark": mps_watermark,
+            "max_parallel_samples": max_parallel_samples, "recycling_steps": recycling_steps,
+            "sampling_steps": sampling_steps, "diffusion_samples_affinity": diffusion_samples_affinity,
+            "sampling_steps_affinity": sampling_steps_affinity, "max_msa_seqs": max_msa_seqs,
+            "targets_submitted": len(pending), "targets_completed": completed_count,
+            "exit_code": proc.returncode,
+        }
+        with (campaign_dir / RUN_HISTORY_FILENAME).open("a") as hf:
+            hf.write(json.dumps(record) + "\n")
 
     still_missing = [t.stem for t in pending if not _target_complete(pred_dir, t.stem, need_affinity)]
     print(f"BoltzMaker: boltz predict exited with code {proc.returncode}")
@@ -1803,9 +1839,14 @@ def analyze(yaml_dir: Path, out_dir: Path, campaign_dir: Path, need_affinity: bo
     plip_targets_done = 0
     plip_targets_total = sum(1 for t in manifest if pred_dir and (pred_dir / t.stem).is_dir()) if run_plip else 0
 
+    ligand_by_id = {l.id: l for l in campaign.ligands}
+
     rows = []
     for t in manifest:
-        row = {"target_id": t.stem, "family_id": t.family_id, "ligand_id": t.ligand_id, "flags": ""}
+        lig = ligand_by_id.get(t.ligand_id)
+        ligand_smiles = (lig.smiles or lig.ccd) if lig else None
+        row = {"target_id": t.stem, "family_id": t.family_id, "ligand_id": t.ligand_id,
+               "ligand_smiles": ligand_smiles, "flags": ""}
         d = pred_dir / t.stem if pred_dir else None
         if not d or not d.is_dir():
             row["flags"] = "MISSING_OUTPUTS"
@@ -1831,7 +1872,6 @@ def analyze(yaml_dir: Path, out_dir: Path, campaign_dir: Path, need_affinity: bo
                 result = _analyze_target_interactions(t, cif_dst / cif_files[0].name, campaign, campaign_dir,
                                                        plip_targets_done, plip_targets_total)
                 row["plip_status"] = result["plip_status"]
-                row["ligand_inchikey"] = result["inchikey"]
                 row["plip_png_path"] = result["png"]
                 row["plip_pse_path"] = result["pse"]
                 for itype, n in result["counts"].items():
@@ -1905,19 +1945,50 @@ def _fig_to_base64(fig) -> str:
     return base64.b64encode(buf.getvalue()).decode("ascii")
 
 
-def _make_bar_chart(df: pd.DataFrame, col: str, title: str):
+_BAR_WIDTH = 0.6
+_BAR_MIN_SLOTS = 5  # reserve room for at least this many category slots, so 1-2
+                     # bars don't visually dominate the whole plot area
+
+_AXIS_LABEL_FONTSIZE = 12
+_TICK_FONTSIZE = 10
+_LEGEND_FONTSIZE = 10
+_ANNOTATION_FONTSIZE = 9
+
+
+_CHART_HEIGHT_PX = 260  # matches the .md-chart-grid img sizing these replaced
+
+
+def _plotly_font() -> dict:
+    return dict(family="Inter, -apple-system, BlinkMacSystemFont, sans-serif", size=_TICK_FONTSIZE)
+
+
+def _plotly_to_div(fig, div_id: str) -> str:
+    fig.update_layout(margin=dict(l=60, r=20, t=10, b=100), height=_CHART_HEIGHT_PX,
+                       paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", font=_plotly_font())
+    # Matplotlib draws a full rectangular border (all four spines) by default -- Plotly
+    # doesn't unless told to, so mirror the axis line to the opposite side to match the
+    # look of the charts these replaced.
+    fig.update_xaxes(showline=True, linewidth=1, linecolor="black", mirror=True)
+    fig.update_yaxes(showline=True, linewidth=1, linecolor="black", mirror=True)
+    return pio.to_html(fig, full_html=False, include_plotlyjs=False, div_id=div_id,
+                        config={"responsive": True, "displaylogo": False})
+
+
+def _make_bar_chart(df: pd.DataFrame, col: str, div_id: str):
+    # No title set on the figure -- the HTML <h2> card header is the only title, so it
+    # doesn't appear twice (once baked into the chart, once in the card).
     if col not in df.columns:
         return None
     d = df[["target_id", col]].dropna().sort_values(col, ascending=False)
     if d.empty:
         return None
-    fig, ax = plt.subplots(figsize=(max(6, len(d) * 0.35), 4))
-    ax.bar(d["target_id"], d[col], color="#4C72B0")
-    ax.set_title(title)
-    ax.set_ylabel(col)
-    plt.xticks(rotation=75, ha="right", fontsize=7)
-    fig.tight_layout()
-    return _fig_to_base64(fig)
+    n = len(d)
+    x = list(range(n))
+    fig = go.Figure(go.Bar(x=x, y=d[col].tolist(), width=_BAR_WIDTH, marker_color="#4C72B0"))
+    fig.update_xaxes(tickmode="array", tickvals=x, ticktext=d["target_id"].tolist(), tickangle=-75,
+                      tickfont=dict(size=_TICK_FONTSIZE), range=[-0.75, max(n - 0.25, _BAR_MIN_SLOTS - 0.75)])
+    fig.update_yaxes(title_text=col, title_font=dict(size=_AXIS_LABEL_FONTSIZE), tickfont=dict(size=_TICK_FONTSIZE))
+    return _plotly_to_div(fig, div_id)
 
 
 def _make_selectivity_heatmap(df: pd.DataFrame):
@@ -1927,21 +1998,22 @@ def _make_selectivity_heatmap(df: pd.DataFrame):
     fig, ax = plt.subplots(figsize=(1.2 * len(pivot.columns) + 2, 0.4 * len(pivot.index) + 2))
     im = ax.imshow(pivot.values, cmap="viridis", aspect="auto")
     ax.set_xticks(range(len(pivot.columns)))
-    ax.set_xticklabels(pivot.columns, rotation=45, ha="right")
+    ax.set_xticklabels(pivot.columns, rotation=45, ha="right", fontsize=_TICK_FONTSIZE)
     ax.set_yticks(range(len(pivot.index)))
-    ax.set_yticklabels(pivot.index)
+    ax.set_yticklabels(pivot.index, fontsize=_TICK_FONTSIZE)
     for i in range(len(pivot.index)):
         for j in range(len(pivot.columns)):
             v = pivot.values[i, j]
             if pd.notna(v):
-                ax.text(j, i, f"{v:.1f}", ha="center", va="center", color="white", fontsize=7)
-    fig.colorbar(im, label="pIC50")
-    ax.set_title("Selectivity: pIC50 by ligand x family")
+                ax.text(j, i, f"{v:.1f}", ha="center", va="center", color="white", fontsize=_ANNOTATION_FONTSIZE)
+    cbar = fig.colorbar(im)
+    cbar.set_label("pIC50", fontsize=_AXIS_LABEL_FONTSIZE)
+    cbar.ax.tick_params(labelsize=_TICK_FONTSIZE)
     fig.tight_layout()
     return _fig_to_base64(fig)
 
 
-def _make_scatter(df: pd.DataFrame):
+def _make_scatter(df: pd.DataFrame, div_id: str):
     conf_col = "confidence_score" if "confidence_score" in df.columns else ("ptm" if "ptm" in df.columns else None)
     if not conf_col or "pIC50" not in df.columns:
         return None
@@ -1949,36 +2021,34 @@ def _make_scatter(df: pd.DataFrame):
     if d.empty:
         return None
     colors = d["flags"].apply(lambda f: "#d62728" if f else "#2ca02c")
-    fig, ax = plt.subplots(figsize=(6, 5))
-    ax.scatter(d[conf_col], d["pIC50"], c=colors)
-    for _, r in d.iterrows():
-        ax.annotate(r["target_id"], (r[conf_col], r["pIC50"]), fontsize=6, alpha=0.7)
-    ax.set_xlabel(conf_col)
-    ax.set_ylabel("pIC50")
-    ax.set_title("Confidence vs predicted affinity")
-    fig.tight_layout()
-    return _fig_to_base64(fig)
+    fig = go.Figure(go.Scatter(
+        x=d[conf_col], y=d["pIC50"], mode="markers+text", text=d["target_id"],
+        textposition="top center", textfont=dict(size=_ANNOTATION_FONTSIZE),
+        marker=dict(color=colors, size=8),
+    ))
+    fig.update_xaxes(title_text=conf_col, title_font=dict(size=_AXIS_LABEL_FONTSIZE), tickfont=dict(size=_TICK_FONTSIZE))
+    fig.update_yaxes(title_text="pIC50", title_font=dict(size=_AXIS_LABEL_FONTSIZE), tickfont=dict(size=_TICK_FONTSIZE))
+    return _plotly_to_div(fig, div_id)
 
 
-def _make_interaction_count_chart(df: pd.DataFrame):
+def _make_interaction_count_chart(df: pd.DataFrame, div_id: str):
     count_cols = [c for c in df.columns if c.startswith("plip_") and c.endswith("_count")]
     if not count_cols:
         return None
     d = df[["target_id"] + count_cols].fillna(0)
     if d[count_cols].to_numpy().sum() == 0:
         return None
-    fig, ax = plt.subplots(figsize=(max(6, len(d) * 0.4), 4))
-    bottom = None
+    n = len(d)
+    x = list(range(n))
+    fig = go.Figure()
     for col in count_cols:
         label = col[len("plip_"):-len("_count")]
-        ax.bar(d["target_id"], d[col], bottom=bottom, label=label)
-        bottom = d[col] if bottom is None else bottom + d[col]
-    ax.set_title("Protein-ligand interaction counts by type")
-    ax.set_ylabel("interactions")
-    ax.legend(fontsize=7, loc="upper right")
-    plt.xticks(rotation=75, ha="right", fontsize=7)
-    fig.tight_layout()
-    return _fig_to_base64(fig)
+        fig.add_trace(go.Bar(x=x, y=d[col].tolist(), width=_BAR_WIDTH, name=label))
+    fig.update_layout(barmode="stack", legend=dict(font=dict(size=_LEGEND_FONTSIZE)))
+    fig.update_xaxes(tickmode="array", tickvals=x, ticktext=d["target_id"].tolist(), tickangle=-75,
+                      tickfont=dict(size=_TICK_FONTSIZE), range=[-0.75, max(n - 0.25, _BAR_MIN_SLOTS - 0.75)])
+    fig.update_yaxes(title_text="interactions", title_font=dict(size=_AXIS_LABEL_FONTSIZE), tickfont=dict(size=_TICK_FONTSIZE))
+    return _plotly_to_div(fig, div_id)
 
 
 def _make_fingerprint_heatmaps(df: pd.DataFrame, interactions_df) -> list:
@@ -2016,10 +2086,9 @@ def _make_fingerprint_heatmaps(df: pd.DataFrame, interactions_df) -> list:
         fig, ax = plt.subplots(figsize=(0.5 * pivot.shape[1] + 3, 0.4 * pivot.shape[0] + 2))
         ax.imshow(pivot.values, cmap="Blues", aspect="auto", vmin=0, vmax=1)
         ax.set_xticks(range(len(pivot.columns)))
-        ax.set_xticklabels(pivot.columns, rotation=90, fontsize=7)
+        ax.set_xticklabels(pivot.columns, rotation=90, fontsize=_TICK_FONTSIZE)
         ax.set_yticks(range(len(pivot.index)))
-        ax.set_yticklabels(pivot.index, fontsize=8)
-        ax.set_title(f"{family_id}: contacted-residue fingerprint (clustered by similarity)")
+        ax.set_yticklabels(pivot.index, fontsize=_TICK_FONTSIZE)
         fig.tight_layout()
         results.append((family_id, _fig_to_base64(fig)))
     return results
@@ -2101,18 +2170,22 @@ img, canvas { max-width: 100%; height: auto; }
   white-space: nowrap;
 }
 .md-main { max-width: 1400px; margin: 0 auto; padding: 24px; }
-.md-stats { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); margin-bottom: 24px; }
-.md-stat { background: var(--md-surface); border: 1px solid var(--md-border); border-radius: var(--md-radius); padding: 16px 20px; box-shadow: var(--md-shadow-sm); }
-.md-stat .n { font-size: 28px; font-weight: 700; color: var(--md-primary); }
-.md-stat.flagged .n { color: var(--md-accent-orange); }
-.md-stat .l { font-size: 12px; color: var(--md-text-muted); text-transform: uppercase; letter-spacing: 0.04em; }
 .md-card { background: var(--md-surface); border: 1px solid var(--md-border); border-radius: var(--md-radius); padding: 20px; box-shadow: var(--md-shadow-sm); margin-bottom: 24px; }
 .md-card h2 { margin-top: 0; font-size: 16px; }
-.md-card.table-card { overflow-x: auto; }
-table { border-collapse: collapse; font-family: 'Roboto Mono', monospace; font-size: 12px; width: 100%; }
+.md-card.table-card { overflow-x: auto; max-width: 100%; }
+.md-chart-grid, .md-side-by-side { display: grid; gap: 16px; grid-template-columns: repeat(2, 1fr); margin-bottom: 24px; }
+.md-chart-grid .md-card, .md-side-by-side { margin-bottom: 0; }
+.md-chart-grid .md-card img, .md-side-image img { width: 100%; height: 260px; object-fit: contain; display: block; }
+.md-side-table { overflow: auto; max-height: 320px; }
+table { border-collapse: collapse; font-family: 'Roboto Mono', monospace; font-size: 12px; width: 100%; max-width: 100%; }
 th, td { border: 1px solid var(--md-border); padding: 5px 9px; text-align: left; white-space: nowrap; }
 th { background: var(--md-bg-alt); font-weight: 600; position: sticky; top: 0; }
 tr:nth-child(even) { background: var(--md-bg-alt); }
+/* Full table: many columns of mostly-numeric data -- fixed layout + wrapping keeps
+   the whole table within the viewport instead of forcing one-line-per-cell widths
+   that overflow far past the browser width. */
+.md-card.table-card table { table-layout: fixed; }
+.md-card.table-card th, .md-card.table-card td { white-space: normal; word-break: break-word; font-size: 11px; }
 .md-footer { text-align: center; padding: 24px; color: var(--md-text-muted); font-size: 13px; }
 .md-footer a { color: var(--md-primary); text-decoration: none; }
 @media (max-width: 768px) {
@@ -2121,6 +2194,7 @@ tr:nth-child(even) { background: var(--md-bg-alt); }
   .md-header-links a { font-size: 11px; padding: 3px 8px; }
   .md-main { padding: 14px; }
   .md-card { padding: 14px; }
+  .md-chart-grid, .md-side-by-side { grid-template-columns: 1fr; }
 }
 """
 
@@ -2151,38 +2225,101 @@ _BRAND_FOOTER = """
 """
 
 
-def write_html(df: pd.DataFrame, path: Path, campaign_dir: Path) -> None:
-    flagged = int((df["flags"] != "").sum()) if "flags" in df.columns else 0
-    parts = [
-        f"<div class='md-stats'>"
-        f"<div class='md-stat'><div class='n'>{len(df)}</div><div class='l'>Targets</div></div>"
-        f"<div class='md-stat flagged'><div class='n'>{flagged}</div><div class='l'>Flagged</div></div>"
-        f"</div>"
+def _format_duration(seconds: float) -> str:
+    seconds = int(seconds)
+    h, rem = divmod(seconds, 3600)
+    m, s = divmod(rem, 60)
+    if h:
+        return f"{h}h {m}m {s}s"
+    if m:
+        return f"{m}m {s}s"
+    return f"{s}s"
+
+
+def _build_campaign_summary(campaign: Campaign, campaign_dir: Path) -> list:
+    targets = _expand_targets(campaign)
+    rows = [
+        ("Input file", campaign.source_path.name if campaign.source_path else "n/a"),
+        ("Proteins", str(len(campaign.families))),
+        ("Partners", str(len(campaign.partners))),
+        ("Ligands", str(len(campaign.ligands))),
+        ("Targets (protein x ligand)", str(len(targets))),
+        ("Predict affinity", "yes" if campaign.settings.predict_affinity else "no"),
     ]
 
-    for col, title in (("pIC50", "Ranked predicted pIC50"), ("confidence_score", "Ranked confidence")):
-        b64 = _make_bar_chart(df, col, title)
-        if b64:
-            parts.append(f"<div class='md-card'><h2>{title}</h2><img src='data:image/png;base64,{b64}'></div>")
+    history_path = campaign_dir / RUN_HISTORY_FILENAME
+    if history_path.exists():
+        records = [json.loads(line) for line in history_path.read_text().splitlines() if line.strip()]
+        if records:
+            total_duration = sum(r.get("duration_seconds", 0) for r in records)
+            last = records[-1]
+            invocation_note = f" (across {len(records)} run invocations)" if len(records) > 1 else ""
+            rows.append(("Boltz predict runtime", _format_duration(total_duration) + invocation_note))
+            rows.append(("Accelerator", str(last.get("accelerator", "n/a"))))
+            rows.append(("Workers", str(last.get("workers", "n/a"))))
+            rows.append(("MPS watermark", str(last.get("mps_watermark", "n/a"))))
+            rows.append(("Max parallel samples", str(last.get("max_parallel_samples", "n/a"))))
+            for key, label in (("recycling_steps", "Recycling steps"), ("sampling_steps", "Sampling steps"),
+                               ("diffusion_samples_affinity", "Diffusion samples (affinity)"),
+                               ("sampling_steps_affinity", "Sampling steps (affinity)"),
+                               ("max_msa_seqs", "Max MSA sequences")):
+                if last.get(key) is not None:
+                    rows.append((label, str(last[key])))
+    return rows
+
+
+_FULL_TABLE_HIDDEN_COLS = [
+    "plip_png_path", "plip_pse_path",
+    "flags", "chains_ptm_0", "chains_ptm_1",
+    "pair_chains_iptm_0_0", "pair_chains_iptm_0_1", "pair_chains_iptm_1_0", "pair_chains_iptm_1_1",
+    "affinity_pred_value", "affinity_probability_binary",
+    "affinity_pred_value2", "affinity_probability_binary2",
+    "pIC50", "pIC50_2",
+    "plip_status", "plip_hydrophobic_count", "notes",
+]
+
+
+def write_html(df: pd.DataFrame, path: Path, campaign_dir: Path, campaign: Campaign) -> None:
+    summary_rows = _build_campaign_summary(campaign, campaign_dir)
+    summary_html = pd.DataFrame(summary_rows, columns=["Field", "Value"]).to_html(index=False, na_rep="")
+    parts = [f"<div class='md-card table-card'><h2>Campaign summary</h2>{summary_html}</div>"]
+
+    table_df = df.drop(columns=[c for c in _FULL_TABLE_HIDDEN_COLS if c in df.columns])
+    display_df = table_df.copy()
+    float_cols = display_df.select_dtypes(include="float").columns
+    display_df[float_cols] = display_df[float_cols].round(2)
+    csv_link = "<p><a href='boltz_summary.csv'>Download CSV</a></p>"
+    parts.append(f"<div class='md-card table-card'><h2>Full table</h2>"
+                 f"{display_df.to_html(index=False, na_rep='')}{csv_link}</div>")
+
+    chart_cards = []
+    for col, title, div_id in (("pIC50", "Ranked predicted pIC50", "chart-pic50"),
+                               ("confidence_score", "Ranked confidence", "chart-confidence")):
+        chart_html = _make_bar_chart(df, col, div_id)
+        if chart_html:
+            chart_cards.append(f"<div class='md-card'><h2>{title}</h2>{chart_html}</div>")
 
     heat = _make_selectivity_heatmap(df)
     if heat:
-        parts.append(f"<div class='md-card'><h2>Family x ligand selectivity</h2><img src='data:image/png;base64,{heat}'></div>")
+        chart_cards.append(f"<div class='md-card'><h2>Family x ligand selectivity</h2><img src='data:image/png;base64,{heat}'></div>")
 
-    scatter = _make_scatter(df)
+    scatter = _make_scatter(df, "chart-scatter")
     if scatter:
-        parts.append(f"<div class='md-card'><h2>Confidence vs affinity</h2><img src='data:image/png;base64,{scatter}'></div>")
+        chart_cards.append(f"<div class='md-card'><h2>Confidence vs affinity</h2>{scatter}</div>")
 
     interactions_csv = campaign_dir / "boltz_interactions.csv"
     interactions_df = pd.read_csv(interactions_csv) if interactions_csv.exists() else None
 
-    ichart = _make_interaction_count_chart(df)
+    ichart = _make_interaction_count_chart(df, "chart-interactions")
     if ichart:
-        parts.append(f"<div class='md-card'><h2>Interaction counts by type</h2><img src='data:image/png;base64,{ichart}'></div>")
+        chart_cards.append(f"<div class='md-card'><h2>Interaction counts by type</h2>{ichart}</div>")
 
     for family_id, b64 in _make_fingerprint_heatmaps(df, interactions_df):
-        parts.append(f"<div class='md-card'><h2>{family_id}: residue interaction fingerprint</h2>"
-                      f"<img src='data:image/png;base64,{b64}'></div>")
+        chart_cards.append(f"<div class='md-card'><h2>{family_id}: residue interaction fingerprint</h2>"
+                            f"<img src='data:image/png;base64,{b64}'></div>")
+
+    if chart_cards:
+        parts.append(f"<div class='md-chart-grid'>{''.join(chart_cards)}</div>")
 
     if "plip_png_path" in df.columns:
         sessions_dir = campaign_dir / "boltz_dashboard_sessions"
@@ -2203,16 +2340,21 @@ def write_html(df: pd.DataFrame, path: Path, campaign_dir: Path) -> None:
                 shutil.copy2(campaign_dir / pse_rel, dest)
                 total_bytes += dest.stat().st_size
                 pse_link = f"<p><a href='boltz_dashboard_sessions/{dest.name}'>Open PyMOL session</a></p>"
-            contacts_table = ""
+            contacts_table = "<p><em>No interaction data.</em></p>"
             if interactions_df is not None:
                 tdf = interactions_df[interactions_df["target_id"] == row["target_id"]]
-                show_cols = [c for c in ("interaction_type", "prot_restype", "prot_resnr",
-                                          "prot_chain", "distance_A", "geometry") if c in tdf.columns]
+                rename_map = {"interaction_type": "Interaction", "prot_restype": "Residue",
+                              "prot_resnr": "Number", "prot_chain": "Chain", "distance_A": "Distance"}
+                show_cols = [c for c in rename_map if c in tdf.columns]
                 if not tdf.empty and show_cols:
-                    contacts_table = tdf[show_cols].sort_values("interaction_type").to_html(index=False, na_rep="")
+                    contacts_table = (tdf[show_cols].sort_values("interaction_type")
+                                      .rename(columns=rename_map).to_html(index=False, na_rep=""))
             session_cards.append(
                 f"<div class='md-card'><h2>{row['target_id']}: binding site</h2>"
-                f"<img src='data:image/png;base64,{b64}'>{pse_link}{contacts_table}</div>"
+                f"<div class='md-side-by-side'>"
+                f"<div class='md-side-image'><img src='data:image/png;base64,{b64}'>{pse_link}</div>"
+                f"<div class='md-side-table'>{contacts_table}</div>"
+                f"</div></div>"
             )
         if session_cards:
             if total_bytes:
@@ -2220,15 +2362,13 @@ def write_html(df: pd.DataFrame, path: Path, campaign_dir: Path) -> None:
                       f"{sessions_dir} (this is why the dashboard is no longer a single file)")
             parts.extend(session_cards)
 
-    table_df = df.drop(columns=[c for c in ("plip_png_path", "plip_pse_path") if c in df.columns])
-    parts.append(f"<div class='md-card table-card'><h2>Full table</h2>{table_df.to_html(index=False, na_rep='')}</div>")
-
     doc = (
         "<!DOCTYPE html><html lang='en'><head><meta charset='utf-8'>"
         "<meta name='viewport' content='width=device-width, initial-scale=1.0'>"
         "<title>BoltzMaker Report | Marc C. Deller</title>"
         "<link href='https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700"
         "&family=Roboto+Mono:wght@400;500&display=swap' rel='stylesheet'>"
+        "<script src='https://cdn.plot.ly/plotly-2.35.2.min.js'></script>"
         f"<style>{_BRAND_CSS}</style></head><body>"
         + _BRAND_HEADER + "<main class='md-main'>" + "".join(parts) + "</main>" + _BRAND_FOOTER
         + "</body></html>"
@@ -2340,7 +2480,7 @@ def main() -> None:
                      skip_interactions=args.skip_interactions)
         write_csv(df, campaign_dir / "boltz_summary.csv")
         write_xlsx(df, campaign_dir / "boltz_summary.xlsx")
-        write_html(df, campaign_dir / "boltz_dashboard.html", campaign_dir)
+        write_html(df, campaign_dir / "boltz_dashboard.html", campaign_dir, campaign)
         print(f"BoltzMaker: analysis written to {campaign_dir} (boltz_summary.csv / .xlsx / boltz_dashboard.html)")
 
 

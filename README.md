@@ -55,11 +55,11 @@ python3 BoltzMaker.py setup
 
 Creates a dedicated `.venv` (Python 3.12: boltz pins `numpy<2.0`, which has no prebuilt
 wheel for newer Pythons) next to `BoltzMaker.py` and installs `boltz`, `rich`, `pandas`,
-`openpyxl`, `pyyaml`, `rdkit`, `matplotlib`, and `psutil` into it. This pulls PyTorch
-(~2-3 GB) and, the first time `boltz predict` actually runs, Boltz downloads several GB of
-model weights over the network. Every other command below transparently relaunches itself
-under this managed environment, so you can keep invoking the script with whatever `python3`
-is on your PATH.
+`openpyxl`, `pyyaml`, `rdkit`, `matplotlib`, `psutil`, `scipy`, `gemmi`, `biopython`, and
+`plotly` into it. This pulls PyTorch (~2-3 GB) and, the first time `boltz predict` actually
+runs, Boltz downloads several GB of model weights over the network. Every other command
+below transparently relaunches itself under this managed environment, so you can keep
+invoking the script with whatever `python3` is on your PATH.
 
 Re-run with `--force` to recreate the venv from scratch, or `-y/--yes` to skip the download
 confirmation prompt.
@@ -281,11 +281,11 @@ Written next to `boltz_input.md`:
 | `boltz_run_<timestamp>.log` | Raw `boltz predict` output for the run |
 | `boltz_output/` | Boltz's own prediction output tree |
 | `boltz_cif/` | Every completed target's `*_model_0.cif`, flattened into one folder |
-| `boltz_summary.csv` / `boltz_summary.xlsx` | One row per target: every scalar field from the confidence/affinity JSONs, computed pIC50, and `flags`/`notes` columns (`LOW_CONFIDENCE`, `HIGH_CONFIDENCE_POOR_AFFINITY`, `LOW_CONFIDENCE_STRONG_AFFINITY`, `LOW_POCKET_PLDDT`, `MISSING_OUTPUTS`). The XLSX adds a `selectivity` sheet (ligand x family pIC50 pivot) whenever a campaign spans more than one protein family. When `setup-plip` has run, also gets a `plip_status` column (`ok` / `no_interactions` / `failed` / `ambiguous_ligand` / `skipped_no_env`) and a `plip_<type>_count` column per interaction type detected (hydrophobic, hydrogen_bonds, salt_bridges, etc.). |
+| `boltz_summary.csv` / `boltz_summary.xlsx` | One row per target: every scalar field from the confidence/affinity JSONs, computed pIC50, the input ligand SMILES, and `flags`/`notes` columns (`LOW_CONFIDENCE`, `HIGH_CONFIDENCE_POOR_AFFINITY`, `LOW_CONFIDENCE_STRONG_AFFINITY`, `LOW_POCKET_PLDDT`, `MISSING_OUTPUTS`). The XLSX adds a `selectivity` sheet (ligand x family pIC50 pivot) whenever a campaign spans more than one protein family. When `setup-plip` has run, also gets a `plip_status` column (`ok` / `no_interactions` / `failed` / `ambiguous_ligand` / `skipped_no_env`) and a `plip_<type>_count` column per interaction type detected (hydrophobic, hydrogen_bonds, salt_bridges, etc.). |
 | `boltz_plip/` (optional) | Per-target cif2plip output: the converted PDB, PLIP's XML/TXT reports, the ray-traced binding-site PNG, and the PyMOL `.pse` session -- cached here so re-running `analyze` doesn't re-profile a target that's already been done |
-| `boltz_interactions.csv` (optional) | Long format, one row per detected contact across every target: interaction type, residue, distance, geometry -- the raw data behind the dashboard's fingerprint heatmap |
+| `boltz_interactions.csv` (optional) | Long format, one row per detected contact across every target: interaction type, residue, distance -- the raw data behind the dashboard's fingerprint heatmap and per-target contact tables |
 | `boltz_dashboard_sessions/` (optional) | Each target's PyMOL `.pse` session, copied here and linked from the dashboard -- this is the one thing that makes `boltz_dashboard.html` no longer a single self-contained file once interaction analysis has run; without `setup-plip`, the dashboard stays exactly as self-contained as before |
-| `boltz_dashboard.html` | Ranked pIC50/confidence charts, the family x ligand selectivity heatmap, a confidence-vs-affinity scatter, and the full flagged table. When `setup-plip` has run: an interaction-count chart, a per-family residue-interaction fingerprint heatmap (ligands clustered by similarity -- useful for SAR ranking within a series), and a per-target binding-site image (residues labelled -- PLIP's own images aren't, so these are re-rendered from its PyMOL session with labels added) with a link to the session and a table of that target's contacts below it. |
+| `boltz_dashboard.html` | A campaign summary table (input file, protein/partner/ligand/target counts, predict-affinity setting, and -- once a `run` has happened -- boltz predict runtime and the run parameters used, tracked across every `run` invocation in a small hidden sidecar file), then the full results table (rounded to 2 decimal places for display, with a subset of noisy/redundant columns hidden and a download link to the underlying CSV), then four interactive [Plotly](https://plotly.com/javascript/) charts in a 2x2 grid (ranked pIC50, ranked confidence, confidence-vs-affinity scatter, interaction counts by type -- hover/zoom/pan, loaded via the plotly.js CDN). When `setup-plip` has run: a per-family residue-interaction fingerprint heatmap (ligands clustered by similarity -- useful for SAR ranking within a series) and, per target, its binding-site image (residues labelled and interaction distances shown -- PLIP's own images have neither, so these are re-rendered from its PyMOL session with both added) side by side with a table of that target's contacts, plus a link to the full PyMOL session. |
 
 ---
 

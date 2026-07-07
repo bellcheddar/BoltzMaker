@@ -11,6 +11,7 @@ boltz_plip/
 boltz_interactions.csv
 boltz_dashboard_sessions/
 .boltzmaker_manifest.json
+.boltzmaker_run_history.jsonl
 boltz_summary.csv
 boltz_summary.xlsx
 boltz_dashboard.html
