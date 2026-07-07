@@ -3007,6 +3007,10 @@ def write_html(df: pd.DataFrame, path: Path, campaign_dir: Path, campaign: Campa
             # so the raw file goes in directly; no PDB conversion needed (Boltz's own chain
             # names, e.g. a 3-letter family id, are longer than PDB's 1-character chain
             # field allows and would need remapping otherwise).
+            # Everything for a grid column must be ONE element -- CSS Grid auto-places every
+            # direct child of the grid container into its own cell, so a viewer div followed
+            # by a sibling <p> (rather than both nested inside one wrapper) silently shifts
+            # every column after it over by one, which is exactly what happened here.
             viewer_col = ""
             cif_rel = row.get("cif_file")
             if isinstance(cif_rel, str):
@@ -3014,7 +3018,6 @@ def write_html(df: pd.DataFrame, path: Path, campaign_dir: Path, campaign: Campa
                 if cif_path.exists():
                     div_id = f"viewer-{re.sub(r'[^a-zA-Z0-9_-]', '_', str(target_id))}"
                     cif_json = json.dumps(cif_path.read_text())
-                    viewer_col = f"<div class='md-3dmol-viewer' id='{div_id}'></div>"
                     need_3dmol = True
                     viewer_scripts.append(f"""
 (function() {{
@@ -3029,8 +3032,8 @@ def write_html(df: pd.DataFrame, path: Path, campaign_dir: Path, campaign: Campa
   viewer.render();
   viewer.spin('y', 1);
 }})();""")
-                    if pse_link_html:
-                        viewer_col += f"<p>{pse_link_html}</p>"
+                    pse_p = f"<p>{pse_link_html}</p>" if pse_link_html else ""
+                    viewer_col = f"<div class='md-side-viewer'><div class='md-3dmol-viewer' id='{div_id}'></div>{pse_p}</div>"
 
             if not viewer_col and pse_link_html:
                 image_links.append(pse_link_html)
