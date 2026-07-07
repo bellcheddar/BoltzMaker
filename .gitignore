@@ -10,6 +10,8 @@ boltz_plip/
 .boltz_plip_staging_*/
 boltz_interactions.csv
 boltz_dashboard_sessions/
+!examples/*/boltz_dashboard_sessions/
+!examples/*/boltz_dashboard_sessions/*
 .boltzmaker_manifest.json
 .boltzmaker_run_history.jsonl
 boltz_summary.csv
