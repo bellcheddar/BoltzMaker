@@ -1221,22 +1221,29 @@ def check_smiles(campaign: Campaign) -> CheckResult:
     return CheckResult("smiles_validity", "PASS", f"{len(smiles_ligands)} SMILES parse OK")
 
 
+_IONIZABLE_SMARTS = {
+    "carboxylic acid": "[CX3](=O)[OX2H1]",
+    "primary/secondary amine": "[NX3;H2,H1;!$(NC=O);!$(N=*)]",
+    "phenol": "[OX2H][cX3]",
+    "sulfonic acid": "[SX4](=O)(=O)[OX2H1]",
+}
+
+
 def _ligand_chemistry_notes(campaign: Campaign) -> dict:
     # Bad input chemistry (an undefined stereocentre, a salt/counterion left attached, an
     # ionizable group whose intended protonation state is ambiguous) doesn't error --
     # Boltz folds whatever it's given and the pose/affinity is silently wrong. Shared by
-    # preflight's check_ligand_preparation and the dashboard's "Ligand preparation" card
-    # so the two never drift out of sync. This only advises; it never blocks -- these are
-    # legitimate modelling choices the user may have already made deliberately.
+    # preflight's check_ligand_preparation, the dashboard's "Ligand preparation" card, and
+    # the ligand-grid panel's per-atom highlighting, so none of the three can drift out of
+    # sync. This only advises; it never blocks -- these are legitimate modelling choices
+    # the user may have already made deliberately.
+    #
+    # Returns {ligand_id: {"notes": [str, ...], "stereo_atoms": [int, ...],
+    #                      "ionizable_atoms": {group_name: [int, ...]}, "has_fragments": bool}}
+    # -- only for ligands with at least one finding.
     from rdkit import Chem
 
-    ionizable_patterns = {
-        "carboxylic acid": "[CX3](=O)[OX2H1]",
-        "primary/secondary amine": "[NX3;H2,H1;!$(NC=O);!$(N=*)]",
-        "phenol": "[OX2H][cX3]",
-        "sulfonic acid": "[SX4](=O)(=O)[OX2H1]",
-    }
-    patterns = {name: Chem.MolFromSmarts(smarts) for name, smarts in ionizable_patterns.items()}
+    patterns = {name: Chem.MolFromSmarts(smarts) for name, smarts in _IONIZABLE_SMARTS.items()}
 
     notes_by_ligand = {}
     for lig in campaign.ligands:
@@ -1247,28 +1254,36 @@ def _ligand_chemistry_notes(campaign: Campaign) -> dict:
             continue  # already reported as a FAIL by check_smiles
 
         notes = []
-        if len(Chem.GetMolFrags(mol)) > 1:
+        has_fragments = len(Chem.GetMolFrags(mol)) > 1
+        if has_fragments:
             notes.append("multiple disconnected fragments (salt/counterion?)")
 
         centres = Chem.FindMolChiralCenters(mol, includeUnassigned=True, useLegacyImplementation=False)
-        unassigned = [str(idx) for idx, chirality in centres if chirality == "?"]
-        if unassigned:
-            notes.append(f"undefined stereocentre(s) at atom index {', '.join(unassigned)}")
+        stereo_atoms = [idx for idx, chirality in centres if chirality == "?"]
+        if stereo_atoms:
+            notes.append(f"undefined stereocentre(s) at atom index {', '.join(str(i) for i in stereo_atoms)}")
 
-        found = [name for name, patt in patterns.items() if patt is not None and mol.HasSubstructMatch(patt)]
-        if found:
-            notes.append(f"ionizable group(s) present ({', '.join(found)}) -- verify the SMILES "
+        ionizable_atoms = {}
+        for name, patt in patterns.items():
+            if patt is None:
+                continue
+            matches = mol.GetSubstructMatches(patt)
+            if matches:
+                ionizable_atoms[name] = sorted({idx for match in matches for idx in match})
+        if ionizable_atoms:
+            notes.append(f"ionizable group(s) present ({', '.join(ionizable_atoms)}) -- verify the SMILES "
                           "reflects your intended protonation state")
 
         if notes:
-            notes_by_ligand[lig.id] = notes
+            notes_by_ligand[lig.id] = {"notes": notes, "stereo_atoms": stereo_atoms,
+                                        "ionizable_atoms": ionizable_atoms, "has_fragments": has_fragments}
     return notes_by_ligand
 
 
 def check_ligand_preparation(campaign: Campaign) -> CheckResult:
     notes_by_ligand = _ligand_chemistry_notes(campaign)
     if notes_by_ligand:
-        issues = [f"{lig_id}: {'; '.join(notes)}" for lig_id, notes in notes_by_ligand.items()]
+        issues = [f"{lig_id}: {'; '.join(info['notes'])}" for lig_id, info in notes_by_ligand.items()]
         shown = issues[:5]
         more = f" (+{len(issues) - 5} more)" if len(issues) > 5 else ""
         return CheckResult("ligand_preparation", "WARN",
@@ -2186,6 +2201,302 @@ def _make_fingerprint_heatmaps(df: pd.DataFrame, interactions_df) -> list:
     return results
 
 
+# ==========================================================================
+# Ligand grid panel -- paginated 5x5 rendered-structure grid, building on the
+# design of github.com/bellcheddar/smiles2grid (same author): per-cell 2D
+# depiction + descriptors, with shared-substructure highlighting across the
+# set. Adapted for a single campaign's typical scale (a handful to a few dozen
+# ligands, often close SAR analogues) rather than smiles2grid's screening-scale
+# use case, and wired into this campaign's own ligand-preparation findings.
+# ==========================================================================
+
+_LIGAND_GRID_PAGE_SIZE = 25  # 5x5, matching smiles2grid's page convention
+_LIGAND_GRID_MIN_SCAFFOLD_ATOMS = 8  # suppress "they all contain a benzene ring"-style trivia
+_LIGAND_GRID_MCS_SIMILARITY_THRESHOLD = 0.6
+_LIGAND_GRID_IMG_SIZE = (260, 190)
+_LIGAND_GRID_STEREO_COLOR = (0.847, 0.106, 0.549)     # magenta -- undefined stereocentre
+_LIGAND_GRID_IONIZABLE_COLOR = (0.961, 0.620, 0.043)  # amber -- ionizable group
+_LIGAND_GRID_FRAGMENT_COLOR = (0.70, 0.10, 0.10)      # red -- salt/counterion badge only (not atom-highlighted)
+_LIGAND_GRID_CLUSTER_PALETTE = [                      # colour-blind-safe qualitative palette (Okabe-Ito derived)
+    (0.000, 0.447, 0.698), (0.902, 0.624, 0.000), (0.000, 0.620, 0.451),
+    (0.800, 0.475, 0.655), (0.835, 0.369, 0.000), (0.337, 0.706, 0.914),
+]
+_LIGAND_GRID_BADGE_LABELS = {
+    "carboxylic acid": "A", "primary/secondary amine": "N", "phenol": "Ph", "sulfonic acid": "SO3",
+}
+
+
+def _rgb_css(color: tuple) -> str:
+    return f"rgb({round(color[0] * 255)},{round(color[1] * 255)},{round(color[2] * 255)})"
+
+
+def _cluster_ligands_by_scaffold(mols_by_ligand: dict) -> list:
+    # Two tiers, both defensible without a single hand-tuned "looks similar enough" call
+    # driving what gets highlighted:
+    #  1. Exact Bemis-Murcko scaffold match -- threshold-free, the dominant real case for
+    #     an SAR series of close analogues sharing one core.
+    #  2. For ligands left over, group by Morgan/Tanimoto similarity (a similarity
+    #     *decision* is unavoidable here, so it's isolated to this fallback tier only) and
+    #     verify the group with a real, whole-group MCS rather than asserting similarity
+    #     alone -- the MCS substructure match is what actually gets highlighted, so the
+    #     claim is geometrically proven, not just scored.
+    #     (A "generic scaffold" tier -- bond/atom-type-abstracted Murcko cores, matched via
+    #     RDKit's query-adjustment machinery -- was tried and dropped: it didn't reliably
+    #     bridge aromatic vs. Kekulized-single-bond queries across independently-built
+    #     molecules in testing, so a match could silently fail. A verified whole-group MCS
+    #     has no such failure mode.)
+    from rdkit import Chem, DataStructs
+    from rdkit.Chem import rdFingerprintGenerator, rdFMCS
+    from rdkit.Chem.Scaffolds import MurckoScaffold
+
+    clusters = []
+    assigned = set()
+
+    scaffold_by_lig = {}
+    for lig_id, mol in mols_by_ligand.items():
+        try:
+            scaffold = MurckoScaffold.GetScaffoldForMol(mol)
+        except Exception:
+            continue
+        if scaffold is not None and scaffold.GetNumHeavyAtoms() >= _LIGAND_GRID_MIN_SCAFFOLD_ATOMS:
+            scaffold_by_lig[lig_id] = scaffold
+
+    groups = {}
+    for lig_id, scaffold in scaffold_by_lig.items():
+        groups.setdefault(Chem.MolToSmiles(scaffold), []).append(lig_id)
+    for members in groups.values():
+        if len(members) >= 2:
+            ref = scaffold_by_lig[members[0]]
+            clusters.append({"level": "exact", "member_ids": members, "match_mol": ref, "template_mol": ref})
+            assigned.update(members)
+
+    remaining = [lig_id for lig_id in mols_by_ligand if lig_id not in assigned]
+    fp_gen = rdFingerprintGenerator.GetMorganGenerator(radius=2, fpSize=2048)
+    fps = {lig_id: fp_gen.GetFingerprint(mols_by_ligand[lig_id]) for lig_id in remaining}
+
+    parent = {lig_id: lig_id for lig_id in remaining}
+
+    def find(x):
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    for i, a in enumerate(remaining):
+        for b in remaining[i + 1:]:
+            if DataStructs.TanimotoSimilarity(fps[a], fps[b]) >= _LIGAND_GRID_MCS_SIMILARITY_THRESHOLD:
+                ra, rb = find(a), find(b)
+                if ra != rb:
+                    parent[ra] = rb
+
+    fallback_groups = {}
+    for lig_id in remaining:
+        fallback_groups.setdefault(find(lig_id), []).append(lig_id)
+
+    for members in fallback_groups.values():
+        if len(members) < 2:
+            continue
+        mols = [mols_by_ligand[m] for m in members]
+        try:
+            res = rdFMCS.FindMCS(mols, timeout=5, ringMatchesRingOnly=True, completeRingsOnly=True)
+        except Exception:
+            continue
+        if res.canceled or not res.smartsString:
+            continue
+        patt = Chem.MolFromSmarts(res.smartsString)
+        if patt is None or patt.GetNumAtoms() < _LIGAND_GRID_MIN_SCAFFOLD_ATOMS:
+            continue
+        verified = [m for m in members if mols_by_ligand[m].HasSubstructMatch(patt)]
+        if len(verified) >= 2:
+            clusters.append({"level": "mcs", "member_ids": verified, "match_mol": patt, "template_mol": patt})
+            assigned.update(verified)
+
+    clusters.sort(key=lambda c: -len(c["member_ids"]))
+    for i, cl in enumerate(clusters):
+        cl["id"] = i
+        cl["color"] = _LIGAND_GRID_CLUSTER_PALETTE[i % len(_LIGAND_GRID_CLUSTER_PALETTE)]
+    return clusters
+
+
+def _ligand_grid_descriptors(mol) -> dict:
+    from rdkit.Chem import Crippen, Descriptors, rdMolDescriptors
+    return {"mw": Descriptors.MolWt(mol), "clogp": Crippen.MolLogP(mol), "tpsa": rdMolDescriptors.CalcTPSA(mol)}
+
+
+def _render_ligand_cell_image(mol, stereo_atoms: list, ionizable_atoms: dict, cluster) -> str:
+    from rdkit.Chem import AllChem
+    from rdkit.Chem.Draw import rdMolDraw2D
+
+    # Scaffold-templated alignment: ligands sharing a cluster draw their common substructure
+    # in the same position/orientation, so shared cores visibly line up across cells.
+    aligned = False
+    if cluster is not None:
+        template = cluster["template_mol"]
+        if not template.GetNumConformers():
+            AllChem.Compute2DCoords(template)
+        try:
+            match = AllChem.GenerateDepictionMatching2DStructure(mol, template, refPatt=cluster["match_mol"],
+                                                                   acceptFailure=True)
+            aligned = bool(match)
+        except Exception:
+            aligned = False
+    if not aligned:
+        AllChem.Compute2DCoords(mol)
+
+    # Highlight priority: a specific finding (stereocentre/ionizable atom) always wins over
+    # the softer cluster-membership highlight, since it's the more actionable signal --
+    # cluster colors are written first, then overwritten by finding colors.
+    highlight_atoms, highlight_bonds = set(), set()
+    atom_colors, bond_colors = {}, {}
+
+    if cluster is not None:
+        match = mol.GetSubstructMatch(cluster["match_mol"])
+        if match:
+            match_set = set(match)
+            highlight_atoms |= match_set
+            for idx in match_set:
+                atom_colors[idx] = cluster["color"]
+            for bond in mol.GetBonds():
+                if bond.GetBeginAtomIdx() in match_set and bond.GetEndAtomIdx() in match_set:
+                    highlight_bonds.add(bond.GetIdx())
+                    bond_colors[bond.GetIdx()] = cluster["color"]
+
+    for idx in {i for atoms in ionizable_atoms.values() for i in atoms}:
+        highlight_atoms.add(idx)
+        atom_colors[idx] = _LIGAND_GRID_IONIZABLE_COLOR
+    for idx in stereo_atoms:
+        highlight_atoms.add(idx)
+        atom_colors[idx] = _LIGAND_GRID_STEREO_COLOR
+
+    drawer = rdMolDraw2D.MolDraw2DCairo(*_LIGAND_GRID_IMG_SIZE)
+    opts = drawer.drawOptions()
+    opts.addStereoAnnotation = True  # draws RDKit's own (?) marker at undefined centres
+    opts.padding = 0.08
+    rdMolDraw2D.PrepareAndDrawMolecule(drawer, mol, highlightAtoms=list(highlight_atoms),
+                                        highlightAtomColors=atom_colors, highlightBonds=list(highlight_bonds),
+                                        highlightBondColors=bond_colors)
+    drawer.FinishDrawing()
+    return base64.b64encode(drawer.GetDrawingText()).decode("ascii")
+
+
+def _render_scaffold_thumbnail(mol) -> str:
+    from rdkit.Chem import AllChem
+    from rdkit.Chem.Draw import rdMolDraw2D
+    if not mol.GetNumConformers():
+        AllChem.Compute2DCoords(mol)
+    drawer = rdMolDraw2D.MolDraw2DCairo(90, 70)
+    drawer.drawOptions().padding = 0.1
+    rdMolDraw2D.PrepareAndDrawMolecule(drawer, mol)
+    drawer.FinishDrawing()
+    return base64.b64encode(drawer.GetDrawingText()).decode("ascii")
+
+
+def _build_ligand_grid_panel(campaign: Campaign) -> str:
+    from rdkit import Chem
+
+    if not campaign.ligands:
+        return ""
+
+    ccd_ligands = [lig for lig in campaign.ligands if lig.smiles is None]
+    mols_by_ligand = {}
+    for lig in campaign.ligands:
+        if lig.smiles is None:
+            continue
+        mol = Chem.MolFromSmiles(lig.smiles)
+        if mol is not None:
+            mols_by_ligand[lig.id] = mol
+
+    if not mols_by_ligand:
+        return ""  # nothing renderable (all-CCD campaign) -- skip the panel entirely
+
+    findings = _ligand_chemistry_notes(campaign)
+    clusters = _cluster_ligands_by_scaffold(mols_by_ligand) if len(mols_by_ligand) >= 2 else []
+    cluster_by_ligand = {m: cl for cl in clusters for m in cl["member_ids"]}
+
+    cells_html = []
+    for lig in campaign.ligands:
+        if lig.id in mols_by_ligand:
+            mol = mols_by_ligand[lig.id]
+            info = findings.get(lig.id, {})
+            stereo_atoms = info.get("stereo_atoms", [])
+            ionizable_atoms = info.get("ionizable_atoms", {})
+            has_fragments = info.get("has_fragments", False)
+            cluster = cluster_by_ligand.get(lig.id)
+
+            severity = "error" if (stereo_atoms or has_fragments) else ("review" if ionizable_atoms else "clean")
+            badges = []
+            if stereo_atoms:
+                badges.append(("S", _LIGAND_GRID_STEREO_COLOR))
+            if has_fragments:
+                badges.append(("salt", _LIGAND_GRID_FRAGMENT_COLOR))
+            for name in ionizable_atoms:
+                badges.append((_LIGAND_GRID_BADGE_LABELS.get(name, name[:2]), _LIGAND_GRID_IONIZABLE_COLOR))
+            badge_html = "".join(f"<span class='lig-badge' style='background:{_rgb_css(c)}'>{lbl}</span>"
+                                  for lbl, c in badges)
+
+            img_b64 = _render_ligand_cell_image(mol, stereo_atoms, ionizable_atoms, cluster)
+            desc = _ligand_grid_descriptors(mol)
+            border = f"border-color:{_rgb_css(cluster['color'])};" if cluster else ""
+            cells_html.append(
+                f"<div class='lig-cell lig-severity-{severity}' style='{border}'>"
+                f"<div class='lig-cell-header'><span>{lig.id}</span><span class='lig-badges'>{badge_html}</span></div>"
+                f"<img src='data:image/png;base64,{img_b64}' alt='{lig.id} structure'>"
+                f"<div class='lig-cell-desc'>MW {desc['mw']:.0f} &middot; cLogP {desc['clogp']:.1f} "
+                f"&middot; TPSA {desc['tpsa']:.0f}</div></div>"
+            )
+        else:
+            ccd_code = lig.ccd or "?"
+            cells_html.append(
+                f"<div class='lig-cell lig-cell-ccd-wrap'>"
+                f"<div class='lig-cell-header'><span>{lig.id}</span></div>"
+                f"<div class='lig-cell-ccd'>{ccd_code}<br><small>No 2D structure (CCD ligand)</small></div></div>"
+            )
+
+    pages = [cells_html[i:i + _LIGAND_GRID_PAGE_SIZE] for i in range(0, len(cells_html), _LIGAND_GRID_PAGE_SIZE)]
+    pages_html = "".join(
+        f"<div class='lig-page' data-page='{i}'{'' if i == 0 else ' hidden'}>{''.join(page)}</div>"
+        for i, page in enumerate(pages))
+    pager_html = ("<div id='lig-pager'><button id='lig-prev'>&lsaquo; Prev</button>"
+                  "<span id='lig-pageinfo'></span><button id='lig-next'>Next &rsaquo;</button>"
+                  "<button id='lig-all'>Show all</button></div>") if len(pages) > 1 else ""
+
+    n_smiles = len(mols_by_ligand)
+    legend_items = []
+    for cl in clusters:
+        thumb = _render_scaffold_thumbnail(cl["match_mol"])
+        label = "shared scaffold" if cl["level"] == "exact" else "shared substructure (fallback match)"
+        legend_items.append(
+            f"<span class='lig-legend-item'><img class='lig-legend-thumb' style='border-color:{_rgb_css(cl['color'])}' "
+            f"src='data:image/png;base64,{thumb}'>{label} -- {len(cl['member_ids'])}/{n_smiles} ligands</span>")
+    legend_items.append(f"<span class='lig-legend-item'><span class='lig-swatch' "
+                         f"style='background:{_rgb_css(_LIGAND_GRID_STEREO_COLOR)}'></span>undefined stereocentre</span>")
+    legend_items.append(f"<span class='lig-legend-item'><span class='lig-swatch' "
+                         f"style='background:{_rgb_css(_LIGAND_GRID_IONIZABLE_COLOR)}'></span>ionizable group</span>")
+    legend_items.append(f"<span class='lig-legend-item'><span class='lig-swatch' "
+                         f"style='background:{_rgb_css(_LIGAND_GRID_FRAGMENT_COLOR)}'></span>salt/disconnected fragment</span>")
+    legend_html = f"<div class='lig-grid-legend'>{''.join(legend_items)}</div>"
+
+    if not clusters and n_smiles >= 2:
+        commonality_note = ("<p>No shared scaffold or substructure detected across the set -- "
+                             "ligands are structurally distinct.</p>")
+    elif clusters and len(clusters[0]["member_ids"]) == n_smiles:
+        commonality_note = f"<p>All {n_smiles} SMILES ligands share scaffold {clusters[0]['id'] + 1} below.</p>"
+    else:
+        commonality_note = ""
+
+    ccd_note = (f"<p>{n_smiles} SMILES ligand(s) analyzed; {len(ccd_ligands)} CCD-code ligand(s) not depicted "
+                "(no SMILES to render).</p>") if ccd_ligands else ""
+
+    footnote = ("<p class='lig-footnote'>Scaffolds: Bemis-Murcko, exact match first, then Tanimoto-clustered "
+                f"(Morgan r=2, 2048-bit, threshold {_LIGAND_GRID_MCS_SIMILARITY_THRESHOLD:.2f}) whole-group MCS as "
+                f"a verified fallback. Minimum highlighted substructure size: {_LIGAND_GRID_MIN_SCAFFOLD_ATOMS} "
+                "heavy atoms. Stereocentre/ionizable-group highlighting from this campaign's own ligand-preparation "
+                "check (see above).</p>")
+
+    return (f"<div class='md-card table-card'><h2>Ligand structures</h2>{commonality_note}{ccd_note}"
+            f"{legend_html}<div id='lig-grid'>{pages_html}</div>{pager_html}{footnote}</div>")
+
+
 # marcdeller.com brand theme (see marcs-vibe-coding skill) -- keep in sync with any
 # future BoltzMaker HTML output so every generated report looks the same.
 _BRAND_CSS = """
@@ -2280,6 +2591,27 @@ tr:nth-child(even) { background: var(--md-bg-alt); }
 .md-card.table-card th, .md-card.table-card td { white-space: normal; word-break: break-word; font-size: 11px; }
 .md-footer { text-align: center; padding: 24px; color: var(--md-text-muted); font-size: 13px; }
 .md-footer a { color: var(--md-primary); text-decoration: none; }
+.lig-grid-legend { display: flex; flex-wrap: wrap; gap: 6px 18px; margin-bottom: 14px; font-size: 12px; color: var(--md-text-muted); }
+.lig-legend-item { display: inline-flex; align-items: center; gap: 6px; }
+.lig-swatch { width: 13px; height: 13px; border-radius: 3px; display: inline-block; flex-shrink: 0; }
+.lig-legend-thumb { width: 40px; height: 32px; object-fit: contain; border: 2px solid; border-radius: 4px; background: #fff; flex-shrink: 0; }
+.lig-footnote { font-size: 11px; color: var(--md-text-muted); margin-top: 12px; }
+#lig-grid { margin-bottom: 12px; }
+.lig-page { display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; }
+.lig-page[hidden] { display: none; }
+.lig-cell { border: 2px solid var(--md-border); border-radius: var(--md-radius); padding: 8px; background: var(--md-bg-alt); display: flex; flex-direction: column; }
+.lig-cell.lig-severity-error { border-color: #d81b8c; }
+.lig-cell.lig-severity-review { border-color: #f59e0b; }
+.lig-cell-header { display: flex; justify-content: space-between; align-items: center; font-size: 11px; font-weight: 600; margin-bottom: 4px; gap: 4px; }
+.lig-badges { display: flex; gap: 3px; flex-wrap: wrap; justify-content: flex-end; }
+.lig-badge { font-size: 9px; font-weight: 700; color: #fff; padding: 1px 5px; border-radius: 3px; white-space: nowrap; }
+.lig-cell img { width: 100%; height: 140px; object-fit: contain; display: block; background: #fff; border-radius: 4px; }
+.lig-cell-desc { font-size: 10px; color: var(--md-text-muted); text-align: center; margin-top: 4px; }
+.lig-cell-ccd-wrap { align-items: center; }
+.lig-cell-ccd { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 140px; width: 100%; color: var(--md-text-muted); font-family: 'Roboto Mono', monospace; text-align: center; }
+#lig-pager { display: flex; align-items: center; gap: 12px; margin-top: 12px; font-size: 13px; }
+#lig-pager button { padding: 4px 14px; border-radius: 20px; border: 1px solid var(--md-border); background: var(--md-surface); color: var(--md-text); cursor: pointer; }
+#lig-pager button:disabled { opacity: 0.4; cursor: default; }
 @media (max-width: 768px) {
   .md-header-inner { padding: 10px 16px; gap: 8px; }
   .md-header-title h1 { font-size: 14px; }
@@ -2287,6 +2619,7 @@ tr:nth-child(even) { background: var(--md-bg-alt); }
   .md-main { padding: 14px; }
   .md-card { padding: 14px; }
   .md-chart-grid, .md-side-by-side { grid-template-columns: 1fr; }
+  .lig-page { grid-template-columns: repeat(2, 1fr); }
 }
 """
 
@@ -2314,6 +2647,43 @@ _BRAND_FOOTER = """
   <a href="https://marcdeller.com" target="_blank" rel="noopener noreferrer">Marc C. Deller, D.Phil.</a>
   &middot; <a href="mailto:marc@marcdeller.com">marc@marcdeller.com</a>
 </footer>
+"""
+
+# All pages are already in the DOM (base64 PNGs pre-embedded by Python); this only
+# toggles `hidden`. No lazy-loading/observers needed at this dashboard's scale.
+_LIGAND_GRID_PAGER_JS = """
+(function () {
+  var pages = Array.prototype.slice.call(document.querySelectorAll('#lig-grid .lig-page'));
+  var pager = document.getElementById('lig-pager');
+  if (!pages.length || !pager) return;
+  var prev = document.getElementById('lig-prev');
+  var next = document.getElementById('lig-next');
+  var showAllBtn = document.getElementById('lig-all');
+  var info = document.getElementById('lig-pageinfo');
+  var cur = 0;
+  var allShown = false;
+  function show(i) {
+    allShown = false;
+    cur = Math.max(0, Math.min(i, pages.length - 1));
+    pages.forEach(function (p, idx) { p.hidden = (idx !== cur); });
+    info.textContent = 'Page ' + (cur + 1) + ' / ' + pages.length;
+    prev.disabled = (cur === 0);
+    next.disabled = (cur === pages.length - 1);
+  }
+  prev.addEventListener('click', function () { show(cur - 1); });
+  next.addEventListener('click', function () { show(cur + 1); });
+  showAllBtn.addEventListener('click', function () {
+    allShown = !allShown;
+    if (allShown) {
+      pages.forEach(function (p) { p.hidden = false; });
+      info.textContent = 'Showing all ' + pages.length + ' pages';
+      prev.disabled = true; next.disabled = true;
+    } else {
+      show(cur);
+    }
+  });
+  show(0);
+})();
 """
 
 
@@ -2385,7 +2755,7 @@ def write_html(df: pd.DataFrame, path: Path, campaign_dir: Path, campaign: Campa
 
     lig_notes = _ligand_chemistry_notes(campaign)
     if lig_notes:
-        lig_rows = [{"Ligand": lig_id, "Chemistry notes": "; ".join(notes)} for lig_id, notes in lig_notes.items()]
+        lig_rows = [{"Ligand": lig_id, "Chemistry notes": "; ".join(info["notes"])} for lig_id, info in lig_notes.items()]
         lig_html = pd.DataFrame(lig_rows).to_html(index=False, na_rep="")
         lig_note_text = (f"{len(lig_notes)} of {len(campaign.ligands)} ligand(s) flagged for chemistry review "
                           "-- these are advisory, not errors; verify the input SMILES reflects what you intended "
@@ -2395,6 +2765,10 @@ def write_html(df: pd.DataFrame, path: Path, campaign_dir: Path, campaign: Campa
     else:
         parts.append("<div class='md-card table-card'><h2>Ligand preparation</h2>"
                       "<p>No stereocentre, protonation-state, or disconnected-fragment concerns detected.</p></div>")
+
+    ligand_grid_html = _build_ligand_grid_panel(campaign)
+    if ligand_grid_html:
+        parts.append(ligand_grid_html)
 
     table_df = df.drop(columns=[c for c in _FULL_TABLE_HIDDEN_COLS if c in df.columns])
     display_df = table_df.copy()
@@ -2483,6 +2857,7 @@ def write_html(df: pd.DataFrame, path: Path, campaign_dir: Path, campaign: Campa
         "<script src='https://cdn.plot.ly/plotly-2.35.2.min.js'></script>"
         f"<style>{_BRAND_CSS}</style></head><body>"
         + _BRAND_HEADER + "<main class='md-main'>" + "".join(parts) + "</main>" + _BRAND_FOOTER
+        + f"<script>{_LIGAND_GRID_PAGER_JS}</script>"
         + "</body></html>"
     )
     path.write_text(doc)

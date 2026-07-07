@@ -33,14 +33,16 @@ running Boltz-2 structure/affinity panels (single targets, covalent-linkage stud
 multi-chain SAR/selectivity campaigns) who want a repeatable, resumable, well-documented
 pipeline instead of a pile of hand-edited scripts.
 
-BoltzMaker grew out of four smaller, single-purpose tools written earlier:
+BoltzMaker grew out of five smaller, single-purpose tools written earlier:
 [generate_yaml](https://github.com/bellcheddar/generate_yaml) for building the input
 YAMLs, [simple-zsh-script-to-run-boltz2](https://github.com/bellcheddar/simple-zsh-script-to-run-boltz2)
 for driving the actual `boltz predict` runs, [analyze-boltz2-results](https://github.com/bellcheddar/analyze-boltz2-results)
-for the post-run analysis, and [cif2plip](https://github.com/bellcheddar/cif2plip) for
-protein-ligand interaction profiling. BoltzMaker consolidates all four into one
-spec-driven pipeline sharing a single campaign format, so the same input file drives
-every stage instead of juggling separate scripts and re-typing target names between them.
+for the post-run analysis, [cif2plip](https://github.com/bellcheddar/cif2plip) for
+protein-ligand interaction profiling, and [smiles2grid](https://github.com/bellcheddar/smiles2grid)
+for rendering a ligand set into a boxed grid of 2D structures. BoltzMaker consolidates
+all five into one spec-driven pipeline sharing a single campaign format, so the same
+input file drives every stage instead of juggling separate scripts and re-typing target
+names between them.
 
 (And yes, the name is a nod to [Boltmaker](https://www.timothytaylor.co.uk/beer/boltmaker),
 Timothy Taylor's Champion Beer of Britain and one of the author's favourites.)
@@ -55,7 +57,7 @@ See [CHANGELOG.md](CHANGELOG.md) for what's changed recently.
 | 2. Generate | `generate` | `boltz_yamls/*.yaml` + `.boltzmaker_manifest.json` |
 | 3. Preflight | `preflight` | PASS / WARN / FAIL checks: boltz CLI, GPU/MPS, disk, iCloud, YAML/SMILES/chain-id, ligand chemistry, memory heuristic |
 | 4. Predict | `run` (resumable) | Managed `.venv` -> `boltz predict` -> `boltz_output/predictions/`, live 2-row progress bar + memory monitor |
-| 5. Analyze | `analyze` | `boltz_summary.csv` / `.xlsx`, `boltz_dashboard.html`, `boltz_cif/`, and (if `setup-plip` has been run) `boltz_interactions.csv` + `boltz_plip/` |
+| 5. Analyze | `analyze` | `boltz_summary.csv` / `.xlsx`, `boltz_dashboard.html` (campaign summary, ligand-preparation findings, a scaffold-highlighted ligand structure grid, and results/charts), `boltz_cif/`, and (if `setup-plip` has been run) `boltz_interactions.csv` + `boltz_plip/` |
 
 Each stage reads only the manifest + files the previous stage wrote, so any stage can be
 re-run on its own (`generate`, `preflight`, `run`, or `analyze` individually) without
@@ -299,7 +301,75 @@ Written next to `boltz_input.md`:
 | `boltz_plip/` (optional) | Per-target cif2plip output: the converted PDB, PLIP's XML/TXT reports, the ray-traced binding-site PNG, and the PyMOL `.pse` session -- cached here so re-running `analyze` doesn't re-profile a target that's already been done |
 | `boltz_interactions.csv` (optional) | Long format, one row per detected contact across every target: interaction type, residue, distance -- the raw data behind the dashboard's fingerprint heatmap and per-target contact tables |
 | `boltz_dashboard_sessions/` (optional) | Each target's PyMOL `.pse` session, copied here and linked from the dashboard -- this is the one thing that makes `boltz_dashboard.html` no longer a single self-contained file once interaction analysis has run; without `setup-plip`, the dashboard stays exactly as self-contained as before |
-| `boltz_dashboard.html` | A campaign summary table (input file, protein/partner/ligand/target counts, predict-affinity setting, a one-line ligand-chemistry flag count, and -- once a `run` has happened -- boltz predict runtime and the run parameters used, tracked across every `run` invocation in a small hidden sidecar file), then a "Ligand preparation" card (the same stereocentre/protonation-state/disconnected-fragment checks as `preflight`'s `ligand_preparation` check, shown per-ligand rather than as a single summary line), then the full results table (rounded to 2 decimal places for display, with a subset of noisy/redundant columns hidden and a download link to the underlying CSV), then four interactive [Plotly](https://plotly.com/javascript/) charts in a 2x2 grid (ranked pIC50, ranked confidence, confidence-vs-affinity scatter, interaction counts by type -- hover/zoom/pan, loaded via the plotly.js CDN). When `setup-plip` has run: a per-family residue-interaction fingerprint heatmap (ligands clustered by similarity -- useful for SAR ranking within a series) and, per target, its binding-site image (residues labelled and interaction distances shown -- PLIP's own images have neither, so these are re-rendered from its PyMOL session with both added) side by side with a table of that target's contacts, plus a link to the full PyMOL session. |
+| `boltz_dashboard.html` | A campaign summary table (input file, protein/partner/ligand/target counts, predict-affinity setting, a one-line ligand-chemistry flag count, and -- once a `run` has happened -- boltz predict runtime and the run parameters used, tracked across every `run` invocation in a small hidden sidecar file), then a "Ligand preparation" card (the same stereocentre/protonation-state/disconnected-fragment checks as `preflight`'s `ligand_preparation` check, shown per-ligand rather than as a single summary line), then a "Ligand structures" card: a paginated 5x5 grid of every ligand's rendered 2D structure (building on [smiles2grid](https://github.com/bellcheddar/smiles2grid)'s design, adapted for a single campaign's scale), with stereocentre/ionizable-group findings highlighted directly on each structure, ligands sharing a Bemis-Murcko scaffold (or, failing that, a verified whole-group maximum-common-substructure) grouped and colour-highlighted together with their depictions aligned to a common orientation, and a captioned legend stating exactly what was found and on how many ligands -- never an unexplained highlight. Then the full results table (rounded to 2 decimal places for display, with a subset of noisy/redundant columns hidden and a download link to the underlying CSV), then four interactive [Plotly](https://plotly.com/javascript/) charts in a 2x2 grid (ranked pIC50, ranked confidence, confidence-vs-affinity scatter, interaction counts by type -- hover/zoom/pan, loaded via the plotly.js CDN). When `setup-plip` has run: a per-family residue-interaction fingerprint heatmap (ligands clustered by similarity -- useful for SAR ranking within a series) and, per target, its binding-site image (residues labelled and interaction distances shown -- PLIP's own images have neither, so these are re-rendered from its PyMOL session with both added) side by side with a table of that target's contacts, plus a link to the full PyMOL session. |
+
+## 🔬 Ligand validation & scaffold highlighting
+
+Two related but distinct checks run over every SMILES ligand before you commit hours of
+`boltz predict` time to them, and both surface directly in the dashboard.
+
+**Why this exists:** Boltz folds whatever chemistry it's given -- an undefined
+stereocentre, an unintended protonation state, or a stray counterion left in a SMILES
+string doesn't raise an error, it just silently changes the predicted pose and affinity.
+These are exactly the mistakes a non-specialist (or a tired specialist) makes typing
+SMILES by hand, and they're invisible until you're staring at a confusing result with no
+idea the input was ever wrong.
+
+### Ligand preparation (validity checks)
+
+At parse time, every ligand SMILES is canonicalized (RDKit) so the same molecule is
+represented consistently everywhere downstream -- the generated YAML, the summary table,
+and cif2plip's own ligand-matching (see the InChIKey-based matching note in
+[CHANGELOG.md](CHANGELOG.md)). Then, both at `preflight` (as the `ligand_preparation`
+check) and again in the dashboard's "Ligand preparation" card, each ligand is checked for:
+
+| Check | How | What it means |
+|---|---|---|
+| Undefined stereocentres | `Chem.FindMolChiralCenters(includeUnassigned=True)` | A stereocentre exists in the molecule but the SMILES doesn't specify which enantiomer/diastereomer -- Boltz will fold *some* version of it, possibly not the one you intended |
+| Disconnected fragments | `Chem.GetMolFrags()` returns more than one fragment | Likely a salt or counterion left in the SMILES (e.g. a sodium carboxylate written as two components) |
+| Ionizable groups | SMARTS match: carboxylic acid, primary/secondary amine, phenol, sulfonic acid | The group's protonation state at physiological pH isn't specified by a plain SMILES -- worth a deliberate choice, not a default assumption |
+
+All of this is advisory, not a hard failure -- these can be legitimate, deliberate
+modelling choices -- but they're the kind of thing worth a second look before trusting
+downstream numbers.
+
+### Scaffold highlighting (the "Ligand structures" grid)
+
+Separately, the dashboard's ligand grid tries to answer a different question: *do any of
+these ligands share a chemical core?* This matters most for SAR (structure-activity
+relationship) campaigns, where a chemist is usually testing close analogues on purpose,
+and seeing the shared scaffold at a glance (with the parts that differ jumping out) is
+more useful than reading each SMILES individually. Two tiers, in order, and nothing is
+highlighted unless one of them actually finds something real:
+
+1. **Exact Bemis-Murcko scaffold match** -- ligands whose ring systems + connecting
+   linkers are chemically identical are grouped, threshold-free. This is the dominant
+   case for a real SAR series.
+2. **Fallback for near-analogues:** ligands left over are grouped by Morgan/Tanimoto
+   fingerprint similarity, then a maximum common substructure (MCS) is computed across
+   the *whole* group and verified to actually match every member -- so the claim is a
+   proven substructure match, not just an assigned similarity score.
+
+Small or trivial shared fragments (below 8 heavy atoms -- e.g. "they all contain a
+benzene ring") are deliberately not highlighted; a group has to share something
+structurally meaningful to be called out. Ligands in the same scaffold group also have
+their 2D depiction aligned to a common orientation, so the shared core is drawn in the
+same position across cells and visually "snaps together."
+
+**What's highlighted and how**, directly on each rendered structure:
+
+| Colour | Meaning |
+|---|---|
+| Magenta | An undefined stereocentre (RDKit also draws its own `(?)` marker at the atom) |
+| Amber | An atom within an ionizable group flagged above |
+| One of six colour-blind-safe palette colours | Atoms in a shared scaffold/substructure -- consistent per group, with a legend entry naming the group and how many ligands share it (e.g. "shared scaffold -- 3/5 ligands") |
+
+A specific finding (stereocentre, ionizable group) always takes priority over the softer
+scaffold highlight if they overlap on the same atom, since it's the more actionable
+signal. If no ligand shares a real scaffold with any other, the panel says so plainly
+("no shared scaffold or substructure detected") rather than forcing a highlight onto
+something coincidental. CCD-code ligands have no SMILES to render and show a plain
+placeholder instead of an empty cell.
 
 ## 🩹 Troubleshooting / FAQ
 
@@ -315,39 +385,11 @@ Written next to `boltz_input.md`:
 
 ## 📚 Citation
 
-BoltzMaker itself has no publication -- if you use it, please cite the underlying tools it
-orchestrates instead:
+> Passaro, S., Corso, G., Wohlwend, J., Reveiz, M., Thaler, S., Somnath, V.R., Getz, N., Portnoi, T., Roy, J., Stark, H., Kwabi-Addo, D., Beaini, D., Jaakkola, T., Barzilay, R. (2025). Boltz-2: Towards Accurate and Efficient Binding Affinity Prediction. *bioRxiv*. https://doi.org/10.1101/2025.06.14.659707
 
-```bibtex
-@article{passaro2025boltz2,
-  author = {Passaro, Saro and Corso, Gabriele and Wohlwend, Jeremy and Reveiz, Mateo and Thaler, Stephan and Somnath, Vignesh Ram and Getz, Noah and Portnoi, Tally and Roy, Julien and Stark, Hannes and Kwabi-Addo, David and Beaini, Dominique and Jaakkola, Tommi and Barzilay, Regina},
-  title = {Boltz-2: Towards Accurate and Efficient Binding Affinity Prediction},
-  year = {2025},
-  doi = {10.1101/2025.06.14.659707},
-  journal = {bioRxiv}
-}
-```
+> Mirdita, M., Schütze, K., Moriwaki, Y., Heo, L., Ovchinnikov, S., Steinegger, M. (2022). ColabFold: making protein folding accessible to all. *Nature Methods*. https://doi.org/10.1038/s41592-022-01488-1
 
-If your campaign uses BoltzMaker's default automatic MSA generation (`--use_msa_server`),
-also cite ColabFold:
-
-```bibtex
-@article{mirdita2022colabfold,
-  title={ColabFold: making protein folding accessible to all},
-  author={Mirdita, Milot and Sch{\"u}tze, Konstantin and Moriwaki, Yoshitaka and Heo, Lim and Ovchinnikov, Sergey and Steinegger, Martin},
-  journal={Nature methods},
-  year={2022}
-}
-```
-
-If your campaign has run `setup-plip` and used cif2plip's interaction analysis, also cite PLIP:
-
-> Schake, P., Bolz, S.N. et al. (2025). PLIP 2025: introducing protein-protein interactions
-> to the protein-ligand interaction profiler. *Nucleic Acids Research*, gkaf361.
-> https://doi.org/10.1093/nar/gkaf361
-
-`setup-plip` also generates each binding-site image and `.pse` session with PyMOL, which
-(having no journal paper of its own) is conventionally cited as:
+> Schake, P., Bolz, S.N. et al. (2025). PLIP 2025: introducing protein-protein interactions to the protein-ligand interaction profiler. *Nucleic Acids Research*, gkaf361. https://doi.org/10.1093/nar/gkaf361
 
 > The PyMOL Molecular Graphics System, Version 3.1, Schrödinger, LLC.
 

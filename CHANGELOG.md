@@ -45,7 +45,14 @@ everything so far is tracked under `Unreleased`.
 - Ligand-preparation validation: `boltz_input.md` ligand SMILES are canonicalized at
   parse time (RDKit), and a new `preflight` check (`ligand_preparation`) flags undefined
   stereocentres, disconnected fragments (salts/counterions), and ionizable groups whose
-  protonation state may need review -- all before any compute is spent.
+  protonation state may need review -- all before any compute is spent. Surfaced in the
+  dashboard as a "Ligand preparation" card below the campaign summary.
+- Dashboard "Ligand structures" card: a paginated 5x5 grid of every ligand's rendered 2D
+  structure, building on [smiles2grid](https://github.com/bellcheddar/smiles2grid)'s
+  design. Stereocentre/ionizable-group findings are highlighted directly on each
+  structure; ligands sharing a Bemis-Murcko scaffold (or a verified whole-group MCS as a
+  fallback) are grouped, colour-highlighted, and depiction-aligned to a common
+  orientation; a captioned legend states exactly what was found and on how many ligands.
 
 ### Fixed
 - cif2plip ligand disambiguation now matches on InChIKey first, falling back to exact
