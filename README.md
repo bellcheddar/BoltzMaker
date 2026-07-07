@@ -1,8 +1,8 @@
 # 🧬 BoltzMaker
 
-> **Turn a plain-text campaign spec into fully analyzed Boltz-2 structure and affinity predictions, end to end.**
+> **BoltzMaker: Boltz2 campaign-scale structure and affinity prediction, binding analysis, and run control, orchestrated end to end from a single spec file.**
 
-![python](https://img.shields.io/badge/python-3.12-3776AB?logo=python&logoColor=white) ![boltz](https://img.shields.io/badge/boltz-2-00897B) ![author](https://img.shields.io/badge/author-Marc%20C.%20Deller%2C%20D.Phil.-1C244B)
+![python](https://img.shields.io/badge/python-3.12-3776AB?logo=python&logoColor=white) ![boltz](https://img.shields.io/badge/boltz-2-00897B) ![plip](https://img.shields.io/badge/PLIP-interactions-9b51e0) ![pymol](https://img.shields.io/badge/PyMOL-visualisation-ff6900) ![rdkit](https://img.shields.io/badge/RDKit-cheminformatics-00d084) ![plotly](https://img.shields.io/badge/Plotly-charts-3F4F75?logo=plotly&logoColor=white) ![licence](https://img.shields.io/badge/licence-MIT-467FF7) ![author](https://img.shields.io/badge/author-Marc%20C.%20Deller%2C%20D.Phil.-1C244B)
 
 <table>
 <tr>
@@ -30,8 +30,19 @@ running Boltz-2 structure/affinity panels (single targets, covalent-linkage stud
 multi-chain SAR/selectivity campaigns) who want a repeatable, resumable, well-documented
 pipeline instead of a pile of hand-edited scripts.
 
+BoltzMaker grew out of four smaller, single-purpose tools written earlier:
+[generate_yaml](https://github.com/bellcheddar/generate_yaml) for building the input
+YAMLs, [simple-zsh-script-to-run-boltz2](https://github.com/bellcheddar/simple-zsh-script-to-run-boltz2)
+for driving the actual `boltz predict` runs, [analyze-boltz2-results](https://github.com/bellcheddar/analyze-boltz2-results)
+for the post-run analysis, and [cif2plip](https://github.com/bellcheddar/cif2plip) for
+protein-ligand interaction profiling. BoltzMaker consolidates all four into one
+spec-driven pipeline sharing a single campaign format, so the same input file drives
+every stage instead of juggling separate scripts and re-typing target names between them.
+
 (And yes, the name is a nod to [Boltmaker](https://www.timothytaylor.co.uk/beer/boltmaker),
 Timothy Taylor's Champion Beer of Britain and one of the author's favourites.)
+
+See [CHANGELOG.md](CHANGELOG.md) for what's changed recently.
 
 ## 🧩 Architecture
 
@@ -93,11 +104,11 @@ it. `preflight`'s `plip_env` check always reports which mode you're in.
 Three small, entirely public-domain campaigns in `examples/`, run any of them with
 `python3 BoltzMaker.py all examples/<name>/boltz_input.md`:
 
-| Example | Demonstrates |
-|---|---|
-| `t4_lysozyme` | One protein (T4 lysozyme L99A, UniProt P00720) + one ligand (benzene). No partners, no pocket_contacts. The minimal shape; smallest/fastest smoke test. |
-| `egfr_covalent` | EGFR kinase domain (UniProt P00533) + a generic covalent fragment, linked via `bond_constraints` at Cys797. Demonstrates covalent-linkage modelling. |
-| `adrb2_gs_panel` | Beta-2 adrenergic receptor (UniProt P07550) + Gs alpha partner (UniProt P63092) crossed with two ligands (agonist + antagonist), giving 2 targets. Demonstrates the family x partners x ligand cross-product. |
+| Example | Demonstrates | Dashboard |
+|---|---|---|
+| `t4_lysozyme` | One protein (T4 lysozyme L99A, UniProt P00720) + one ligand (benzene). No partners, no pocket_contacts. The minimal shape; smallest/fastest smoke test. | [boltz_dashboard.html](https://htmlpreview.github.io/?https://github.com/bellcheddar/BoltzMaker/blob/main/examples/t4_lysozyme/boltz_dashboard.html) |
+| `egfr_covalent` | EGFR kinase domain (UniProt P00533) + a generic covalent fragment, linked via `bond_constraints` at Cys797. Demonstrates covalent-linkage modelling. | [boltz_dashboard.html](https://htmlpreview.github.io/?https://github.com/bellcheddar/BoltzMaker/blob/main/examples/egfr_covalent/boltz_dashboard.html) |
+| `adrb2_gs_panel` | Beta-2 adrenergic receptor (UniProt P07550) + Gs alpha partner (UniProt P63092) crossed with two ligands (agonist + antagonist), giving 2 targets. Demonstrates the family x partners x ligand cross-product. | [boltz_dashboard.html](https://htmlpreview.github.io/?https://github.com/bellcheddar/BoltzMaker/blob/main/examples/adrb2_gs_panel/boltz_dashboard.html) |
 
 **Verified end-to-end** (`generate` -> `preflight` -> real `boltz predict` -> `analyze`,
 including cif2plip interaction analysis) on an Apple M1 Max, 64GB:
@@ -286,6 +297,73 @@ Written next to `boltz_input.md`:
 | `boltz_interactions.csv` (optional) | Long format, one row per detected contact across every target: interaction type, residue, distance -- the raw data behind the dashboard's fingerprint heatmap and per-target contact tables |
 | `boltz_dashboard_sessions/` (optional) | Each target's PyMOL `.pse` session, copied here and linked from the dashboard -- this is the one thing that makes `boltz_dashboard.html` no longer a single self-contained file once interaction analysis has run; without `setup-plip`, the dashboard stays exactly as self-contained as before |
 | `boltz_dashboard.html` | A campaign summary table (input file, protein/partner/ligand/target counts, predict-affinity setting, and -- once a `run` has happened -- boltz predict runtime and the run parameters used, tracked across every `run` invocation in a small hidden sidecar file), then the full results table (rounded to 2 decimal places for display, with a subset of noisy/redundant columns hidden and a download link to the underlying CSV), then four interactive [Plotly](https://plotly.com/javascript/) charts in a 2x2 grid (ranked pIC50, ranked confidence, confidence-vs-affinity scatter, interaction counts by type -- hover/zoom/pan, loaded via the plotly.js CDN). When `setup-plip` has run: a per-family residue-interaction fingerprint heatmap (ligands clustered by similarity -- useful for SAR ranking within a series) and, per target, its binding-site image (residues labelled and interaction distances shown -- PLIP's own images have neither, so these are re-rendered from its PyMOL session with both added) side by side with a table of that target's contacts, plus a link to the full PyMOL session. |
+
+## 🩹 Troubleshooting / FAQ
+
+| Problem | Fix |
+|---|---|
+| `setup-plip` fails, or `pip install plip` tries to build OpenBabel from source | This is expected without conda-forge -- `plip`'s own installer forces a from-source OpenBabel rebuild unless OpenBabel is already importable *inside pip's build sandbox*, and the standalone PyPI `pymol-open-source` wheel has a hardcoded broken library path on at least some machines. `setup-plip` works around both by building a conda-forge env via a self-downloaded micromamba -- just re-run `python3 BoltzMaker.py setup-plip --force` if a previous attempt left a half-built `.plip_env`. |
+| A `preflight`/`analyze` step involving `.plip_env` errors with `ModuleNotFoundError: No module named 'chatmol'` (or similar) | A stray `~/.pymolrc.py` on your machine (e.g. from an unrelated PyMOL plugin) is being loaded by the bundled PyMOL. BoltzMaker already overrides `HOME` for these subprocess calls so this shouldn't reach you, but if it does, check `~/.pymolrc.py` for anything referencing a package not installed in `.plip_env`. |
+| `run` seems to hang with no progress, or your Mac gets extremely slow | Check the memory-usage figure in the progress bar and see "Memory on Mac" earlier in this document -- this is very likely swap-thrashing, not a genuine stall. Re-run with a lower `--mps-watermark`, `--workers 1`, and `--max-parallel-samples 1`. |
+| A target's YAML/CIF exists on disk but BoltzMaker says it's missing, or `preflight` hangs | Check for iCloud "Optimize Mac Storage" dataless files -- `preflight`'s `icloud_materialize` check handles this automatically, but a very large campaign can take a while to force-download everything on first run. |
+| `boltz` fails during `setup` with a `numpy` build error | You're likely on Python 3.13+. `boltz` pins `numpy<2.0`, which has no prebuilt wheel past cp312 -- `_find_boltz_python()` already looks for a `python3.12` specifically; install one (`brew install python@3.12`) if it can't find one. |
+| A target fails preflight with a chain-id-length error | Boltz truncates chain IDs to 5 characters internally (a fixed-width field in its own schema) and silently corrupts longer ones rather than erroring at parse time -- shorten the protein/partner/ligand name in `boltz_input.md`. |
+| The dashboard's charts don't render, or look unstyled | The dashboard loads Google Fonts and plotly.js from CDNs -- it needs internet access the first time it's opened (results and cached fonts/scripts may work offline afterwards depending on your browser, but this isn't guaranteed). |
+
+## 📚 Citation
+
+BoltzMaker itself has no publication -- if you use it, please cite the underlying tools it
+orchestrates instead:
+
+```bibtex
+@article{passaro2025boltz2,
+  author = {Passaro, Saro and Corso, Gabriele and Wohlwend, Jeremy and Reveiz, Mateo and Thaler, Stephan and Somnath, Vignesh Ram and Getz, Noah and Portnoi, Tally and Roy, Julien and Stark, Hannes and Kwabi-Addo, David and Beaini, Dominique and Jaakkola, Tommi and Barzilay, Regina},
+  title = {Boltz-2: Towards Accurate and Efficient Binding Affinity Prediction},
+  year = {2025},
+  doi = {10.1101/2025.06.14.659707},
+  journal = {bioRxiv}
+}
+```
+
+If your campaign uses BoltzMaker's default automatic MSA generation (`--use_msa_server`),
+also cite ColabFold:
+
+```bibtex
+@article{mirdita2022colabfold,
+  title={ColabFold: making protein folding accessible to all},
+  author={Mirdita, Milot and Sch{\"u}tze, Konstantin and Moriwaki, Yoshitaka and Heo, Lim and Ovchinnikov, Sergey and Steinegger, Martin},
+  journal={Nature methods},
+  year={2022}
+}
+```
+
+If your campaign has run `setup-plip` and used cif2plip's interaction analysis, also cite PLIP:
+
+> Schake, P., Bolz, S.N. et al. (2025). PLIP 2025: introducing protein-protein interactions
+> to the protein-ligand interaction profiler. *Nucleic Acids Research*, gkaf361.
+> https://doi.org/10.1093/nar/gkaf361
+
+`setup-plip` also generates each binding-site image and `.pse` session with PyMOL, which
+(having no journal paper of its own) is conventionally cited as:
+
+> The PyMOL Molecular Graphics System, Version 3.1, Schrödinger, LLC.
+
+## 📄 License
+
+[MIT](LICENSE) &copy; Marc C. Deller
+
+## 📋 To do
+
+- [ ] Share pip cache between the two environments (`PIP_CACHE_DIR`) so `setup-plip` doesn't re-download wheels the main venv already fetched
+- [ ] Pin exact dependency versions in both installers and add a cached/offline install mode for reproducible installs
+- [ ] Add `BoltzMaker.py doctor` -- a post-install check that imports boltz/rdkit/plip/openbabel/pymol in-process and reports exactly which env/feature is broken
+- [ ] Add an explicit Boltz model-weights cache dir + a `preflight` check for it (ties into the existing iCloud dataless-file eviction check)
+- [ ] Detect the MPS `torch.linalg.svd` CPU-fallback at `preflight` and warn with an estimated runtime multiplier for large multi-chain complexes
+- [ ] Add a residue/chain-count-based runtime pre-estimator, plus a toggle to log which ops fall back to CPU on MPS
+- [ ] Checkpoint `run` at the per-sample level (not just per-target) so an interrupted multi-hour complex resumes without recomputing completed diffusion samples
+- [ ] Add a cross-target selectivity/triage view to the dashboard (confidence-vs-affinity quadrant flags for "high-confidence, high-affinity" hits)
+- [ ] Bundle Plotly.js locally instead of via CDN so the dashboard renders fully offline/air-gapped
+- [ ] Add a smoke-test suite: an end-to-end fixture run in CI plus unit tests for the `boltz_input.md` parser and JSON-metric flattening
 
 ---
 

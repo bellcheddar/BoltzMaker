@@ -15,6 +15,7 @@ boltz_dashboard_sessions/
 boltz_summary.csv
 boltz_summary.xlsx
 boltz_dashboard.html
+!examples/*/boltz_dashboard.html
 .DS_Store
 
 # Elementor README forge output (regenerate with readme_forge.py as needed)
