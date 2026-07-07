@@ -412,6 +412,7 @@ placeholder instead of an empty cell.
 - [ ] Add a smoke-test suite: an end-to-end fixture run in CI plus unit tests for the `boltz_input.md` parser and JSON-metric flattening
 - [x] Add a ligand-preparation/validation step (canonicalization, stereocentre/protonation-state flagging, disconnected-fragment detection) so bad input chemistry is caught before hours of compute, not silently mispredicted
 - [ ] Add a retrospective `benchmark` mode: pull known actives/co-crystal data for a target family (ChEMBL/BindingDB/PDB) and report predicted-vs-measured pIC50 correlation + pose RMSD, so a user has a per-target-family trust score before committing to a real campaign
+- [ ] Add a 3Dmol.js rotating structure view to each target's binding-site panel, placed next to the existing static PyMOL image (keep the static image, add a "Download image" link for it -- doesn't exist yet -- and add the interactive 3Dmol.js view alongside rather than replacing anything)
 
 ---
 
