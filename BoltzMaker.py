@@ -2603,6 +2603,14 @@ tr:nth-child(even) { background: var(--md-bg-alt); }
    that overflow far past the browser width. */
 .md-card.table-card table { table-layout: fixed; }
 .md-card.table-card th, .md-card.table-card td { white-space: normal; word-break: break-word; font-size: 11px; }
+/* Full table: grouped header (colspan) + narrow right-aligned numeric columns, so a
+   campaign with 20+ raw fields still fits without the whole table needing to scroll --
+   only the identity columns (family/ligand/flags) stay left-aligned and get to wrap. */
+.full-table { table-layout: auto; }
+.full-table th, .full-table td { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; padding: 4px 8px; }
+.full-table th.ft-group { text-align: center; background: var(--md-bg-alt); }
+.full-table td:not(.ft-num), .full-table th:not(.ft-group):not(.ft-num) { text-align: left; white-space: normal; }
+.full-table th.ft-group-start, .full-table td.ft-group-start { border-left: 2px solid var(--md-primary); }
 .md-footer { text-align: center; padding: 24px; color: var(--md-text-muted); font-size: 13px; }
 .md-footer a { color: var(--md-primary); text-decoration: none; }
 .lig-grid-legend { display: flex; flex-wrap: wrap; gap: 6px 18px; margin-bottom: 14px; font-size: 12px; color: var(--md-text-muted); }
@@ -2751,21 +2759,170 @@ def _build_campaign_summary(campaign: Campaign, campaign_dir: Path) -> list:
     return rows
 
 
-_FULL_TABLE_HIDDEN_COLS = [
-    "plip_png_path", "plip_pse_path",
-    "flags", "chains_ptm_0", "chains_ptm_1",
-    "pair_chains_iptm_0_0", "pair_chains_iptm_0_1", "pair_chains_iptm_1_0", "pair_chains_iptm_1_1",
-    "affinity_pred_value", "affinity_probability_binary",
-    "affinity_pred_value2", "affinity_probability_binary2",
-    "pIC50", "pIC50_2",
-    "plip_status", "plip_hydrophobic_count", "notes",
+_FULL_TABLE_HIDE_PATTERNS = [
+    # Regex, not a fixed list -- so per-chain/per-pair columns are hidden regardless of
+    # how many chains a campaign has (a hardcoded 2-chain list previously leaked
+    # chains_ptm_2 and all six pair_chains_iptm_*_2/2_* columns for a 3-chain campaign).
+    # Everything hidden here is either a raw concatenation of columns already shown, an
+    # ensemble sub-model's individual number (the ensemble/primary value is shown
+    # instead), a granular per-chain(-pair) breakdown of an interface summary number
+    # already shown, or an internal file path already surfaced elsewhere in the
+    # dashboard. All of it remains in the full "Download CSV" export.
+    r"^target_id$", r"^ligand_smiles$", r"^notes$",
+    r"^complex_iplddt$", r"^complex_pde$", r"^complex_ipde$",
+    r"^chains_ptm_\d+$", r"^pair_chains_iptm_\d+_\d+$",
+    r".*_path$", r"^plip_status$",
+    r"^affinity_pred_value\d*$", r"^affinity_probability_binary[12]$",
+    r"^pIC50_[12]$", r"^pIC50_ensemble_mean$",
 ]
+
+_FULL_TABLE_RENAME = {
+    "family_id": "Target", "ligand_id": "Ligand", "flags": "Flags",
+    "confidence_score": "Score", "ptm": "pTM", "iptm": "ipTM",
+    "ligand_iptm": "Lig ipTM", "protein_iptm": "PPI ipTM",
+    "complex_plddt": "pLDDT", "pIC50": "pIC50", "pIC50_ensemble_std": "pIC50 SD",
+    "affinity_probability_binary": "Binder p", "cif_file": "CIF",
+}
+_FULL_TABLE_GROUPS = {
+    "family_id": "Identity", "ligand_id": "Identity", "flags": "Identity",
+    "confidence_score": "Confidence", "ptm": "Confidence", "iptm": "Confidence",
+    "ligand_iptm": "Confidence", "protein_iptm": "Confidence", "complex_plddt": "Confidence",
+    "pIC50": "Affinity", "affinity_probability_binary": "Affinity",
+    "cif_file": "Structure",
+}
+_FULL_TABLE_GROUP_ORDER = ["Identity", "Confidence", "Affinity", "Interactions", "Structure", "Other"]
+_FULL_TABLE_TEXT_COLS = {"family_id", "ligand_id", "flags"}
+_PLIP_COUNT_LABELS = {
+    "hydrogen_bonds": "H-bond", "hydrophobic": "Phobic", "pi_stacks": "π-stack",
+    "salt_bridges": "Salt", "pi_cation": "π-cation", "halogen_bonds": "Halogen",
+    "water_bridges": "Water",
+}
+
+
+def _full_table_label(col: str) -> str:
+    if col in _FULL_TABLE_RENAME:
+        return _FULL_TABLE_RENAME[col]
+    if col.startswith("plip_") and col.endswith("_count"):
+        itype = col[len("plip_"):-len("_count")]
+        return _PLIP_COUNT_LABELS.get(itype, itype.replace("_", " ").title())
+    return col
+
+
+def _full_table_group(col: str) -> str:
+    if col in _FULL_TABLE_GROUPS:
+        return _FULL_TABLE_GROUPS[col]
+    if col.startswith("plip_") and col.endswith("_count"):
+        return "Interactions"
+    return "Other"
+
+
+def _resolve_summary_table_columns(df: pd.DataFrame) -> list:
+    # Shared by the HTML summary table and the summary CSV export, so the two can never
+    # show different columns. Regex-based hiding (not a fixed list) so per-chain/
+    # per-chain-pair columns are hidden regardless of how many chains a campaign has --
+    # a hardcoded 2-chain list previously leaked chains_ptm_2 and all six 3-chain
+    # pair_chains_iptm_*_2/2_* columns straight into the table.
+    hidden = re.compile("|".join(_FULL_TABLE_HIDE_PATTERNS))
+    cols = [c for c in df.columns if not hidden.match(c)]
+
+    # Conditional-by-content, not by config: a column that's empty/zero for every row in
+    # *this* campaign (no partner chain -> protein_iptm always 0; no flags raised at all)
+    # is dropped, rather than hardcoding "only show for multi-chain campaigns".
+    kept = []
+    for c in cols:
+        if c == "pIC50_ensemble_std":
+            continue  # merged into the pIC50 cell/column as "± SD", never its own column
+        s = df[c]
+        if c == "flags":
+            if not s.fillna("").astype(str).str.strip().any():
+                continue
+        elif c == "protein_iptm":
+            if s.fillna(0).eq(0).all():
+                continue
+        elif pd.api.types.is_numeric_dtype(s) and s.isna().all():
+            continue
+        kept.append(c)
+    cols = kept
+    cols.sort(key=lambda c: _FULL_TABLE_GROUP_ORDER.index(_full_table_group(c)))
+    return cols
+
+
+def write_summary_csv(df: pd.DataFrame, path: Path) -> None:
+    # Mirrors the HTML "Summary table" exactly (same columns, same renamed headers) --
+    # unlike the HTML cell, pIC50's ensemble stdev stays its own numeric column here
+    # rather than a merged "value ± SD" string, since a CSV is for further analysis.
+    cols = _resolve_summary_table_columns(df)
+    out_cols = list(cols)
+    if "pIC50" in out_cols and "pIC50_ensemble_std" in df.columns:
+        out_cols.insert(out_cols.index("pIC50") + 1, "pIC50_ensemble_std")
+    export_df = df[out_cols].copy() if out_cols else df.iloc[:, :0].copy()
+    export_df.columns = [_full_table_label(c) for c in out_cols]
+    export_df.to_csv(path, index=False)
+
+
+def _build_full_table_html(df: pd.DataFrame) -> str:
+    cols = _resolve_summary_table_columns(df)
+    if not cols:
+        return "<p>No columns to display.</p>"
+
+    groups = [_full_table_group(c) for c in cols]
+    has_sd = "pIC50" in cols and "pIC50_ensemble_std" in df.columns
+
+    def group_header_row() -> str:
+        cells, i = [], 0
+        while i < len(groups):
+            j = i
+            while j < len(groups) and groups[j] == groups[i]:
+                j += 1
+            cells.append(f"<th colspan='{j - i}' class='ft-group'>{groups[i]}</th>")
+            i = j
+        return f"<tr>{''.join(cells)}</tr>"
+
+    def column_header_row() -> str:
+        cells, prev = [], None
+        for c, g in zip(cols, groups):
+            classes = ([] if g == prev else ["ft-group-start"]) + ([] if c in _FULL_TABLE_TEXT_COLS else ["ft-num"])
+            cells.append(f"<th class='{' '.join(classes)}'>{_full_table_label(c)}</th>")
+            prev = g
+        return f"<tr>{''.join(cells)}</tr>"
+
+    def cell_html(row, c: str) -> str:
+        v = row[c]
+        if c == "cif_file":
+            return "" if pd.isna(v) else f"<a href='boltz_cif/{v}'>CIF</a>"
+        if c in _FULL_TABLE_TEXT_COLS:
+            return "" if pd.isna(v) else str(v)
+        if pd.isna(v):
+            return ""
+        text = f"{v:.2f}" if isinstance(v, float) else str(v)
+        if c == "pIC50" and has_sd and not pd.isna(row.get("pIC50_ensemble_std")):
+            text += f" ± {row['pIC50_ensemble_std']:.2f}"
+        return text
+
+    def body_row(row) -> str:
+        cells, prev = [], None
+        for c, g in zip(cols, groups):
+            classes = ([] if g == prev else ["ft-group-start"]) + ([] if c in _FULL_TABLE_TEXT_COLS else ["ft-num"])
+            cells.append(f"<td class='{' '.join(classes)}'>{cell_html(row, c)}</td>")
+            prev = g
+        return f"<tr>{''.join(cells)}</tr>"
+
+    body = "".join(body_row(row) for _, row in df.iterrows())
+    return (f"<table class='full-table'><thead>{group_header_row()}{column_header_row()}</thead>"
+            f"<tbody>{body}</tbody></table>")
 
 
 def write_html(df: pd.DataFrame, path: Path, campaign_dir: Path, campaign: Campaign) -> None:
     summary_rows = _build_campaign_summary(campaign, campaign_dir)
     summary_html = pd.DataFrame(summary_rows, columns=["Field", "Value"]).to_html(index=False, na_rep="")
     parts = [f"<div class='md-card table-card'><h2>Campaign summary</h2>{summary_html}</div>"]
+
+    summary_view_path = campaign_dir / "boltz_summary_view.csv"
+    write_summary_csv(df, summary_view_path)
+    csv_links = ("<p><a href='boltz_summary.csv'>Download full CSV</a> &middot; "
+                 f"<a href='{summary_view_path.name}'>Download summary CSV</a></p>")
+    parts.append(f"<div class='md-card table-card'><h2>Summary table</h2>"
+                 f"{_build_full_table_html(df)}{csv_links}</div>")
 
     lig_notes = _ligand_chemistry_notes(campaign)
     if lig_notes:
@@ -2783,14 +2940,6 @@ def write_html(df: pd.DataFrame, path: Path, campaign_dir: Path, campaign: Campa
     ligand_grid_html = _build_ligand_grid_panel(campaign)
     if ligand_grid_html:
         parts.append(ligand_grid_html)
-
-    table_df = df.drop(columns=[c for c in _FULL_TABLE_HIDDEN_COLS if c in df.columns])
-    display_df = table_df.copy()
-    float_cols = display_df.select_dtypes(include="float").columns
-    display_df[float_cols] = display_df[float_cols].round(2)
-    csv_link = "<p><a href='boltz_summary.csv'>Download CSV</a></p>"
-    parts.append(f"<div class='md-card table-card'><h2>Full table</h2>"
-                 f"{display_df.to_html(index=False, na_rep='')}{csv_link}</div>")
 
     chart_cards = []
     for col, title, div_id in (("pIC50", "Ranked predicted pIC50", "chart-pic50"),
@@ -2992,7 +3141,8 @@ def main() -> None:
         write_csv(df, campaign_dir / "boltz_summary.csv")
         write_xlsx(df, campaign_dir / "boltz_summary.xlsx")
         write_html(df, campaign_dir / "boltz_dashboard.html", campaign_dir, campaign)
-        print(f"BoltzMaker: analysis written to {campaign_dir} (boltz_summary.csv / .xlsx / boltz_dashboard.html)")
+        print(f"BoltzMaker: analysis written to {campaign_dir} "
+              "(boltz_summary.csv / .xlsx / boltz_summary_view.csv / boltz_dashboard.html)")
 
 
 if __name__ == "__main__":

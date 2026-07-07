@@ -71,6 +71,24 @@ everything so far is tracked under `Unreleased`.
   gate was inherited from the similarity-reordering step's own >=3-ligand requirement,
   not because a single ligand's contact row is uninformative; `t4_lysozyme` and
   `egfr_covalent` (one ligand each) were silently missing the panel entirely.
+- Full table redesigned (design assist from Fable 5): columns grouped into named bands
+  (Identity, Confidence, Affinity, Interactions, Structure) via a colspan header row,
+  short human column labels instead of raw field names, `pIC50` and its ensemble stdev
+  merged into one "value ± SD" cell instead of two separate columns, `cif_file` rendered
+  as a short link instead of the raw filename, and narrow right-aligned numeric columns
+  so a typical campaign fits without horizontal scroll. Also fixes a real bug: the
+  previous hidden-columns list hardcoded a 2-chain assumption and leaked `chains_ptm_2`
+  and all six 3-chain `pair_chains_iptm_*` columns, uncaught and unrenamed, into any
+  campaign with a partner chain -- replaced with regex-pattern hiding that scales to any
+  chain count. `protein_iptm` and the `Flags` column are now dropped automatically when
+  every value in that campaign is zero/empty rather than always shown or hardcoded off.
+- Renamed "Full table" to "Summary table" and moved it directly below the campaign
+  summary card (was below the ligand-preparation/structures panels). Added a new
+  `boltz_summary_view.csv` export mirroring exactly the columns/headers shown in that
+  table (pIC50 and its stdev as two separate numeric columns rather than the HTML's
+  merged "± SD" cell, since a CSV is for further analysis). The existing "Download CSV"
+  link is now labelled "Download full CSV" to distinguish it from the new
+  "Download summary CSV" link sitting next to it.
 
 ### Verified
 - Three real public-domain example campaigns in `examples/` (`t4_lysozyme`,
