@@ -111,6 +111,17 @@ everything so far is tracked under `Unreleased`.
   once and shared between both renderers) exported as a print/share-friendly PDF via
   `reportlab`, in the style of smiles2grid's own PDF output, linked as "Download PDF"
   from the panel. Only written when a campaign has at least one SMILES ligand.
+- New "Download SMILES" link on the "Ligand structures" panel: a `boltz_ligands.csv`
+  with ID, SMILES, undefined-stereocentre count, ionizable groups, salt/fragment flag,
+  MW, cLogP, and TPSA -- one row per SMILES ligand.
+- Binding-site panel: all three "Download ..." links (PyMOL session, image, contacts CSV)
+  now bottom-align to the same row regardless of how tall each column's own content is
+  (contacts tables with many rows no longer push their link out of line with the other
+  two). 3Dmol.js auto-rotation speed halved.
+- The "Ligand structures" legend now spells out every badge abbreviation it uses (S, A,
+  N, Ph, SO3, salt) next to its meaning, using the same badge-chip styling as the grid
+  cells themselves, combined with the existing scaffold-cluster colour key.
+- README Examples table gains an "Input" column linking each example's `boltz_input.md`.
 
 ### Verified
 - Three real public-domain example campaigns in `examples/` (`t4_lysozyme`,

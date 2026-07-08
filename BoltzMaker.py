@@ -2455,8 +2455,10 @@ def _compute_ligand_grid_cells(campaign: Campaign):
 
             img_b64 = _render_ligand_cell_image(mol, stereo_atoms, ionizable_atoms, cluster)
             desc = _ligand_grid_descriptors(mol)
-            cells.append({"lig_id": lig.id, "kind": "smiles", "img_b64": img_b64, "desc": desc,
-                          "severity": severity, "badges": badges, "cluster": cluster})
+            cells.append({"lig_id": lig.id, "kind": "smiles", "smiles": lig.smiles, "img_b64": img_b64,
+                          "desc": desc, "severity": severity, "badges": badges, "cluster": cluster,
+                          "stereo_atoms": stereo_atoms, "ionizable_atoms": ionizable_atoms,
+                          "has_fragments": has_fragments})
         else:
             cells.append({"lig_id": lig.id, "kind": "ccd", "ccd_code": lig.ccd or "?"})
 
@@ -2575,12 +2577,15 @@ def _build_ligand_grid_panel(campaign: Campaign, campaign_dir: Path) -> str:
         legend_items.append(
             f"<span class='lig-legend-item'><img class='lig-legend-thumb' style='border-color:{_rgb_css(cl['color'])}' "
             f"src='data:image/png;base64,{thumb}'>{label} -- {len(cl['member_ids'])}/{n_smiles} ligands</span>")
-    legend_items.append(f"<span class='lig-legend-item'><span class='lig-swatch' "
-                         f"style='background:{_rgb_css(_LIGAND_GRID_STEREO_COLOR)}'></span>undefined stereocentre</span>")
-    legend_items.append(f"<span class='lig-legend-item'><span class='lig-swatch' "
-                         f"style='background:{_rgb_css(_LIGAND_GRID_IONIZABLE_COLOR)}'></span>ionizable group</span>")
-    legend_items.append(f"<span class='lig-legend-item'><span class='lig-swatch' "
-                         f"style='background:{_rgb_css(_LIGAND_GRID_FRAGMENT_COLOR)}'></span>salt/disconnected fragment</span>")
+    # Badge key: same chip styling as the actual grid cells (.lig-badge), so each
+    # abbreviation shown on a ligand can be looked up directly against its meaning here.
+    badge_key = [("S", _LIGAND_GRID_STEREO_COLOR, "undefined stereocentre")]
+    badge_key += [(lbl, _LIGAND_GRID_IONIZABLE_COLOR, name) for name, lbl in _LIGAND_GRID_BADGE_LABELS.items()]
+    badge_key.append(("salt", _LIGAND_GRID_FRAGMENT_COLOR, "salt/disconnected fragment"))
+    for lbl, color, meaning in badge_key:
+        legend_items.append(
+            f"<span class='lig-legend-item'><span class='lig-badge' style='background:{_rgb_css(color)}'>{lbl}</span>"
+            f"{meaning}</span>")
     legend_html = f"<div class='lig-grid-legend'>{''.join(legend_items)}</div>"
 
     if not clusters and n_smiles >= 2:
@@ -2601,13 +2606,28 @@ def _build_ligand_grid_panel(campaign: Campaign, campaign_dir: Path) -> str:
                 "check (see above).</p>")
 
     pdf_link = ""
-    if any(c["kind"] == "smiles" for c in cells):
+    smiles_csv_link = ""
+    smiles_cells = [c for c in cells if c["kind"] == "smiles"]
+    if smiles_cells:
         pdf_path = campaign_dir / "boltz_ligand_grid.pdf"
         _write_ligand_grid_pdf(cells, pdf_path)
         pdf_link = f"<p><a href='{pdf_path.name}' download>Download PDF</a></p>"
 
+        smiles_rows = [{
+            "ID": c["lig_id"], "SMILES": c["smiles"],
+            "Undefined stereocentres": len(c["stereo_atoms"]),
+            "Ionizable groups": "; ".join(c["ionizable_atoms"]),
+            "Salts/disconnected fragments": "Yes" if c["has_fragments"] else "No",
+            "MW": round(c["desc"]["mw"], 2), "cLogP": round(c["desc"]["clogp"], 2),
+            "TPSA": round(c["desc"]["tpsa"], 2),
+        } for c in smiles_cells]
+        smiles_csv = pd.DataFrame(smiles_rows).to_csv(index=False)
+        smiles_csv_b64 = base64.b64encode(smiles_csv.encode("utf-8")).decode("ascii")
+        smiles_csv_link = (f"<p><a href='data:text/csv;base64,{smiles_csv_b64}' "
+                           "download='boltz_ligands.csv'>Download SMILES</a></p>")
+
     return (f"<div class='md-card table-card'><h2>Ligand structures</h2>{commonality_note}{ccd_note}"
-            f"{legend_html}<div id='lig-grid'>{pages_html}</div>{pager_html}{pdf_link}{footnote}</div>")
+            f"{legend_html}<div id='lig-grid'>{pages_html}</div>{pager_html}{pdf_link}{smiles_csv_link}{footnote}</div>")
 
 
 # marcdeller.com brand theme (see marcs-vibe-coding skill) -- keep in sync with any
@@ -2697,6 +2717,14 @@ img, canvas { max-width: 100%; height: auto; }
 .md-side-table { overflow: visible; }
 .md-side-table table { font-size: 10px; }
 .md-side-table th, .md-side-table td { padding: 3px 6px; }
+/* Each binding-site column stretches to the row's full height by default (grid items
+   stretch to match the tallest cell in the row); turning each into a column flexbox and
+   pushing its trailing download link down with margin-top:auto keeps every link aligned
+   to the bottom of the row, even when the contacts table is much taller than the fixed
+   260px image/3D-viewer columns next to it. */
+.md-side-viewer, .md-side-image, .md-side-table-col { display: flex; flex-direction: column; }
+.md-side-viewer .md-3dmol-viewer, .md-side-image img { flex-shrink: 0; }
+.md-side-viewer p, .md-side-image p, .md-side-table-col p { margin-top: auto; }
 .md-3dmol-viewer { width: 100%; height: 260px; position: relative; background: #fff; border-radius: var(--md-radius); }
 table { border-collapse: collapse; font-family: 'Roboto Mono', monospace; font-size: 12px; width: 100%; max-width: 100%; }
 th, td { border: 1px solid var(--md-border); padding: 5px 9px; text-align: left; white-space: nowrap; }
@@ -3128,7 +3156,7 @@ def write_html(df: pd.DataFrame, path: Path, campaign_dir: Path, campaign: Campa
   var lig = model.selectedAtoms({{hetflag: true}});
   if (lig.length) {{ viewer.zoomTo({{hetflag: true}}); }} else {{ viewer.zoomTo(); }}
   viewer.render();
-  viewer.spin('y', 1);
+  viewer.spin('y', 0.5);
 }})();""")
                     pse_p = f"<p>{pse_link_html}</p>" if pse_link_html else ""
                     viewer_col = f"<div class='md-side-viewer'><div class='md-3dmol-viewer' id='{div_id}'></div>{pse_p}</div>"
