@@ -33,6 +33,13 @@ running Boltz-2 structure/affinity panels (single targets, covalent-linkage stud
 multi-chain SAR/selectivity campaigns) who want a repeatable, resumable, well-documented
 pipeline instead of a pile of hand-edited scripts.
 
+Don't want to hand-write the spec at all? `BoltzMaker.py new` interviews you in plain
+English -- proteins, partners, ligands, and the constraint sentences -- and writes a
+valid `boltz_input.md` for you. If you've already got a reference co-crystal or homology
+structure for a protein, it can even suggest pocket-contact residues automatically,
+remapped onto your target's own numbering via sequence alignment, instead of you reading
+them off a structure viewer by hand.
+
 BoltzMaker grew out of five smaller, single-purpose tools written earlier:
 [generate_yaml](https://github.com/bellcheddar/generate_yaml) for building the input
 YAMLs, [simple-zsh-script-to-run-boltz2](https://github.com/bellcheddar/simple-zsh-script-to-run-boltz2)
@@ -44,20 +51,26 @@ all five into one spec-driven pipeline sharing a single campaign format, so the 
 input file drives every stage instead of juggling separate scripts and re-typing target
 names between them.
 
-(And yes, the name is a nod to [Boltmaker](https://www.timothytaylor.co.uk/beer/boltmaker),
-Timothy Taylor's Champion Beer of Britain and one of the author's favourites.)
+And yes, the name is a nod to [Boltmaker](https://www.timothytaylor.co.uk/beer/boltmaker),
+Timothy Taylor's Champion Beer of Britain and one of the author's favourites.
 
 See [CHANGELOG.md](CHANGELOG.md) for what's changed recently.
 
 ## 🧩 Architecture
 
+```
++----------------+     +----------+     +-----------+     +-----+     +---------+
+| boltz_input.md | --> | generate | --> | preflight | --> | run | --> | analyze |
++----------------+     +----------+     +-----------+     +-----+     +---------+
+```
+
 | Stage | Command | Produces |
 |---|---|---|
-| 1. Input | -- | `boltz_input.md`: the family x partners x ligand DSL spec |
-| 2. Generate | `generate` | `boltz_yamls/*.yaml` + `.boltzmaker_manifest.json` |
-| 3. Preflight | `preflight` | PASS / WARN / FAIL checks: boltz CLI, GPU/MPS, disk, iCloud, YAML/SMILES/chain-id, ligand chemistry, memory heuristic |
-| 4. Predict | `run` (resumable) | Managed `.venv` -> `boltz predict` -> `boltz_output/predictions/`, live 2-row progress bar + memory monitor |
-| 5. Analyze | `analyze` | `boltz_summary.csv` / `.xlsx`, `boltz_dashboard.html` (campaign summary, ligand-preparation findings, a scaffold-highlighted ligand structure grid, and results/charts), `boltz_cif/`, and (if `setup-plip` has been run) `boltz_interactions.csv` + `boltz_plip/` |
+| 1. Input | -- | `boltz_input.md` -- the family x partners x ligand DSL spec |
+| 2. Generate | `generate` | `boltz_yamls/*.yaml` + manifest |
+| 3. Preflight | `preflight` | PASS/WARN/FAIL: CLI, GPU/MPS, disk, iCloud, YAML/SMILES/chain-id/chemistry, memory |
+| 4. Predict | `run` | `boltz predict` -> `boltz_output/`, live progress + memory monitor, resumable |
+| 5. Analyze | `analyze` | `boltz_summary.csv`/`.xlsx`, `boltz_dashboard.html`, `boltz_cif/`, plus interaction files if `setup-plip` has run |
 
 Each stage reads only the manifest + files the previous stage wrote, so any stage can be
 re-run on its own (`generate`, `preflight`, `run`, or `analyze` individually) without
@@ -148,41 +161,41 @@ belongs to and can be written anywhere in the file.
 
 ```
 Settings:
-Output folder: ./boltz_yamls   # where generated per-target YAMLs are written
-Predict affinity: no           # off by default -- it's a heavier prediction pass
+Output folder: ./boltz_yamls    # where generated per-target YAMLs are written
+Predict affinity: no            # off by default -- it's a heavier prediction pass
 
-Protein: RECP1                 # short name, MAX 5 CHARACTERS (Boltz stores chain names
+Protein: RECP1                  # short name, MAX 5 CHARACTERS (Boltz stores chain names
                                 # in a fixed 5-char field internally and silently
                                 # truncates longer ones, which then crashes later with a
                                 # confusing error -- `preflight` catches this for you).
                                 # Also names the output file: {protein}_{ligand}.yaml
 Sequence: MDILC...              # required
 Partners: CHNX, CHNY            # optional: co-folded chains, defined as their own
-                                 # Partner: blocks below
-# Ligands: LIG1, LIG3            # optional: restrict this protein to a ligand subset
-                                  # (default: crossed with every ligand below)
-# Modifications: SEP:5           # optional: CCD:position tokens for modified residues
-                                  # (e.g. phosphoserine)
-# Cyclic: yes                    # optional: cyclic polymer (e.g. a cyclic peptide)
-# MSA: empty                     # optional: path to a precomputed MSA, or "empty" for
-                                  # single-sequence mode (skip MSA generation)
+                                # Partner: blocks below
+# Ligands: LIG1, LIG3           # optional: restrict this protein to a ligand subset
+                                # (default: crossed with every ligand below)
+# Modifications: SEP:5          # optional: CCD:position tokens for modified residues
+                                # (e.g. phosphoserine)
+# Cyclic: yes                   # optional: cyclic polymer (e.g. a cyclic peptide)
+# MSA: empty                    # optional: path to a precomputed MSA, or "empty" for
+                                # single-sequence mode (skip MSA generation)
 # Templates: reference_structure.cif
-                                  # optional: structural template file(s), applied to all
-                                  # protein chains (no per-chain mapping -- hand-edit the
-                                  # generated YAML for that rarer case)
+                                # optional: structural template file(s), applied to all
+                                # protein chains (no per-chain mapping -- hand-edit the
+                                # generated YAML for that rarer case)
 
 Partner: CHNX
 Sequence: MTLES...
-# Type: dna              # optional: protein (default) / dna / rna
-# Copies: X1, X2         # optional: homo-oligomer chain-id override -- this one partner
-                          # sequence becomes multiple chains
+# Type: dna                     # optional: protein (default) / dna / rna
+# Copies: X1, X2                # optional: homo-oligomer chain-id override -- this one partner
+                                # sequence becomes multiple chains
 
 Ligand: LIG1
-SMILES: FC(F)CNC(...)=O   # exactly one of SMILES/CCD is required
+SMILES: FC(F)CNC(...)=O         # exactly one of SMILES/CCD is required
 
 Ligand: LIG2
-CCD: GOL   # a Chemical Component Dictionary code (e.g. common crystallization
-           # additives/ions) instead of a SMILES
+CCD: GOL                        # a Chemical Component Dictionary code (e.g. common crystallization
+                                # additives/ions) instead of a SMILES
 
 Covalent bond: RECP1 residue 44 atom SG to LIG1 residue 1 atom C3
 Pocket contact: RECP1 residue 148
@@ -196,14 +209,14 @@ for the full copy-paste template and `examples/` for complete working campaigns.
 ## 🚀 Commands
 
 ```sh
-python3 BoltzMaker.py new      [boltz_input.md]   # write a new campaign by answering plain questions
+python3 BoltzMaker.py new      [boltz_input.md]  # write a new campaign by answering plain questions
 python3 BoltzMaker.py format   boltz_input.md    # auto-align comments/blank-lines (cosmetic only)
-python3 BoltzMaker.py generate  boltz_input.md    # write the target YAMLs + manifest
-python3 BoltzMaker.py preflight boltz_input.md    # environment + input sanity checks
-python3 BoltzMaker.py run       boltz_input.md    # boltz predict, live progress, resumable
-python3 BoltzMaker.py analyze   boltz_input.md    # CSV / XLSX / HTML dashboard
-python3 BoltzMaker.py all       boltz_input.md    # generate -> preflight -> run -> analyze
-python3 BoltzMaker.py boltz_input.md              # same as `all` (subcommand is optional)
+python3 BoltzMaker.py generate boltz_input.md    # write the target YAMLs + manifest
+python3 BoltzMaker.py preflight boltz_input.md   # environment + input sanity checks
+python3 BoltzMaker.py run      boltz_input.md    # boltz predict, live progress, resumable
+python3 BoltzMaker.py analyze  boltz_input.md    # CSV / XLSX / HTML dashboard
+python3 BoltzMaker.py all      boltz_input.md    # generate -> preflight -> run -> analyze
+python3 BoltzMaker.py boltz_input.md             # same as `all` (subcommand is optional)
 ```
 
 `new` interviews you (proteins, partners, ligands, and the three constraint sentence
@@ -359,13 +372,18 @@ structurally meaningful to be called out. Ligands in the same scaffold group als
 their 2D depiction aligned to a common orientation, so the shared core is drawn in the
 same position across cells and visually "snaps together."
 
-**What's highlighted and how**, directly on each rendered structure:
+**What's highlighted and how**, directly on each rendered structure -- the same badges
+shown on each ligand cell and spelled out in the panel's own legend:
 
-| Colour | Meaning |
-|---|---|
-| Magenta | An undefined stereocentre (RDKit also draws its own `(?)` marker at the atom) |
-| Amber | An atom within an ionizable group flagged above |
-| One of six colour-blind-safe palette colours | Atoms in a shared scaffold/substructure -- consistent per group, with a legend entry naming the group and how many ligands share it (e.g. "shared scaffold -- 3/5 ligands") |
+| Badge | Colour | Meaning |
+|---|---|---|
+| `S` | 🟪 Magenta | Undefined stereocentre (RDKit also draws its own `(?)` marker at the atom) |
+| `A` | 🟧 Amber | Carboxylic acid -- protonation state not specified |
+| `N` | 🟧 Amber | Primary/secondary amine -- protonation state not specified |
+| `Ph` | 🟧 Amber | Phenol -- protonation state not specified |
+| `SO3` | 🟧 Amber | Sulfonic acid -- protonation state not specified |
+| `salt` | 🟥 Red | Disconnected fragment (salt/counterion) -- flagged on the border and badge only, not atom-highlighted (there's no single meaningful atom to point at) |
+| -- | one of six colour-blind-safe palette colours | Atoms in a shared scaffold/substructure -- consistent per group, with a legend entry naming the group and how many ligands share it (e.g. "shared scaffold -- 3/5 ligands") |
 
 A specific finding (stereocentre, ionizable group) always takes priority over the softer
 scaffold highlight if they overlap on the same atom, since it's the more actionable

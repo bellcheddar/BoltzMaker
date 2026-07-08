@@ -132,6 +132,13 @@ everything so far is tracked under `Unreleased`.
   cryptic run parameters (accelerator, MPS watermark, recycling/sampling steps, etc.).
   Value stays short and scannable; Details carries everything that would otherwise
   clutter it.
+- README polish pass: intro now mentions the `new` wizard and its reference-structure
+  pocket-suggestion feature; Architecture section gains a small ASCII pipeline diagram
+  above the stage table, which itself was trimmed to fit each row on one line more often;
+  the `boltz_input.md` format example and the Commands usage block both have their
+  trailing comments realigned to a single column; and the scaffold-highlighting section's
+  colour table now lists every specific badge (S/A/N/Ph/SO3/salt) with a coloured-square
+  icon next to its meaning, combined with the existing cluster-colour row.
 
 ### Verified
 - Three real public-domain example campaigns in `examples/` (`t4_lysozyme`,
