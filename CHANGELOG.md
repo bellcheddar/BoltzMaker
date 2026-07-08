@@ -122,6 +122,16 @@ everything so far is tracked under `Unreleased`.
   N, Ph, SO3, salt) next to its meaning, using the same badge-chip styling as the grid
   cells themselves, combined with the existing scaffold-cluster colour key.
 - README Examples table gains an "Input" column linking each example's `boltz_input.md`.
+- "Ligand structures" panel's "Download PDF" and "Download SMILES" links now sit side by
+  side on one line, matching the Summary table's own download-links style (was two
+  separate lines).
+- Campaign summary table gains a third "Details" column: a linked path to the input
+  file, each protein/partner's id and sequence length, each ligand's id and SMILES-vs-CCD
+  source, the full list of target stems, which specific ligands were flagged in ligand
+  chemistry review (pointing at the card below), and a plain-English gloss for the more
+  cryptic run parameters (accelerator, MPS watermark, recycling/sampling steps, etc.).
+  Value stays short and scannable; Details carries everything that would otherwise
+  clutter it.
 
 ### Verified
 - Three real public-domain example campaigns in `examples/` (`t4_lysozyme`,

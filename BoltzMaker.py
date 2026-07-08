@@ -2605,13 +2605,12 @@ def _build_ligand_grid_panel(campaign: Campaign, campaign_dir: Path) -> str:
                 "heavy atoms. Stereocentre/ionizable-group highlighting from this campaign's own ligand-preparation "
                 "check (see above).</p>")
 
-    pdf_link = ""
-    smiles_csv_link = ""
+    download_links = []
     smiles_cells = [c for c in cells if c["kind"] == "smiles"]
     if smiles_cells:
         pdf_path = campaign_dir / "boltz_ligand_grid.pdf"
         _write_ligand_grid_pdf(cells, pdf_path)
-        pdf_link = f"<p><a href='{pdf_path.name}' download>Download PDF</a></p>"
+        download_links.append(f"<a href='{pdf_path.name}' download>Download PDF</a>")
 
         smiles_rows = [{
             "ID": c["lig_id"], "SMILES": c["smiles"],
@@ -2623,11 +2622,13 @@ def _build_ligand_grid_panel(campaign: Campaign, campaign_dir: Path) -> str:
         } for c in smiles_cells]
         smiles_csv = pd.DataFrame(smiles_rows).to_csv(index=False)
         smiles_csv_b64 = base64.b64encode(smiles_csv.encode("utf-8")).decode("ascii")
-        smiles_csv_link = (f"<p><a href='data:text/csv;base64,{smiles_csv_b64}' "
-                           "download='boltz_ligands.csv'>Download SMILES</a></p>")
+        download_links.append(f"<a href='data:text/csv;base64,{smiles_csv_b64}' "
+                              "download='boltz_ligands.csv'>Download SMILES</a>")
+    # Same "one <p>, links joined by a middle dot" style as the Summary table's CSV links.
+    download_links_html = f"<p>{' &middot; '.join(download_links)}</p>" if download_links else ""
 
     return (f"<div class='md-card table-card'><h2>Ligand structures</h2>{commonality_note}{ccd_note}"
-            f"{legend_html}<div id='lig-grid'>{pages_html}</div>{pager_html}{pdf_link}{smiles_csv_link}{footnote}</div>")
+            f"{legend_html}<div id='lig-grid'>{pages_html}</div>{pager_html}{download_links_html}{footnote}</div>")
 
 
 # marcdeller.com brand theme (see marcs-vibe-coding skill) -- keep in sync with any
@@ -2852,23 +2853,47 @@ def _format_duration(seconds: float) -> str:
     return f"{s}s"
 
 
+def _partner_display_id(partner_id) -> str:
+    return partner_id if isinstance(partner_id, str) else "/".join(partner_id)
+
+
 def _build_campaign_summary(campaign: Campaign, campaign_dir: Path) -> list:
+    # Three columns: Field/Value stay short and scannable, Details carries everything
+    # that would otherwise clutter Value -- ids, lengths, pointers to other cards, and a
+    # plain-English gloss for the more cryptic run-parameter names.
     targets = _expand_targets(campaign)
-    rows = [
-        ("Input file", campaign.source_path.name if campaign.source_path else "n/a"),
-        ("Proteins", str(len(campaign.families))),
-        ("Partners", str(len(campaign.partners))),
-        ("Ligands", str(len(campaign.ligands))),
-        ("Targets (protein x ligand)", str(len(targets))),
-        ("Predict affinity", "yes" if campaign.settings.predict_affinity else "no"),
-    ]
+    rows = []
+
+    if campaign.source_path:
+        fname = campaign.source_path.name
+        rows.append(("Input file", fname, f"<a href='{fname}'>{fname}</a>"))
+    else:
+        rows.append(("Input file", "n/a", ""))
+
+    fam_details = "; ".join(f"{f.id} ({len(f.sequence)} aa)" for f in campaign.families)
+    rows.append(("Proteins", str(len(campaign.families)), fam_details))
+
+    partner_list = list(campaign.partners.values())
+    partner_details = "; ".join(f"{_partner_display_id(p.id)} ({p.type}, {len(p.sequence)} aa)"
+                                 for p in partner_list) if partner_list else "none"
+    rows.append(("Partners", str(len(partner_list)), partner_details))
+
+    lig_details = "; ".join(f"{l.id} ({'SMILES' if l.smiles else f'CCD {l.ccd}'})" for l in campaign.ligands)
+    rows.append(("Ligands", str(len(campaign.ligands)), lig_details))
+
+    target_stems = ", ".join(f"{fam.id}_{lig.id}" for fam, lig in targets)
+    rows.append(("Targets (protein x ligand)", str(len(targets)), target_stems))
+
+    aff_detail = ("pIC50 predicted for every target" if campaign.settings.predict_affinity
+                  else "structure only -- no affinity model run")
+    rows.append(("Predict affinity", "yes" if campaign.settings.predict_affinity else "no", aff_detail))
 
     lig_notes = _ligand_chemistry_notes(campaign)
     if lig_notes:
-        rows.append(("Ligand chemistry", f"{len(lig_notes)} of {len(campaign.ligands)} "
-                     "ligand(s) flagged -- see \"Ligand preparation\" below"))
+        rows.append(("Ligand chemistry", f"{len(lig_notes)} of {len(campaign.ligands)} flagged",
+                     f'{", ".join(lig_notes)} -- see "Ligand preparation" below'))
     else:
-        rows.append(("Ligand chemistry", "no stereo/protonation/fragment concerns detected"))
+        rows.append(("Ligand chemistry", "clean", "no stereo/protonation/fragment concerns detected"))
 
     history_path = campaign_dir / RUN_HISTORY_FILENAME
     if history_path.exists():
@@ -2876,18 +2901,30 @@ def _build_campaign_summary(campaign: Campaign, campaign_dir: Path) -> list:
         if records:
             total_duration = sum(r.get("duration_seconds", 0) for r in records)
             last = records[-1]
-            invocation_note = f" (across {len(records)} run invocations)" if len(records) > 1 else ""
-            rows.append(("Boltz predict runtime", _format_duration(total_duration) + invocation_note))
-            rows.append(("Accelerator", str(last.get("accelerator", "n/a"))))
-            rows.append(("Workers", str(last.get("workers", "n/a"))))
-            rows.append(("MPS watermark", str(last.get("mps_watermark", "n/a"))))
-            rows.append(("Max parallel samples", str(last.get("max_parallel_samples", "n/a"))))
+            invocation_detail = (f"across {len(records)} run invocations" if len(records) > 1
+                                  else "single run invocation")
+            rows.append(("Boltz predict runtime", _format_duration(total_duration), invocation_detail))
+            rows.append(("Accelerator", str(last.get("accelerator", "n/a")),
+                         "gpu = Metal/CUDA backend used; cpu = no GPU available"))
+            rows.append(("Workers", str(last.get("workers", "n/a")),
+                         "parallel data-loading workers (Boltz's own default is 2)"))
+            rows.append(("MPS watermark", str(last.get("mps_watermark", "n/a")),
+                         "PYTORCH_MPS_HIGH_WATERMARK_RATIO cap -- lower avoids swap on Apple unified memory"))
+            rows.append(("Max parallel samples", str(last.get("max_parallel_samples", "n/a")),
+                         "Boltz's own --max_parallel_samples"))
+            param_details = {
+                "recycling_steps": "structure-refinement recycling iterations",
+                "sampling_steps": "diffusion sampling steps for structure prediction",
+                "diffusion_samples_affinity": "independent affinity-model ensemble members",
+                "sampling_steps_affinity": "diffusion sampling steps for the affinity model",
+                "max_msa_seqs": "cap on MSA sequences used for co-evolution features",
+            }
             for key, label in (("recycling_steps", "Recycling steps"), ("sampling_steps", "Sampling steps"),
                                ("diffusion_samples_affinity", "Diffusion samples (affinity)"),
                                ("sampling_steps_affinity", "Sampling steps (affinity)"),
                                ("max_msa_seqs", "Max MSA sequences")):
                 if last.get(key) is not None:
-                    rows.append((label, str(last[key])))
+                    rows.append((label, str(last[key]), param_details.get(key, "")))
     return rows
 
 
@@ -3046,7 +3083,8 @@ def _build_full_table_html(df: pd.DataFrame) -> str:
 
 def write_html(df: pd.DataFrame, path: Path, campaign_dir: Path, campaign: Campaign) -> None:
     summary_rows = _build_campaign_summary(campaign, campaign_dir)
-    summary_html = pd.DataFrame(summary_rows, columns=["Field", "Value"]).to_html(index=False, na_rep="")
+    summary_html = pd.DataFrame(summary_rows, columns=["Field", "Value", "Details"]).to_html(
+        index=False, na_rep="", escape=False)
     parts = [f"<div class='md-card table-card'><h2>Campaign summary</h2>{summary_html}</div>"]
 
     summary_view_path = campaign_dir / "boltz_summary_view.csv"
