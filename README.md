@@ -54,7 +54,8 @@ names between them.
 And yes, the name is a nod to [Boltmaker](https://www.timothytaylor.co.uk/beer/boltmaker),
 Timothy Taylor's Champion Beer of Britain and one of the author's favourites.
 
-See [CHANGELOG.md](CHANGELOG.md) for what's changed recently.
+See [CHANGELOG.md](CHANGELOG.md) for what's changed recently, and
+[PROJECT_PLAN.md](PROJECT_PLAN.md) for the roadmap behind the To-Do list below.
 
 ## 🧩 Architecture
 

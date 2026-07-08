@@ -1,0 +1,29 @@
+# Core BoltzMaker dependencies -- installed automatically by `python3 BoltzMaker.py
+# setup` into a dedicated .venv/ (Python 3.12 required: boltz pins numpy<2.0, which has
+# no prebuilt wheel for newer Pythons). Listed here, unpinned, to match what `cmd_setup`
+# actually installs, for anyone who wants `pip install -r requirements.txt` directly
+# (CI, a manually-managed venv, etc.) instead of going through the wizarded setup.
+#
+# Not version-pinned yet -- see the "Pin exact dependency versions" item in
+# README.md's To-Do list / PROJECT_PLAN.md.
+#
+# NOT covered here: the separate, optional `.plip_env` built by
+# `python3 BoltzMaker.py setup-plip` for protein-ligand interaction analysis (PLIP/
+# cif2plip). That environment needs conda-forge builds of openbabel and
+# pymol-open-source -- not reliably pip-installable, see the README's "One-time setup"
+# section for why -- plus `pdb-tools` and `plip` on top of those. It is intentionally
+# built and managed separately from this file.
+
+boltz
+rich
+pandas
+openpyxl
+pyyaml
+rdkit
+matplotlib
+psutil
+scipy
+gemmi
+biopython
+plotly
+reportlab
