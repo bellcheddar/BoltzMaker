@@ -369,6 +369,9 @@ class ProteinFamily:
     bond_constraints: object = None
     contact_constraints: object = None
     templates: object = None
+    apo_structure: object = None   # raw path string to a reference apo structure, or None
+    apo_chain: object = None        # explicit apo chain id, or None (triggers auto-detect)
+    family_type: str = "auto"        # "gpcr" | "kinase" | "auto" -- selects the compare-sse MotifAnnotator
 
 
 @dataclass
@@ -418,7 +421,8 @@ _FIELD_RE = re.compile(r"^([A-Za-z][A-Za-z ]*?)\s*:\s*(.*)$")
 
 _RECORD_ALLOWED_FIELDS = {
     "settings": {"output folder", "predict affinity"},
-    "protein": {"sequence", "partners", "ligands", "modifications", "cyclic", "msa", "templates"},
+    "protein": {"sequence", "partners", "ligands", "modifications", "cyclic", "msa", "templates",
+                "apo structure", "apo chain", "family type"},
     "partner": {"sequence", "type", "copies", "modifications", "cyclic", "msa"},
     "ligand": {"smiles", "ccd"},
 }
@@ -572,12 +576,17 @@ def _build_family_record(name: str, fields: dict, partners: dict, statements: li
     pocket_contacts = [s["token"] for s in statements if s["type"] == "pocket"] or None
     bond_constraints = [(s["atom1"], s["atom2"]) for s in statements if s["type"] == "bond"] or None
     contact_constraints = [s["entry"] for s in statements if s["type"] == "distance"] or None
+    family_type = fields.get("family type", "auto").lower()
+    if family_type not in ("gpcr", "kinase", "auto"):
+        raise MDParseError(f"protein '{name}' has invalid Family type '{family_type}' "
+                            f"(expected gpcr/kinase/auto, line {lineno})")
     return ProteinFamily(
         id=name, sequence=fields["sequence"], partners=partner_ids,
         pocket_contacts=pocket_contacts, ligands=_parse_csv(fields["ligands"]) if "ligands" in fields else None,
         modifications=modifications, cyclic=_parse_yesno(fields.get("cyclic", ""), False), msa=fields.get("msa"),
         bond_constraints=bond_constraints, contact_constraints=contact_constraints,
         templates=_parse_csv(fields["templates"]) if "templates" in fields else None,
+        apo_structure=fields.get("apo structure"), apo_chain=fields.get("apo chain"), family_type=family_type,
     )
 
 
@@ -3234,6 +3243,28 @@ def write_html(df: pd.DataFrame, path: Path, campaign_dir: Path, campaign: Campa
             if viewer_scripts:
                 parts.append(f"<script>{''.join(viewer_scripts)}</script>")
 
+    sse_csv = campaign_dir / "boltz_sse_comparison.csv"
+    if sse_csv.exists():
+        # Purely additive: compare-sse is a separate, explicitly opt-in command, so this
+        # card only appears when its output already exists on disk (the same pattern
+        # every other optional card here already follows -- e.g. the PLIP session cards
+        # above only appear when boltz_plip/ data exists). analyze() itself never runs
+        # compare-sse; re-run it manually, then re-run analyze, to refresh this card.
+        from sse_comparison.report import _make_sse_heatmap, _make_sse_shift_chart
+        sse_df = pd.read_csv(sse_csv)
+        sse_table_html = sse_df.drop(columns=["flagged_residues"], errors="ignore").to_html(index=False, na_rep="")
+        parts.append(f"<div class='md-card table-card'><h2>Secondary structure shifts (apo vs holo)</h2>"
+                     f"{sse_table_html}<p><a href='boltz_sse_comparison.csv'>Download CSV</a></p></div>")
+        sse_charts = []
+        sse_bar = _make_sse_shift_chart(sse_df, "chart-sse-shift")
+        if sse_bar:
+            sse_charts.append(f"<div class='md-card'><h2>Per-motif Ca RMSD</h2>{sse_bar}</div>")
+        sse_heat = _make_sse_heatmap(sse_df, "chart-sse-heatmap")
+        if sse_heat:
+            sse_charts.append(f"<div class='md-card md-card-span2'><h2>Motif x target RMSD</h2>{sse_heat}</div>")
+        if sse_charts:
+            parts.append(f"<div class='md-chart-grid'>{''.join(sse_charts)}</div>")
+
     if PLOTLY_JS_PATH.exists():
         plotly_script = f"<script>{PLOTLY_JS_PATH.read_text()}</script>"
     else:
@@ -3282,6 +3313,24 @@ def _build_argparser() -> argparse.ArgumentParser:
     new = sub.add_parser("new", help="interactively write a new boltz_input.md by answering plain questions")
     new.add_argument("md_path", type=Path, nargs="?", default=Path("boltz_input.md"), help="output path (default boltz_input.md)")
 
+    cs = sub.add_parser("compare-sse", help="compare secondary-structure motif shifts between a "
+                         "family's apo reference structure and its predicted holo target(s)")
+    cs.add_argument("md_path", type=Path, help="path to boltz_input.md")
+    cs.add_argument("--family", type=str, default=None, help="restrict to one Protein family id "
+                     "(default: every family with an 'Apo structure:' set)")
+    cs.add_argument("--target", type=str, default=None, help="restrict to one target stem "
+                     "(default: every target for the selected family)")
+    cs.add_argument("--out-dir", type=Path, default=None, help="default: alongside boltz_input.md")
+    cs.add_argument("--phi-psi-threshold", type=float, default=30.0, help="degrees; per-residue "
+                     "phi/psi delta above this is flagged (default 30)")
+    cs.add_argument("--dfg-distance-threshold", type=float, default=8.0, help="angstroms; DFG-Asp to "
+                     "catalytic-Lys Ca-Ca distance below this is classified DFG-in (default 8.0)")
+    cs.add_argument("--alphac-distance-threshold", type=float, default=10.0, help="angstroms; "
+                     "alphaC-Glu to catalytic-Lys Ca-Ca distance below this is classified alphaC-in (default 10.0)")
+    cs.add_argument("--no-pymol", action="store_true", help="skip writing .pml session scripts")
+    cs.add_argument("--refresh-cache", action="store_true", help="bypass the GPCRdb/KLIFS/PDBe "
+                     "disk cache for this run")
+
     for name in ("generate", "preflight", "run", "analyze", "all"):
         sp = sub.add_parser(name)
         sp.add_argument("md_path", type=Path, help="path to boltz_input.md")
@@ -3319,10 +3368,10 @@ def _build_argparser() -> argparse.ArgumentParser:
 def main() -> None:
     argv = sys.argv[1:]
     if not argv:
-        print("usage: BoltzMaker.py [setup|setup-plip|new|format|generate|preflight|run|analyze|all] <boltz_input.md> [options]")
+        print("usage: BoltzMaker.py [setup|setup-plip|new|format|compare-sse|generate|preflight|run|analyze|all] <boltz_input.md> [options]")
         sys.exit(1)
 
-    known = {"format", "new", "generate", "preflight", "run", "analyze", "all"}
+    known = {"format", "new", "compare-sse", "generate", "preflight", "run", "analyze", "all"}
     if argv[0] not in known:
         argv = ["all"] + argv
     args = _build_argparser().parse_args(argv)
@@ -3338,6 +3387,15 @@ def main() -> None:
     md_path = args.md_path.resolve()
     campaign_dir = md_path.parent
     campaign = parse_md(md_path)
+
+    if args.command == "compare-sse":
+        from sse_comparison.cli import run_compare_sse
+        run_compare_sse(campaign, campaign_dir, family_id=args.family, target_stem=args.target,
+                         out_dir=args.out_dir or campaign_dir, phi_psi_threshold=args.phi_psi_threshold,
+                         dfg_distance_threshold=args.dfg_distance_threshold,
+                         alphac_distance_threshold=args.alphac_distance_threshold,
+                         render_pymol=not args.no_pymol, refresh_cache=args.refresh_cache)
+        return
 
     output_dir = args.output_dir if args.output_dir else Path(campaign.settings.output_dir)
     if not output_dir.is_absolute():

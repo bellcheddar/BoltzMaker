@@ -1,8 +1,10 @@
 .venv/
 .plip_env/
+.sse_cache/
 __pycache__/
 *.pyc
 *.log
+.pytest_cache/
 boltz_yamls/
 boltz_output/
 boltz_cif/
@@ -21,6 +23,12 @@ boltz_dashboard.html
 !examples/*/boltz_dashboard.html
 boltz_ligand_grid.pdf
 !examples/*/boltz_ligand_grid.pdf
+boltz_sse_comparison.csv
+boltz_sse_comparison.html
+!examples/*/boltz_sse_comparison.html
+boltz_sse_comparison_sessions/
+!examples/*/boltz_sse_comparison_sessions/
+!examples/*/boltz_sse_comparison_sessions/*
 .DS_Store
 
 # Elementor README forge output (regenerate with readme_forge.py as needed)

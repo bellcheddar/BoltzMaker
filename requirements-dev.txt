@@ -1,0 +1,9 @@
+# Dev-only dependencies on top of requirements.txt -- not needed to run BoltzMaker,
+# only to run its test suite (`pytest tests/`).
+#
+# No HTTP-mocking library here on purpose: the GPCRdb/KLIFS/PDBe API clients used by
+# `compare-sse`'s motif annotators are designed to take an injectable client/session
+# object (see sse_comparison/annotators/*.py), so tests substitute a fake client
+# directly instead of intercepting HTTP calls.
+
+pytest

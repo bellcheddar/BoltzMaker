@@ -27,3 +27,4 @@ gemmi
 biopython
 plotly
 reportlab
+requests

@@ -7,6 +7,46 @@ everything so far is tracked under `Unreleased`.
 ## [Unreleased]
 
 ### Added
+- New `compare-sse` command: compares secondary-structure-element shifts between a
+  protein family's apo (unbound) reference structure and its predicted holo target(s),
+  grouped by biologically annotated motif rather than raw DSSP fragments -- GPCR
+  transmembrane helices (via GPCRdb's generic-numbering service), kinase pocket motifs
+  (hinge, gatekeeper, catalytic loop, DFG, alphaC-Glu, catalytic Lys, via KLIFS), or
+  generic Pfam domain boundaries as a universal fallback (via PDBe's SIFTS mapping),
+  auto-selected per family or set explicitly with a new `Family type:` field. Driven by
+  two new optional `boltz_input.md` fields on a `Protein:` block, `Apo structure:` (a
+  path to a reference structure) and `Apo chain:` (optional explicit chain id).
+  Superposes apo onto holo using only the family's stable, non-binding-site-adjacent
+  residues (gemmi's `superpose_positions`) so ligand-induced local shifts don't skew
+  the global fit, then reports per-motif Ca RMSD, centroid shift, helix-axis rotation
+  and kink angle, SSE boundary shift (deposited HELIX/SHEET records, or an external
+  `mkdssp`/`dssp` binary as a fallback), flagged phi/psi outliers, and (kinases only) a
+  coarse DFG-in/out and alphaC-in/out state classification. Writes a campaign-level
+  `boltz_sse_comparison.csv`, a standalone `boltz_sse_comparison.html` (Plotly charts,
+  vendored the same way as the main dashboard), and a plain-text PyMOL `.pml` script per
+  target under `boltz_sse_comparison_sessions/` (colors/labels each motif, highlighting
+  those above a significance threshold -- opens in any local PyMOL, no pymol dependency
+  in the main venv). New `sse_comparison/` package; new `--phi-psi-threshold`,
+  `--dfg-distance-threshold`, `--alphac-distance-threshold`, `--no-pymol`,
+  `--refresh-cache` flags. New `requests` dependency (GPCRdb/KLIFS/PDBe REST calls);
+  `opencadd-klifs` was the originally planned KLIFS client but doesn't exist on PyPI and
+  its conda-forge build (`opencadd`) currently fails to install (a stale `biopython<=1.77`
+  pin that no longer resolves) -- KLIFS's own public REST API is used directly instead.
+  `mkdssp`/`dssp` is an optional external prerequisite (not bundled) for the
+  SSE-boundary-shift metric specifically; every other metric works without it.
+- First pytest test suite in the repo (`tests/test_sse_comparison.py`, 27 tests,
+  `requirements-dev.txt`): every `compare-sse` annotator is exercised against real
+  fixture data (PDB 1M14 apo EGFR kinase domain vs the `egfr_covalent` example's real
+  Boltz holo prediction; PDB 2RH1 apo beta2AR vs the `adrb2_gs_panel` example's real
+  Boltz holo predictions) with GPCRdb/KLIFS/PDBe network calls replaced by an injectable
+  fake client seeded with real, previously-verified API responses -- fully offline,
+  deterministic, and fast (~2s), no HTTP-mocking library needed. Verified against known
+  ground truth along the way: GPCRdb/KLIFS motif assignments landed exactly on
+  textbook residues (EGFR's real gatekeeper T790, hinge Met793, catalytic Lys745,
+  DFG-Asp855; beta2AR's real 7TM span), and the apo/holo comparison reproduced the
+  best-known result in GPCR structural biology (TM6 shows the largest shift of any
+  transmembrane helix between the inactive apo structure and an agonist/Gs-bound
+  prediction).
 - Core pipeline: `generate` / `preflight` / `run` / `analyze` / `all`, driven by a plain
   labelled-text `boltz_input.md` spec (proteins, partners, ligands, and standalone
   constraint sentences for pocket contacts, covalent bonds, and distance constraints).

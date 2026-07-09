@@ -64,8 +64,10 @@ The core pipeline (`generate` / `preflight` / `run` / `analyze` / `all`), the `n
 wizard, optional PLIP-based interaction analysis, and a fairly rich interactive dashboard
 (Plotly charts, a scaffold-highlighted ligand structure grid, an interactive 3Dmol.js
 binding-site view, PDF/CSV exports throughout) are all built and verified against three
-real public-domain example campaigns. See [CHANGELOG.md](CHANGELOG.md) for the detailed,
-dated history.
+real public-domain example campaigns. A separate `compare-sse` command (apo-vs-holo
+secondary-structure motif shifts, GPCR/kinase/Pfam-fallback annotation) is also built,
+with its own first-ever pytest suite in the repo. See [CHANGELOG.md](CHANGELOG.md) for
+the detailed, dated history.
 
 ## Roadmap
 

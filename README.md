@@ -2,7 +2,7 @@
 
 > **BoltzMaker: Boltz2 campaign-scale structure and affinity prediction, binding analysis, and run control, orchestrated end to end from a single spec file.**
 
-![python](https://img.shields.io/badge/python-3.12-3776AB?logo=python&logoColor=white) ![boltz](https://img.shields.io/badge/boltz-2-00897B) ![plip](https://img.shields.io/badge/PLIP-interactions-9b51e0) ![pymol](https://img.shields.io/badge/PyMOL-visualisation-ff6900) ![rdkit](https://img.shields.io/badge/RDKit-cheminformatics-00d084) ![plotly](https://img.shields.io/badge/Plotly-charts-3F4F75?logo=plotly&logoColor=white) ![3dmoljs](https://img.shields.io/badge/3Dmol.js-3D%20viewer-fcb900) ![licence](https://img.shields.io/badge/licence-MIT-467FF7) ![author](https://img.shields.io/badge/author-Marc%20C.%20Deller%2C%20D.Phil.-1C244B)
+![python](https://img.shields.io/badge/python-3.12-3776AB?logo=python&logoColor=white) ![boltz](https://img.shields.io/badge/boltz-2-00897B) ![plip](https://img.shields.io/badge/PLIP-interactions-9b51e0) ![pymol](https://img.shields.io/badge/PyMOL-visualisation-ff6900) ![rdkit](https://img.shields.io/badge/RDKit-cheminformatics-00d084) ![plotly](https://img.shields.io/badge/Plotly-charts-3F4F75?logo=plotly&logoColor=white) ![3dmoljs](https://img.shields.io/badge/3Dmol.js-3D%20viewer-fcb900) ![pytest](https://img.shields.io/badge/pytest-tested-0A9EDC?logo=pytest&logoColor=white) ![licence](https://img.shields.io/badge/licence-MIT-467FF7) ![author](https://img.shields.io/badge/author-Marc%20C.%20Deller%2C%20D.Phil.-1C244B)
 
 <table>
 <tr>
@@ -86,7 +86,7 @@ python3 BoltzMaker.py setup
 Creates a dedicated `.venv` (Python 3.12: boltz pins `numpy<2.0`, which has no prebuilt
 wheel for newer Pythons) next to `BoltzMaker.py` and installs `boltz`, `rich`, `pandas`,
 `openpyxl`, `pyyaml`, `rdkit`, `matplotlib`, `psutil`, `scipy`, `gemmi`, `biopython`,
-`plotly`, and `reportlab` into it. This pulls PyTorch (~2-3 GB) and, the first time
+`plotly`, `reportlab`, and `requests` into it. This pulls PyTorch (~2-3 GB) and, the first time
 `boltz predict` actually runs, Boltz downloads several GB of model weights over the
 network. Every other command below transparently relaunches itself under this managed
 environment, so you can keep
@@ -118,6 +118,14 @@ If `.plip_env` isn't present, everything below degrades gracefully: `analyze` sk
 interaction analysis (dashboard looks exactly as it did before this feature), and the `new`
 wizard simply doesn't ask about reference structures. Nothing else in BoltzMaker requires
 it. `preflight`'s `plip_env` check always reports which mode you're in.
+
+### Optional: `mkdssp`/`dssp` (for `compare-sse`'s SSE-boundary-shift metric)
+
+Not bundled or installed by any BoltzMaker command -- a small external binary you may
+already have (`brew install dssp` on macOS, or `conda install -c salilab dssp`). Only
+needed for one specific `compare-sse` metric (secondary-structure-element boundary
+shift, used when a structure has no deposited HELIX/SHEET records -- true for every
+Boltz-predicted structure). Every other `compare-sse` metric works without it.
 
 ## 🧪 Examples
 
@@ -184,6 +192,13 @@ Partners: CHNX, CHNY            # optional: co-folded chains, defined as their o
                                 # optional: structural template file(s), applied to all
                                 # protein chains (no per-chain mapping -- hand-edit the
                                 # generated YAML for that rarer case)
+# Apo structure: reference/apo.pdb
+                                # optional: a reference apo/unbound structure, used only
+                                # by `compare-sse` (see below), never by generate/run
+# Apo chain: A                 # optional: explicit chain id in the apo structure above
+                                # (omit to auto-detect via sequence identity)
+# Family type: gpcr            # optional: gpcr / kinase / auto (default) -- selects
+                                # `compare-sse`'s motif annotator
 
 Partner: CHNX
 Sequence: MTLES...
@@ -218,6 +233,7 @@ python3 BoltzMaker.py run      boltz_input.md    # boltz predict, live progress,
 python3 BoltzMaker.py analyze  boltz_input.md    # CSV / XLSX / HTML dashboard
 python3 BoltzMaker.py all      boltz_input.md    # generate -> preflight -> run -> analyze
 python3 BoltzMaker.py boltz_input.md             # same as `all` (subcommand is optional)
+python3 BoltzMaker.py compare-sse boltz_input.md # apo-vs-holo secondary-structure motif shifts (see below)
 ```
 
 `new` interviews you (proteins, partners, ligands, and the three constraint sentence
@@ -270,6 +286,19 @@ trace.
 affinity json if `predict_affinity` is on) are skipped on re-run, so an interrupted batch
 can just be re-run as-is.
 
+**`compare-sse` options** (see the section below for what the command does):
+
+| Option | Default | Description |
+|---|---|---|
+| `--family` | every family with `Apo structure:` set | Restrict to one `Protein` family id |
+| `--target` | every target for the selected family | Restrict to one target stem |
+| `--out-dir` | alongside `boltz_input.md` | Where to write the CSV/HTML/PyMOL scripts |
+| `--phi-psi-threshold` | `30` (degrees) | Per-residue phi/psi delta above this is flagged |
+| `--dfg-distance-threshold` | `8.0` (Angstrom) | DFG-Asp to catalytic-Lys Ca-Ca distance below this is classified DFG-in |
+| `--alphac-distance-threshold` | `10.0` (Angstrom) | alphaC-Glu to catalytic-Lys Ca-Ca distance below this is classified alphaC-in |
+| `--no-pymol` | off | Skip writing `.pml` session scripts |
+| `--refresh-cache` | off | Bypass the GPCRdb/KLIFS/PDBe disk cache for this run |
+
 ## 🛠️ Memory on Mac (unified-memory) hardware
 
 A real 4-chain GPCR+G-protein complex (~1250 combined residues/atoms) used **~65GB RAM on
@@ -319,6 +348,8 @@ Written next to `boltz_input.md`:
 | `boltz_interactions.csv` (optional) | Long format, one row per detected contact across every target: interaction type, residue, distance -- the raw data behind the dashboard's fingerprint heatmap and per-target contact tables |
 | `boltz_dashboard_sessions/` (optional) | Each target's PyMOL `.pse` session, copied here and linked from the dashboard -- this is the one thing that makes `boltz_dashboard.html` no longer a single self-contained file once interaction analysis has run; without `setup-plip`, the dashboard stays exactly as self-contained as before |
 | `boltz_dashboard.html` | A campaign summary table with a third "Details" column alongside Field/Value -- a linked path to the input file, each protein/partner's id and sequence length, each ligand's id and SMILES-vs-CCD source, the full list of target stems, which specific ligands got flagged in ligand-chemistry review (linking to the card below), and a plain-English gloss for each of the more cryptic run parameters (accelerator, MPS watermark, recycling/sampling steps, etc.) -- tracked across every `run` invocation in a small hidden sidecar file. Then a "Summary table" directly below it: grouped into named column bands (Identity, Confidence, Affinity, Interactions, Structure) with short human headers instead of raw JSON field names, redundant/granular columns (per-chain and per-chain-pair confidence breakdowns, individual ensemble sub-model values) hidden by regex pattern rather than a fixed list -- so it scales correctly to campaigns with more than two chains -- and two download links, one for the full underlying CSV and one for a CSV matching just this trimmed/renamed view. Then a "Ligand preparation" card (the same stereocentre/protonation-state/disconnected-fragment checks as `preflight`'s `ligand_preparation` check, shown per-ligand rather than as a single summary line), then a "Ligand structures" card: a paginated 5x5 grid of every ligand's rendered 2D structure (building on [smiles2grid](https://github.com/bellcheddar/smiles2grid)'s design, adapted for a single campaign's scale), with stereocentre/ionizable-group findings highlighted directly on each structure, ligands sharing a Bemis-Murcko scaffold (or, failing that, a verified whole-group maximum-common-substructure) grouped and colour-highlighted together with their depictions aligned to a common orientation, and a captioned legend (badge-by-badge: what S/A/N/Ph/SO3/salt each mean, plus the cluster colour key) stating exactly what was found and on how many ligands -- never an unexplained highlight -- plus "Download PDF" (the same grid as a print/share-friendly file, `boltz_ligand_grid.pdf`) and "Download SMILES" (`boltz_ligands.csv`: ID, SMILES, stereocentre/ionizable-group/fragment findings, MW, cLogP, TPSA) links side by side on one line, matching the Summary table's own download-links style. Then interactive [Plotly](https://plotly.com/javascript/) charts in a grid (ranked pIC50, ranked confidence, confidence-vs-affinity scatter, interaction counts by type -- hover/zoom/pan; plotly.js itself is vendored and inlined into the file rather than CDN-loaded, so the dashboard has no runtime dependency on an external script host). When `setup-plip` has run: a per-family residue-interaction fingerprint heatmap (also interactive Plotly -- shown for every family with interaction data, even a single ligand, though the similarity-based reordering that helps SAR ranking within a series only kicks in from 3+ ligands) and, per target, its binding-site image (residues labelled and interaction distances shown -- PLIP's own images have neither, so these are re-rendered from its PyMOL session with both added, with a "Download image" link of its own) next to an interactive, auto-rotating [3Dmol.js](https://3dmol.org) view of the same predicted structure (built directly from the mmCIF, ligand highlighted), side by side with a table of that target's contacts (with its own "Download CSV" link) plus a download link for the full PyMOL session. |
+| `boltz_sse_comparison.csv` / `.html` (optional, `compare-sse` only) | One row per family/target/motif: Ca RMSD, centroid shift, helix-axis rotation/kink angles, SSE boundary shift, flagged phi/psi residues, and (kinases) DFG-in/out and alphaC-in/out states. The HTML is a standalone dashboard (Plotly bar chart + motif x target heatmap) |
+| `boltz_sse_comparison_sessions/` (optional, `compare-sse` only) | A plain-text PyMOL `.pml` script per target -- colours/labels each motif, highlights the ones with a significant shift |
 
 ## 🔬 Ligand validation & scaffold highlighting
 
@@ -393,6 +424,54 @@ signal. If no ligand shares a real scaffold with any other, the panel says so pl
 something coincidental. CCD-code ligands have no SMILES to render and show a plain
 placeholder instead of an empty cell.
 
+## 🧬 compare-sse: apo vs holo secondary-structure shifts
+
+**Why this exists:** a confidence score tells you *what* Boltz predicted, not *how the
+protein moved* in response to ligand binding -- a real structural question whenever you
+have both a reference apo (unbound) structure and a predicted holo one for the same
+protein. `compare-sse` answers it in terms a structural biologist actually reasons in
+("TM6 swung out 4.2 Angstrom", "the DFG motif flipped from in to out"), not raw DSSP
+fragment coordinates.
+
+It's a fully separate, explicitly opt-in command: it does not run as part of
+`all`/`analyze` and never touches `boltz_dashboard.html` -- most campaigns won't use it,
+since it needs an apo reference structure you supply yourself via the `Apo structure:`
+field (see **boltz_input.md format** above).
+
+Motifs are annotated by one of three pluggable sources, auto-selected per family (or set
+explicitly with `Family type:`):
+
+| Family type | Motifs | Source |
+|---|---|---|
+| `gpcr` | TM1-7, H8, ECL1-3, ICL1-3 | [GPCRdb](https://gpcrdb.org)'s structure-based generic-numbering service (Ballesteros-Weinstein / GPCRdb schemes) |
+| `kinase` | hinge, gatekeeper, catalytic loop (HRD), DFG motif, alphaC-Glu, catalytic Lys | [KLIFS](https://klifs.net)'s public REST API (its fixed 85-residue pocket alignment) |
+| `auto` (default) | whichever of the above applies, else... | ...falls back to Pfam domain boundaries via [PDBe](https://www.ebi.ac.uk/pdbe)'s SIFTS residue mapping -- the universal last resort for any protein outside the two families above |
+
+Apo is superposed onto holo using only the family's stable, non-binding-site-adjacent
+residues (via gemmi's `superpose_positions`), so a ligand-induced local shift can't skew
+the global fit. Each motif then gets:
+
+| Metric | What it means |
+|---|---|
+| Ca RMSD / centroid shift | How far the motif moved, post-superposition |
+| Helix-axis rotation angle | For helical motifs -- e.g. the classic TM6 "outward swing" on GPCR activation |
+| Helix kink angle (apo/holo/delta) | Whether a helix straightened or kinked more |
+| SSE boundary shift | Did the helix/strand get longer or shorter -- needs deposited HELIX/SHEET records, or an optional external `mkdssp`/`dssp` binary as a fallback (see **One-time setup** above); every other metric works without it |
+| Flagged phi/psi residues | Per-residue backbone dihedral outliers above `--phi-psi-threshold` |
+| DFG-in/out, alphaC-in/out (kinases only) | A coarse Ca-Ca distance classifier, not a full dihedral model -- good for detecting a state *change* between apo and holo, not publication-grade conformational classification |
+
+```sh
+python3 BoltzMaker.py compare-sse boltz_input.md
+```
+
+Writes, next to `boltz_input.md` (or `--out-dir`): `boltz_sse_comparison.csv` (one row
+per family/target/motif), a standalone self-contained `boltz_sse_comparison.html`
+(Plotly bar chart + motif x target heatmap, vendored the same way as the main
+dashboard), and `boltz_sse_comparison_sessions/<target>.pml` -- a plain-text PyMOL
+script per target that colours/labels each motif and highlights the ones with a
+significant shift. It's just text: opens in any local PyMOL install, no `pymol`
+dependency in BoltzMaker's own venv.
+
 ## 🩹 Troubleshooting / FAQ
 
 | Problem | Fix |
@@ -404,6 +483,20 @@ placeholder instead of an empty cell.
 | `boltz` fails during `setup` with a `numpy` build error | You're likely on Python 3.13+. `boltz` pins `numpy<2.0`, which has no prebuilt wheel past cp312 -- `_find_boltz_python()` already looks for a `python3.12` specifically; install one (`brew install python@3.12`) if it can't find one. |
 | A target fails preflight with a chain-id-length error | Boltz truncates chain IDs to 5 characters internally (a fixed-width field in its own schema) and silently corrupts longer ones rather than erroring at parse time -- shorten the protein/partner/ligand name in `boltz_input.md`. |
 | The dashboard's charts (or the binding-site 3D view) don't render, or look unstyled | plotly.js and 3Dmol.js are both vendored and inlined (not CDN-loaded), so this shouldn't happen from a missing network connection -- Google Fonts is still loaded from a CDN for styling, though, so the page needs internet access at least once for the fonts to look right (falls back to a generic sans-serif otherwise; charts, 3D views, and data are unaffected). If they genuinely don't render, check that `vendor/plotly-2.35.2.min.js` and `vendor/3Dmol-2.5.5-min.js` exist next to `BoltzMaker.py` -- `analyze` prints a warning and falls back to the relevant CDN (which is known not to work in some HTML-preview contexts) if either is missing. |
+
+## 🧫 Testing
+
+```sh
+.venv/bin/pip install -r requirements-dev.txt
+.venv/bin/pytest tests/
+```
+
+27 tests covering `compare-sse`'s annotators against real fixture data (a real apo EGFR
+kinase-domain structure vs the `egfr_covalent` example's real holo prediction; a real
+apo beta2-adrenergic-receptor structure vs `adrb2_gs_panel`'s real holo predictions),
+with GPCRdb/KLIFS/PDBe network calls swapped for an injectable fake client seeded with
+real, previously-verified API responses -- fully offline and fast (~2s). Plus grammar
+and CLI-resolution tests for the parser fields above.
 
 ## 📚 Citation
 
