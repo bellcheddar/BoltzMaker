@@ -22,6 +22,12 @@ Predict affinity: yes
 
 Protein: EGFR
 Sequence: GEAPNQALLRILKETEFKKIKVLGSGAFGTVYKGLWIPEGEKVKIPVAIKELREATSPKANKEILDEAYVMASVDNPHVCRLLGICLTSTVQLITQLMPFGCLLDYVREHKDNIGSQYLLNWCVQIAKGMNYLEDRRLVHRDLAARNVLVKTPQHVKITDFGLAKLLGAEEKEYHAEGGKVPIKWMALESILHRIYTHQSDVWSYGVTVWELMTFGSKPYDGIPASEISSILEKGERLPQPPICTIDVYMIMVKCWMIDADSRPKFRELIIEFSKMARDPQRYLVIQGDERMHLPSPTDSNFYRALMDEEDMDDVVDADEYLIPQQG
+# Real apo (ligand-free) EGFR kinase domain, PDB 1M14 (Stamos et al. 2002) -- used
+# by `compare-sse` to compare this covalent-fragment prediction against the
+# unliganded state. KLIFS identifies the kinase pocket motifs (hinge, gatekeeper
+# T790, DFG, catalytic Lys745, alphaC-Glu762) from the "EGFR" name below.
+Apo structure: reference/1m14_egfr_apo.pdb
+Family type: kinase
 
 # N-phenylacrylamide: a generic acrylamide (Michael-acceptor) warhead
 # fragment. Atom name C12 is the terminal vinyl carbon -- the
