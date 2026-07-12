@@ -1,0 +1,14 @@
+{
+  "findings.md": {
+    "repo": "BoltzMaker",
+    "emoji": "🧬",
+    "title": "5-HT2A/2B/2C Gq-Coupling Panel: Findings",
+    "tagline": "TM6 swings out with Gq bound, every time — 6/6 receptor-ligand pairs, reproduced across three distinct serotonin receptors.",
+    "why": "Why it matters: a confidence score tells you what Boltz predicted, not whether it reproduces real GPCR biology. It is useful for: anyone checking whether a Boltz-2 campaign's structural predictions actually track the textbook activation mechanism (TM6 outward swing on G-protein coupling) before trusting downstream affinity or selectivity calls.",
+    "badges": [
+      ["engine", "Boltz-2", "467FF7", ""],
+      ["method", "compare-sse", "9b51e0", ""],
+      ["receptors", "5-HT2A %2F 2B %2F 2C", "00d084", ""]
+    ]
+  }
+}

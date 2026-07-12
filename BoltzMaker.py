@@ -500,6 +500,8 @@ class Ligand:
     id: str
     smiles: object = None
     ccd: object = None
+    role: object = None  # optional "agonist" / "antagonist" -- purely for reporting
+                           # (dashboard charts, compare-sse), never affects generate/run
 
 
 @dataclass
@@ -546,7 +548,7 @@ _RECORD_ALLOWED_FIELDS = {
     "protein": {"sequence", "partners", "ligands", "modifications", "cyclic", "msa", "templates",
                 "apo structure", "apo chain", "family type", "group"},
     "partner": {"sequence", "type", "copies", "modifications", "cyclic", "msa"},
-    "ligand": {"smiles", "ccd"},
+    "ligand": {"smiles", "ccd", "role"},
 }
 
 # A statement's owner is always its first-mentioned chain, which must be a
@@ -751,7 +753,11 @@ def _build_ligand_record(name: str, fields: dict, lineno: int) -> Ligand:
     if has_smiles == has_ccd:  # both True (ambiguous) or both False (missing)
         raise MDParseError(f"ligand '{name}' must specify exactly one of SMILES/CCD (line {lineno})")
     smiles = _canonicalize_smiles(fields["smiles"]) if has_smiles else None
-    return Ligand(id=name, smiles=smiles, ccd=fields.get("ccd"))
+    role = fields.get("role", "").strip().lower() or None
+    if role and role not in ("agonist", "antagonist"):
+        raise MDParseError(f"ligand '{name}' has invalid Role '{role}' "
+                            f"(expected agonist/antagonist, line {lineno})")
+    return Ligand(id=name, smiles=smiles, ccd=fields.get("ccd"), role=role)
 
 
 # ==========================================================================
@@ -2222,7 +2228,7 @@ def analyze(yaml_dir: Path, out_dir: Path, campaign_dir: Path,
         display_name = _target_display_name(fam, t.ligand_id)
         row = {"target_id": t.stem, "family_id": t.family_id, "family_group": family_group,
                "partner_ids": partner_ids, "display_name": display_name, "ligand_id": t.ligand_id,
-               "ligand_smiles": ligand_smiles, "flags": ""}
+               "ligand_smiles": ligand_smiles, "ligand_role": lig.role if lig else None, "flags": ""}
         d = pred_dir / t.stem if pred_dir else None
         if not d or not d.is_dir():
             row["flags"] = "MISSING_OUTPUTS"
@@ -2405,6 +2411,45 @@ def _make_selectivity_heatmap(df: pd.DataFrame):
     return _fig_to_base64(fig)
 
 
+_ROLE_MARKER_SYMBOL = {"agonist": "circle", "antagonist": "diamond"}
+_ROLE_MARKER_DEFAULT = "circle"
+
+# Plotly's own legend defaults to sitting outside the plot on the right, exactly where a
+# colorbar also sits by default -- the two overlap on any chart with both (confirmed
+# directly: the shape legend and the colorbar text visibly collided). Placing the shape
+# legend *inside* the plot area's top-left corner instead keeps it clear of the colorbar
+# (which stays in its default outside-right position) without needing to shrink the plot.
+_INSET_LEGEND = dict(font=dict(size=_LEGEND_FONTSIZE), x=0.01, y=0.99, xanchor="left", yanchor="top",
+                      bgcolor="rgba(255,255,255,0.85)", bordercolor="#dde4ed", borderwidth=1)
+
+
+def _role_groups(d: pd.DataFrame) -> list:
+    """Splits rows into (legend_label, marker_symbol, sub_df) groups by ligand_role, for
+    scatter plots that shape-code agonist vs antagonist. Collapses to one unlabeled group
+    (no legend entries) when no target in the campaign has a Role: set, so campaigns that
+    don't use that optional Ligand: field see no spurious legend split.
+    """
+    if "ligand_role" not in d.columns or d["ligand_role"].isna().all():
+        return [(None, _ROLE_MARKER_DEFAULT, d)]
+    groups = []
+    for role, symbol in _ROLE_MARKER_SYMBOL.items():
+        sub = d[d["ligand_role"] == role]
+        if not sub.empty:
+            groups.append((role.capitalize(), symbol, sub))
+    other = d[~d["ligand_role"].isin(_ROLE_MARKER_SYMBOL)]
+    if not other.empty:
+        groups.append((None, _ROLE_MARKER_DEFAULT, other))
+    return groups
+
+
+def _tier_marker(values, colorscale: list, colorbar_title: str, is_first_trace: bool, symbol: str) -> dict:
+    marker = dict(color=values, colorscale=colorscale, cmin=0, cmax=1, size=9, symbol=symbol,
+                  line=dict(width=1, color="#333333"), showscale=is_first_trace)
+    if is_first_trace:
+        marker["colorbar"] = dict(title=colorbar_title, thickness=14)
+    return marker
+
+
 def _make_scatter(df: pd.DataFrame, div_id: str):
     conf_col = "confidence_score" if "confidence_score" in df.columns else ("ptm" if "ptm" in df.columns else None)
     if not conf_col or "pIC50" not in df.columns:
@@ -2412,13 +2457,46 @@ def _make_scatter(df: pd.DataFrame, div_id: str):
     d = df.dropna(subset=[conf_col, "pIC50"])
     if d.empty:
         return None
-    colors = d["flags"].apply(lambda f: "#d62728" if f else "#2ca02c")
-    fig = go.Figure(go.Scatter(
-        x=d[conf_col], y=d["pIC50"], mode="markers+text", text=d["display_name"],
-        textposition="top center", textfont=dict(size=_ANNOTATION_FONTSIZE),
-        marker=dict(color=colors, size=8),
-    ))
+    fig = go.Figure()
+    # Colour by confidence tier (same green/amber/red bands, and boundaries, as the
+    # Summary table's shield icon) via a continuous colourscale + colorbar legend (like
+    # the Family x ligand selectivity heatmap's own colorbar), shape by agonist/
+    # antagonist -- so a single point answers both "how confident is this structure" and
+    # "which pharmacology is this" at a glance.
+    colorscale = _tier_colorscale(LOW_CONFIDENCE_THRESHOLD, CONFIDENCE_GREEN_THRESHOLD)
+    for i, (label, symbol, sub) in enumerate(_role_groups(d)):
+        fig.add_trace(go.Scatter(
+            x=sub[conf_col], y=sub["pIC50"], mode="markers+text", text=sub["display_name"],
+            textposition="top center", textfont=dict(size=_ANNOTATION_FONTSIZE),
+            marker=_tier_marker(sub[conf_col], colorscale, "confidence_score", i == 0, symbol),
+            name=label or "Target", showlegend=label is not None,
+        ))
+    fig.update_layout(legend=_INSET_LEGEND)
     fig.update_xaxes(title_text=conf_col, title_font=dict(size=_AXIS_LABEL_FONTSIZE), tickfont=dict(size=_TICK_FONTSIZE))
+    fig.update_yaxes(title_text="pIC50", title_font=dict(size=_AXIS_LABEL_FONTSIZE), tickfont=dict(size=_TICK_FONTSIZE))
+    return _plotly_to_div(fig, div_id)
+
+
+def _make_pic50_vs_binder_chart(df: pd.DataFrame, div_id: str):
+    if "pIC50" not in df.columns or "affinity_probability_binary" not in df.columns:
+        return None
+    d = df.dropna(subset=["pIC50", "affinity_probability_binary"])
+    if d.empty:
+        return None
+    fig = go.Figure()
+    # Colour by affinity tier (same green/amber/red bands/boundaries as the Summary
+    # table's bullseye icon) via a continuous colourscale + colorbar legend, shape by
+    # agonist/antagonist. Binder probability on x, pIC50 on y.
+    colorscale = _tier_colorscale(AFFINITY_RED_THRESHOLD, AFFINITY_GREEN_THRESHOLD)
+    for i, (label, symbol, sub) in enumerate(_role_groups(d)):
+        fig.add_trace(go.Scatter(
+            x=sub["affinity_probability_binary"], y=sub["pIC50"], mode="markers+text",
+            text=sub["display_name"], textposition="top center", textfont=dict(size=_ANNOTATION_FONTSIZE),
+            marker=_tier_marker(sub["affinity_probability_binary"], colorscale, "Binder probability", i == 0, symbol),
+            name=label or "Target", showlegend=label is not None,
+        ))
+    fig.update_layout(legend=_INSET_LEGEND)
+    fig.update_xaxes(title_text="Binder probability", title_font=dict(size=_AXIS_LABEL_FONTSIZE), tickfont=dict(size=_TICK_FONTSIZE))
     fig.update_yaxes(title_text="pIC50", title_font=dict(size=_AXIS_LABEL_FONTSIZE), tickfont=dict(size=_TICK_FONTSIZE))
     return _plotly_to_div(fig, div_id)
 
@@ -3259,6 +3337,7 @@ _FULL_TABLE_HIDE_PATTERNS = [
     r"^family_group$",  # substituted in for family_id's column slot below, not its own entry
     r"^display_name$",  # composed {group}_{partners}_{ligand} label used in charts/titles,
                           # redundant here since Target/Partner/Ligand are already separate columns
+    r"^ligand_role$",  # optional agonist/antagonist label, chart-only (marker shape)
 ]
 
 _FULL_TABLE_RENAME = {
@@ -3338,6 +3417,20 @@ def _affinity_tier(prob) -> tuple:
     if prob >= AFFINITY_RED_THRESHOLD:
         return _TIER_AMBER, f"binder probability {prob:.2f} -- uncertain"
     return _TIER_RED, f"binder probability {prob:.2f} -- likely non-binder/decoy"
+
+
+def _tier_colorscale(red_max: float, green_min: float) -> list:
+    """A hard-step (not gradient) Plotly colorscale over [0, 1] with the same tier
+    boundaries and colours as the Summary table's bullseye/shield icons -- used as a
+    continuous marker colour + colorbar (a real legend for what the colour means),
+    rather than the 3 flat per-point colours used elsewhere, matching the same
+    duplicate-stop-for-a-hard-edge trick already used for the fingerprint heatmap.
+    """
+    return [
+        [0.0, _TIER_RED], [red_max, _TIER_RED],
+        [red_max, _TIER_AMBER], [green_min, _TIER_AMBER],
+        [green_min, _TIER_GREEN], [1.0, _TIER_GREEN],
+    ]
 
 
 def _summary_cell_html(row) -> str:
@@ -3573,7 +3666,7 @@ def write_html(df: pd.DataFrame, path: Path, campaign_dir: Path, campaign: Campa
 
     scatter = _make_scatter(df, "chart-scatter")
     if scatter:
-        chart_cards.append(f"<div class='md-card'><h2>Confidence vs affinity</h2>{scatter}</div>")
+        chart_cards.append(f"<div class='md-card'><h2>pIC50 vs confidence score</h2>{scatter}</div>")
 
     interactions_csv = campaign_dir / "boltz_interactions.csv"
     interactions_df = pd.read_csv(interactions_csv) if interactions_csv.exists() else None
@@ -3581,6 +3674,10 @@ def write_html(df: pd.DataFrame, path: Path, campaign_dir: Path, campaign: Campa
     ichart = _make_interaction_count_chart(df, "chart-interactions")
     if ichart:
         chart_cards.append(f"<div class='md-card'><h2>Interaction counts by type</h2>{ichart}</div>")
+
+    pic50_binder = _make_pic50_vs_binder_chart(df, "chart-pic50-binder")
+    if pic50_binder:
+        chart_cards.append(f"<div class='md-card'><h2>pIC50 vs binder probability</h2>{pic50_binder}</div>")
 
     for family_id, chart_html in _make_fingerprint_heatmaps(df, interactions_df):
         chart_cards.append(f"<div class='md-card md-card-span2'><h2>{family_id}: residue interaction fingerprint</h2>"
@@ -3736,6 +3833,37 @@ def write_html(df: pd.DataFrame, path: Path, campaign_dir: Path, campaign: Campa
             print("BoltzMaker: WARNING: vendor/3Dmol-2.5.5-min.js not found -- falling back to the 3Dmol.js CDN")
             threedmol_script = "<script src='https://cdn.jsdelivr.net/npm/3dmol@2.5.5/build/3Dmol-min.js'></script>"
 
+    # Posts this page's real content height to any parent window embedding it in an
+    # iframe (e.g. findings.md's "Interactive dashboard" section) -- postMessage works
+    # across origins even though direct DOM/height reads on a cross-origin iframe don't,
+    # so the embedding page can size the iframe to the actual content instead of guessing
+    # a fixed height and either clipping content or leaving a scrollbar. A ResizeObserver
+    # on <body> (not just a couple of fixed-delay retries after load) is what actually
+    # keeps this correct: this page's own embedded PLIP images, web fonts, and the
+    # ligand-grid pager can all reflow content well after the load event fires, and a
+    # fixed timeout window doesn't reliably outlast every one of those -- confirmed
+    # directly (a fixed-timeout version still left a residual scrollbar). Falls back to
+    # a bounded polling interval on browsers without ResizeObserver.
+    _IFRAME_RESIZE_JS = """
+(function () {
+  function postHeight() {
+    if (window.parent && window.parent !== window) {
+      window.parent.postMessage({source: 'boltzmaker-dashboard', height: document.documentElement.scrollHeight}, '*');
+    }
+  }
+  window.addEventListener('load', postHeight);
+  window.addEventListener('resize', postHeight);
+  if (window.ResizeObserver) {
+    new ResizeObserver(postHeight).observe(document.body);
+  } else {
+    var ticks = 0;
+    var poll = setInterval(function () {
+      postHeight();
+      if (++ticks > 30) clearInterval(poll);
+    }, 300);
+  }
+})();
+"""
     doc = (
         "<!DOCTYPE html><html lang='en'><head><meta charset='utf-8'>"
         "<meta name='viewport' content='width=device-width, initial-scale=1.0'>"
@@ -3746,6 +3874,7 @@ def write_html(df: pd.DataFrame, path: Path, campaign_dir: Path, campaign: Campa
         + f"<style>{_BRAND_CSS}</style></head><body>"
         + _BRAND_HEADER + "<main class='md-main'>" + "".join(parts) + "</main>" + _BRAND_FOOTER
         + f"<script>{_LIGAND_GRID_PAGER_JS}</script>"
+        + f"<script>{_IFRAME_RESIZE_JS}</script>"
         + "</body></html>"
     )
     path.write_text(doc)

@@ -7,6 +7,45 @@ everything so far is tracked under `Unreleased`.
 ## [Unreleased]
 
 ### Added
+- `write_html()`'s generated dashboard now posts its own real content height to any
+  parent window via `postMessage` on load, resize, and via a `ResizeObserver` on
+  `<body>` -- lets a page embedding the dashboard in an iframe (e.g. `findings.md`'s
+  "Interactive dashboard" section) size the iframe to the actual content instead of
+  guessing a fixed height, since a cross-origin iframe can't otherwise be measured or
+  resized from the embedding page's own JS. A first version re-posted only at a couple
+  of fixed delays after load rather than continuously observing -- confirmed
+  insufficient directly (this page's own embedded PLIP images, web fonts, and the
+  ligand-grid pager can all reflow content well after those fixed delays elapse,
+  leaving a residual scrollbar); the `ResizeObserver` version re-posts on every actual
+  layout change instead of guessing how long reflows take. `findings.md`'s dashboard
+  embed moved to the end of the document (after Technical notes) and uses this
+  handshake instead of a fixed 900px height that gave the embedded dashboard its own
+  internal scrollbar. The embed's `src` (and its "open it directly" link) also switched
+  from the absolute `bellcheddar.github.io` URL to a relative `boltz_dashboard.html`
+  path, matching the two chart PNGs' own relative paths -- confirmed directly that the
+  absolute-URL version was silently showing whatever dashboard was last *pushed*, not
+  the current local one, since none of this session's chart changes (colorbar, the new
+  pIC50-vs-binder chart, the title rename, etc.) had been pushed yet.
+- New optional `Role:` field on a `Ligand:` block (`agonist` / `antagonist`) -- purely
+  for reporting, never affects `generate`/`run`. When set on at least one ligand in the
+  campaign, the dashboard's "pIC50 vs confidence score" scatter (renamed from "Confidence
+  vs affinity") and the new "pIC50 vs binder probability" scatter (below the "Interaction
+  counts by type" chart, axes: binder probability on x, pIC50 on y) shape-code points by
+  pharmacology (circle = agonist, diamond = antagonist) with a legend; campaigns that
+  don't set `Role:` see a single unlabelled trace, unchanged from before. Both charts
+  colour points by tier -- confidence tier (green/amber/red, matching the Summary
+  table's shield icon) for pIC50-vs-confidence, affinity tier (matching the bullseye
+  icon) for pIC50-vs-binder -- via a continuous Plotly colourscale + colorbar legend
+  (the same style as the Family x ligand selectivity heatmap's own colorbar), replacing
+  the old flags-based red/green colouring and giving both charts an explicit legend for
+  what the colour means, not just the shape. The shape/pharmacology legend sits inside
+  the plot area's top-left corner (not Plotly's default outside-right position), since
+  that default position collided visually with the colorbar. Applied `Role:` to
+  `5ht2_gq_panel`'s six ligands; neither chart shows an
+  agonist/antagonist cluster distinct from Gq-bound status, consistent with the
+  campaign's own agonist-vs-antagonist statistical finding (see `findings.md`, which also
+  shows both charts side by side at half width, and splits its SSE motif-shift table's
+  "Ca centroid shift" into grouped No Gq / Gq / Δ sub-columns).
 - New optional `Group:` field on a `Protein:` block: a shared display/report name for
   multiple `Protein:` blocks that represent the same underlying receptor (e.g. with vs
   without a co-folded partner, or a predicted apo variant) but must otherwise stay

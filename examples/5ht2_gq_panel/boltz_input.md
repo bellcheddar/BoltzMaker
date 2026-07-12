@@ -123,23 +123,29 @@ Sequence: MASNNTASIAQARKLVEQLKMEANIDRIKVSKAAADLMAYCEAHAKEDPLLTPVPASENPFREKKFFCAI
 Ligand: RISP
 # Risperidone -- 5-HT2A antagonist (also broad-spectrum antipsychotic)
 SMILES: CC1=C(C(=O)N2CCCCC2=N1)CCN3CCC(CC3)c4c5ccc(cc5on4)F
+Role: antagonist
 
 Ligand: PSIL
 # Psilocin -- 5-HT2A agonist (active metabolite of psilocybin)
 SMILES: CN(C)CCc1c[nH]c2c1c(ccc2)O
+Role: agonist
 
 Ligand: BALO
 # Balovaptan -- 5-HT2B antagonist
 SMILES: CN1Cc2cc(ccc2-n3c(nnc3C4CCC(CC4)Oc5ccccn5)C1)Cl
+Role: antagonist
 
 Ligand: LSD1
 # LSD -- 5-HT2B agonist (also 5-HT2A)
 SMILES: CCN(CC)C(=O)[C@H]1CN([C@@H]2Cc3c[nH]c4c3c(ccc4)C2=C1)C
+Role: agonist
 
 Ligand: SB24
 # SB-242084 -- 5-HT2C antagonist
 SMILES: Cc1cc2c(cc1Cl)N(CC2)C(=O)Nc3ccc(nc3)Oc4cccnc4C
+Role: antagonist
 
 Ligand: LORC
 # Lorcaserin -- 5-HT2C agonist (former anti-obesity drug)
 SMILES: C[C@H]1CNCCc2c1cc(cc2)Cl
+Role: agonist

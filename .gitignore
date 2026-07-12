@@ -32,8 +32,12 @@ boltz_sse_comparison_sessions/
 !examples/*/boltz_sse_comparison_sessions/*
 .DS_Store
 
-# Elementor README forge output (regenerate with readme_forge.py as needed)
+# Elementor README/report forge output (regenerate with readme_forge.py as needed)
 *.polished.md
+README.html
+README.preview.html
 BoltzMaker.html
 BoltzMaker.preview.html
+findings.html
+findings.preview.html
 elementor-widget-markdown.css
