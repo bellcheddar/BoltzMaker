@@ -24,6 +24,7 @@ boltz_dashboard.html
 boltz_ligand_grid.pdf
 !examples/*/boltz_ligand_grid.pdf
 boltz_sse_comparison.csv
+boltz_sse_family_status.json
 boltz_sse_comparison.html
 !examples/*/boltz_sse_comparison.html
 boltz_sse_comparison_sessions/

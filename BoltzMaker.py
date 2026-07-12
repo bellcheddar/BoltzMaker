@@ -133,6 +133,120 @@ def _find_boltz_python() -> Path:
     sys.exit(1)
 
 
+# boltz's triangular attention computes the row-wise QK^T score matrix for the whole
+# complex in one unchunked matmul (batch = token count, so the tensor scales as
+# tokens * heads * tokens * tokens). Apple's MPS backend has a hard ceiling on single-
+# tensor size; past roughly 1250 residues that matmul crashes the whole process with a
+# SIGSEGV inside PyTorch's internal tiled-bmm fallback (confirmed via crash symbolication
+# and direct tracing against boltz 2.2.1 on Apple Silicon). Each row's attention is
+# independent, so chunking along that axis is exact, not an approximation -- this patches
+# the installed boltz package directly (there is no upstream release with this fix yet).
+_BOLTZ_MPS_ATTN_ORIGINAL = '''def _attention(
+    query: torch.Tensor,
+    key: torch.Tensor,
+    value: torch.Tensor,
+    biases: List[torch.Tensor],
+) -> torch.Tensor:
+    # [*, H, C_hidden, K]
+    key = permute_final_dims(key, (1, 0))
+
+    # [*, H, Q, K]
+    a = torch.matmul(query, key)
+
+    for b in biases:
+        a += b
+
+    a = softmax_no_cast(a, -1)
+
+    # [*, H, Q, C_hidden]
+    a = torch.matmul(a, value)
+
+    return a'''
+
+_BOLTZ_MPS_ATTN_PATCHED = '''# Patched by BoltzMaker setup -- see cmd_setup()'s _patch_boltz_mps_attention().
+_MPS_ATTN_MAX_SCORE_ELEMENTS = 400_000_000  # ~1.6GB fp32, well under MPS's tensor-size ceiling
+
+
+def _attention(
+    query: torch.Tensor,
+    key: torch.Tensor,
+    value: torch.Tensor,
+    biases: List[torch.Tensor],
+) -> torch.Tensor:
+    # [*, H, C_hidden, K]
+    key = permute_final_dims(key, (1, 0))
+
+    n_rows = query.shape[1] if query.dim() >= 5 else None
+    score_elements = 1
+    for d in query.shape[:-1]:
+        score_elements *= d
+    score_elements *= key.shape[-1]
+
+    if (
+        query.device.type == "mps"
+        and n_rows is not None
+        and n_rows > 1
+        and score_elements > _MPS_ATTN_MAX_SCORE_ELEMENTS
+    ):
+        n_chunks = math.ceil(score_elements / _MPS_ATTN_MAX_SCORE_ELEMENTS)
+        chunk_size = math.ceil(n_rows / n_chunks)
+        outputs = []
+        for start in range(0, n_rows, chunk_size):
+            end = min(start + chunk_size, n_rows)
+            a_c = torch.matmul(query[:, start:end], key[:, start:end])
+            for b in biases:
+                b_c = b[:, start:end] if b.shape[1] == n_rows else b
+                a_c = a_c + b_c
+            a_c = softmax_no_cast(a_c, -1)
+            outputs.append(torch.matmul(a_c, value[:, start:end]))
+        return torch.cat(outputs, dim=1)
+
+    # [*, H, Q, K]
+    a = torch.matmul(query, key)
+
+    for b in biases:
+        a += b
+
+    a = softmax_no_cast(a, -1)
+
+    # [*, H, Q, C_hidden]
+    a = torch.matmul(a, value)
+
+    return a'''
+
+
+def _patch_boltz_mps_attention(venv_dir: Path) -> None:
+    """Patch boltz's triangular attention to chunk on MPS for large complexes.
+
+    Idempotent and non-fatal: does nothing if already patched, and warns (without
+    aborting setup) if boltz's source no longer matches what this patch expects, since
+    that means an upstream boltz release changed this function and the patch needs
+    re-checking against the new code before it can be safely reapplied.
+    """
+    import glob
+
+    matches = glob.glob(str(venv_dir / "lib" / "python3.*" / "site-packages" / "boltz" /
+                             "model" / "layers" / "triangular_attention" / "primitives.py"))
+    if not matches:
+        print("BoltzMaker: WARNING -- could not find boltz's triangular_attention/primitives.py "
+              "to patch (MPS large-complex fix not applied).")
+        return
+    target = Path(matches[0])
+    text = target.read_text()
+
+    if "_MPS_ATTN_MAX_SCORE_ELEMENTS" in text:
+        print("BoltzMaker: MPS triangular-attention chunking patch already applied.")
+        return
+    if _BOLTZ_MPS_ATTN_ORIGINAL not in text:
+        print("BoltzMaker: WARNING -- boltz's _attention() source doesn't match the expected "
+              "vanilla text (boltz version changed?) -- skipping MPS large-complex patch. "
+              "Large multi-chain complexes (>~1250 residues) may crash on Apple Silicon MPS.")
+        return
+
+    target.write_text(text.replace(_BOLTZ_MPS_ATTN_ORIGINAL, _BOLTZ_MPS_ATTN_PATCHED))
+    print("BoltzMaker: patched boltz's triangular attention to chunk on MPS for large complexes.")
+
+
 def cmd_setup(argv: list) -> None:
     force = "--force" in argv
     yes = "--yes" in argv or "-y" in argv
@@ -168,6 +282,8 @@ def cmd_setup(argv: list) -> None:
 
     boltz_check = subprocess.run([str(_venv_bin("boltz")), "--help"], capture_output=True, text=True)
     print(f"BoltzMaker: boltz CLI check exit={boltz_check.returncode}")
+
+    _patch_boltz_mps_attention(VENV_DIR)
 
     py = _venv_bin("python3")
     torch_check = subprocess.run(
@@ -311,6 +427,7 @@ _bootstrap_or_relaunch(sys.argv)
 
 import argparse
 import base64
+import html
 import io
 import json
 import re
@@ -372,6 +489,10 @@ class ProteinFamily:
     apo_structure: object = None   # raw path string to a reference apo structure, or None
     apo_chain: object = None        # explicit apo chain id, or None (triggers auto-detect)
     family_type: str = "auto"        # "gpcr" | "kinase" | "auto" -- selects the compare-sse MotifAnnotator
+    group: object = None             # optional display/report grouping name shared across
+                                       # multiple Protein: blocks of the same underlying
+                                       # receptor (e.g. with/without a partner, or an apo
+                                       # variant) -- defaults to this family's own id if unset
 
 
 @dataclass
@@ -394,8 +515,9 @@ class Campaign:
 class Target:
     stem: str
     family_id: str
-    ligand_id: str
+    ligand_id: object  # str, or None for a ligand-free (apo) target
     pocket_contacts_used: object = None
+    needs_affinity: bool = True  # False for apo targets even when the campaign predicts affinity
 
 
 MANIFEST_FILENAME = ".boltzmaker_manifest.json"
@@ -422,7 +544,7 @@ _FIELD_RE = re.compile(r"^([A-Za-z][A-Za-z ]*?)\s*:\s*(.*)$")
 _RECORD_ALLOWED_FIELDS = {
     "settings": {"output folder", "predict affinity"},
     "protein": {"sequence", "partners", "ligands", "modifications", "cyclic", "msa", "templates",
-                "apo structure", "apo chain", "family type"},
+                "apo structure", "apo chain", "family type", "group"},
     "partner": {"sequence", "type", "copies", "modifications", "cyclic", "msa"},
     "ligand": {"smiles", "ccd"},
 }
@@ -580,13 +702,24 @@ def _build_family_record(name: str, fields: dict, partners: dict, statements: li
     if family_type not in ("gpcr", "kinase", "auto"):
         raise MDParseError(f"protein '{name}' has invalid Family type '{family_type}' "
                             f"(expected gpcr/kinase/auto, line {lineno})")
+    # "Ligands: none" is a distinct sentinel from omitting the field entirely: omitted
+    # means "default to every campaign ligand" (fan-out, existing behavior); "none" means
+    # this family gets exactly one ligand-free (apo) target -- no ligand entity in the
+    # YAML, no affinity property, stem is just the family id.
+    if "ligands" in fields and fields["ligands"].strip().lower() == "none":
+        ligands = []
+    elif "ligands" in fields:
+        ligands = _parse_csv(fields["ligands"])
+    else:
+        ligands = None
     return ProteinFamily(
         id=name, sequence=fields["sequence"], partners=partner_ids,
-        pocket_contacts=pocket_contacts, ligands=_parse_csv(fields["ligands"]) if "ligands" in fields else None,
+        pocket_contacts=pocket_contacts, ligands=ligands,
         modifications=modifications, cyclic=_parse_yesno(fields.get("cyclic", ""), False), msa=fields.get("msa"),
         bond_constraints=bond_constraints, contact_constraints=contact_constraints,
         templates=_parse_csv(fields["templates"]) if "templates" in fields else None,
         apo_structure=fields.get("apo structure"), apo_chain=fields.get("apo chain"), family_type=family_type,
+        group=fields.get("group"),
     )
 
 
@@ -1002,6 +1135,9 @@ def _expand_targets(campaign: Campaign):
     ligand_by_id = {l.id: l for l in campaign.ligands}
     targets = []
     for fam in campaign.families:
+        if fam.ligands == []:  # explicit "Ligands: none" -- one ligand-free (apo) target
+            targets.append((fam, None))
+            continue
         ligand_ids = fam.ligands if fam.ligands else [l.id for l in campaign.ligands]
         for lig_id in ligand_ids:
             if lig_id not in ligand_by_id:
@@ -1034,16 +1170,19 @@ def _ligand_entry(lig: Ligand) -> dict:
     return {"ligand": {key: value, "id": lig.id}}
 
 
-def _build_yaml_doc(fam: ProteinFamily, lig: Ligand, campaign: Campaign) -> dict:
+def _build_yaml_doc(fam: ProteinFamily, lig: object, campaign: Campaign) -> dict:
+    # lig is None for a ligand-free (apo) target ("Ligands: none") -- no ligand entity,
+    # no pocket/affinity binder (both are meaningless without a ligand to bind).
     sequences = [_chain_entry(fam.id, fam.sequence, "protein", fam.modifications, fam.cyclic, fam.msa)]
     for pid in fam.partners:
         p = campaign.partners[pid]
         sequences.append(_chain_entry(p.id, p.sequence, p.type, p.modifications, p.cyclic, p.msa))
-    sequences.append(_ligand_entry(lig))
+    if lig is not None:
+        sequences.append(_ligand_entry(lig))
     doc = {"sequences": sequences}
 
     constraints = []
-    if fam.pocket_contacts:
+    if fam.pocket_contacts and lig is not None:
         # Boltz's pocket constraint requires every contact entry to be an explicit
         # [chain, residue_or_atom] pair (verified against the installed boltz 2.2.1
         # schema parser) -- there is no whole-chain-only shorthand, so a family with
@@ -1065,7 +1204,7 @@ def _build_yaml_doc(fam: ProteinFamily, lig: Ligand, campaign: Campaign) -> dict
             {("pdb" if str(path).lower().endswith(".pdb") else "cif"): path} for path in fam.templates
         ]
 
-    if campaign.settings.predict_affinity:
+    if campaign.settings.predict_affinity and lig is not None:
         doc["properties"] = [{"affinity": {"binder": lig.id}}]
     return doc
 
@@ -1074,14 +1213,17 @@ def generate_yamls(campaign: Campaign, output_dir: Path) -> list:
     output_dir.mkdir(parents=True, exist_ok=True)
     manifest, seen = [], set()
     for fam, lig in _expand_targets(campaign):
-        stem = f"{fam.id}_{lig.id}"
+        stem = f"{fam.id}_{lig.id}" if lig is not None else fam.id
         if stem in seen:
             raise MDParseError(f"duplicate target filename '{stem}.yaml' -- check for duplicate family/ligand ids")
         seen.add(stem)
         doc = _build_yaml_doc(fam, lig, campaign)
         with (output_dir / f"{stem}.yaml").open("w") as f:
             yaml.safe_dump(doc, f, sort_keys=False, default_flow_style=False)
-        manifest.append(Target(stem=stem, family_id=fam.id, ligand_id=lig.id, pocket_contacts_used=fam.pocket_contacts))
+        needs_affinity = campaign.settings.predict_affinity and lig is not None
+        manifest.append(Target(stem=stem, family_id=fam.id, ligand_id=(lig.id if lig is not None else None),
+                                pocket_contacts_used=(fam.pocket_contacts if lig is not None else None),
+                                needs_affinity=needs_affinity))
     with (output_dir / MANIFEST_FILENAME).open("w") as f:
         json.dump([asdict(t) for t in manifest], f, indent=2)
     return manifest
@@ -1203,7 +1345,9 @@ def check_yaml_validity(manifest: list, output_dir: Path, campaign: Campaign) ->
             binder = c["pocket"].get("binder")
             if binder not in binder_ids:
                 bad.append(f"{path.name}: pocket constraint binder '{binder}' not among ligand ids")
-        if campaign.settings.predict_affinity:
+        if campaign.settings.predict_affinity and binder_ids:
+            # binder_ids empty means a ligand-free (apo) target -- predict_affinity is
+            # meaningless without a ligand, so it correctly has no properties block.
             aff_binders = {p["affinity"]["binder"] for p in doc.get("properties", []) if "affinity" in p}
             if not aff_binders & binder_ids:
                 bad.append(f"{path.name}: predict_affinity is on but no matching affinity property found")
@@ -1370,11 +1514,14 @@ def check_memory_heuristic(campaign: Campaign, manifest: list, threshold: int) -
 
     offenders = []
     for t in manifest:
-        fam, lig = fam_by_id.get(t.family_id), lig_by_id.get(t.ligand_id)
-        if fam is None or lig is None:
+        fam = fam_by_id.get(t.family_id)
+        if fam is None:
             continue
         total = len(fam.sequence) + sum(len(campaign.partners[pid].sequence) for pid in fam.partners)
-        total += ligand_atoms(lig)
+        if t.ligand_id is not None:  # apo (ligand-free) targets contribute no ligand atoms
+            lig = lig_by_id.get(t.ligand_id)
+            if lig is not None:
+                total += ligand_atoms(lig)
         if total > threshold:
             offenders.append(f"{t.stem} (~{total} tokens)")
     if offenders:
@@ -1450,10 +1597,10 @@ def _target_complete(pred_dir: Path, stem: str, need_affinity: bool) -> bool:
     return True
 
 
-def _partition_targets(manifest: list, pred_dir: Path, need_affinity: bool):
+def _partition_targets(manifest: list, pred_dir: Path):
     complete, pending = [], []
     for t in manifest:
-        (complete if pred_dir and _target_complete(pred_dir, t.stem, need_affinity) else pending).append(t)
+        (complete if pred_dir and _target_complete(pred_dir, t.stem, t.needs_affinity) else pending).append(t)
     return complete, pending
 
 
@@ -1494,29 +1641,108 @@ MEMORY_THRASH_SECONDS = 60  # how long sustained high memory must persist before
 
 
 def run_boltz(yaml_dir: Path, out_dir: Path, manifest: list, workers: int, accelerator: str,
-              need_affinity: bool, campaign_dir: Path, limit: int = None,
+              campaign_dir: Path, limit: int = None,
               mps_watermark: float = 1.0, max_parallel_samples: int = 1,
-              recycling_steps: int = None, sampling_steps: int = None,
+              recycling_steps: int = None, sampling_steps: int = None, diffusion_samples: int = 1,
               diffusion_samples_affinity: int = None, sampling_steps_affinity: int = None,
-              max_msa_seqs: int = None) -> None:
+              max_msa_seqs: int = None, max_retries: int = 2) -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
     stage_dir = yaml_dir / "_stage_run"
     pred_dir = _predictions_dir_for(out_dir, stage_dir.name)
 
-    complete, pending = _partition_targets(manifest, pred_dir, need_affinity)
+    complete, pending = _partition_targets(manifest, pred_dir)
     if limit is not None:
         pending = pending[:limit]
     if not pending:
         print(f"BoltzMaker: {len(complete)}/{len(manifest)} target(s) already complete, nothing to run.")
         return
 
+    # Boltz's own "Running affinity prediction for N inputs" phase iterates over every
+    # staged/processed input, not just the ones whose YAML declared a properties/affinity
+    # block -- mixing apo (Ligands: none) targets into the same batch as affinity targets
+    # crashes it with a FileNotFoundError loading a pre_affinity_*.npz that only ever gets
+    # generated for the affinity ones (found via a real crash on examples/5ht2_gq_panel,
+    # not documented Boltz behavior). Splitting into two invocations avoids it; both reuse
+    # the same stage_dir/pred_dir so `find_any_predictions_dir` keeps seeing one
+    # consistent output tree across both.
+    groups = [g for g in (
+        [t for t in pending if t.needs_affinity],
+        [t for t in pending if not t.needs_affinity],
+    ) if g]
+
+    for batch in groups:
+        _run_boltz_batch_with_retry(batch, len(pending), len(manifest), len(complete), yaml_dir, stage_dir,
+                          pred_dir, out_dir, workers, accelerator, campaign_dir, mps_watermark,
+                          max_parallel_samples, recycling_steps, sampling_steps, diffusion_samples,
+                          diffusion_samples_affinity, sampling_steps_affinity, max_msa_seqs, max_retries)
+
+
+_RETRY_SETTLE_SECONDS = 15  # pause between attempts so the OS fully reclaims a crashed subprocess's memory
+
+
+def _run_boltz_batch_with_retry(batch: list, total_pending: int, manifest_len: int, complete_len: int,
+                                 yaml_dir: Path, stage_dir: Path, pred_dir: Path, out_dir: Path, workers: int,
+                                 accelerator: str, campaign_dir: Path, mps_watermark: float,
+                                 max_parallel_samples: int, recycling_steps: int, sampling_steps: int,
+                                 diffusion_samples: int, diffusion_samples_affinity: int,
+                                 sampling_steps_affinity: int, max_msa_seqs: int, max_retries: int) -> None:
+    """Runs a batch, then automatically retries any target that didn't complete.
+
+    A real 4-target cascade on `5ht2_gq_panel` showed why this matters: an OOM during
+    structure prediction for 2 of 6 large targets run together (boltz's own clean-fail
+    path, not a crash) left a `pre_affinity_*.npz` missing, which then crashed the
+    shared affinity phase and took 2 more already-succeeded targets down with it. The
+    first attempt runs exactly as submitted (grouped, unchanged from before); each
+    retry after that isolates every still-incomplete target into its own single-target
+    `boltz predict` invocation, since running fewer targets per process is the mitigation
+    that actually recovered from this in practice -- a crashed subprocess's MPS/Metal
+    memory is only released once the process fully exits, so a short pause before each
+    retry gives the OS a moment to reclaim it before the next attempt.
+    """
+    remaining = batch
+    attempt = 0
+    while remaining:
+        if attempt == 0:
+            _run_boltz_batch(remaining, total_pending, manifest_len, complete_len, yaml_dir, stage_dir,
+                              pred_dir, out_dir, workers, accelerator, campaign_dir, mps_watermark,
+                              max_parallel_samples, recycling_steps, sampling_steps, diffusion_samples,
+                              diffusion_samples_affinity, sampling_steps_affinity, max_msa_seqs)
+        else:
+            print(f"BoltzMaker: retrying {len(remaining)} incomplete target(s) in isolation "
+                  f"(attempt {attempt}/{max_retries}, one at a time, {_RETRY_SETTLE_SECONDS}s pause "
+                  f"before each so memory settles): {[t.stem for t in remaining]}")
+            for t in remaining:
+                time.sleep(_RETRY_SETTLE_SECONDS)
+                _run_boltz_batch([t], total_pending, manifest_len, complete_len, yaml_dir, stage_dir,
+                                  pred_dir, out_dir, workers, accelerator, campaign_dir, mps_watermark,
+                                  max_parallel_samples, recycling_steps, sampling_steps, diffusion_samples,
+                                  diffusion_samples_affinity, sampling_steps_affinity, max_msa_seqs)
+
+        remaining = [t for t in remaining if not _target_complete(pred_dir, t.stem, t.needs_affinity)]
+        if not remaining:
+            return
+        attempt += 1
+        if attempt > max_retries:
+            print(f"BoltzMaker: {len(remaining)} target(s) still incomplete after {max_retries} "
+                  f"automatic retr{'y' if max_retries == 1 else 'ies'} -- giving up: "
+                  f"{[t.stem for t in remaining]}. Re-run `run`/`all` later to try again, or investigate "
+                  f"the per-target log under {campaign_dir}.")
+            return
+
+
+def _run_boltz_batch(pending: list, total_pending: int, manifest_len: int, complete_len: int,
+                      yaml_dir: Path, stage_dir: Path, pred_dir: Path, out_dir: Path, workers: int,
+                      accelerator: str, campaign_dir: Path, mps_watermark: float, max_parallel_samples: int,
+                      recycling_steps: int, sampling_steps: int, diffusion_samples: int,
+                      diffusion_samples_affinity: int, sampling_steps_affinity: int,
+                      max_msa_seqs: int) -> None:
     _stage_targets(yaml_dir, pending, stage_dir)
     check_hidden_files(stage_dir)
 
     boltz_bin = _venv_bin("boltz")
     cmd = [
         str(boltz_bin), "predict", str(stage_dir),
-        "--use_potentials", "--diffusion_samples", "1", "--use_msa_server",
+        "--use_potentials", "--diffusion_samples", str(diffusion_samples), "--use_msa_server",
         "--num_workers", str(workers), "--accelerator", accelerator,
         "--out_dir", str(out_dir),
     ]
@@ -1531,6 +1757,8 @@ def run_boltz(yaml_dir: Path, out_dir: Path, manifest: list, workers: int, accel
     for flag, val in optional_flags.items():
         if val is not None:
             cmd += [flag, str(val)]
+
+    caffeinate_bin = shutil.which("caffeinate")
 
     env = dict(os.environ, PYTORCH_ENABLE_MPS_FALLBACK="1")
     if mps_watermark is not None:
@@ -1555,12 +1783,27 @@ def run_boltz(yaml_dir: Path, out_dir: Path, manifest: list, workers: int, accel
                 f"PYTORCH_MPS_LOW_WATERMARK_RATIO={env.get('PYTORCH_MPS_LOW_WATERMARK_RATIO', 'unset')} ===\n")
     log_f.flush()
 
-    print(f"BoltzMaker: {len(complete)}/{len(manifest)} already complete; running {len(pending)} target(s).")
+    print(f"BoltzMaker: {complete_len}/{manifest_len} campaign target(s) already complete; "
+          f"running {len(pending)}/{total_pending} target(s) in this batch.")
     print(f"BoltzMaker: log -> {log_path}")
 
     run_start = time.time()
     proc = subprocess.Popen(cmd, cwd=str(yaml_dir), env=env, stdout=subprocess.PIPE,
                              stderr=subprocess.STDOUT, text=True, bufsize=1)
+
+    # macOS idle/system sleep can interrupt an in-flight Metal/MPS GPU kernel mid-
+    # execution and wedge the process in an uninterruptible kernel wait, unkillable by
+    # SIGTERM -- confirmed directly via `pmset -g log` showing the kernel's
+    # IOPMrootDomain idle-sleep-preventer assertion toggling on/off every few seconds
+    # during a real multi-hour campaign with no held assertion, correlating exactly with
+    # observed stalls (a small target that had already succeeded once stalled on a
+    # retry, ruling out complex size as the cause). `-w <pid>` (rather than wrapping the
+    # boltz predict command directly) keeps `proc` as boltz predict's own direct
+    # subprocess -- `.terminate()`/`.kill()`/PID-based memory monitoring below are
+    # unaffected -- and caffeinate exits on its own once that pid exits, however it exits.
+    if caffeinate_bin:
+        subprocess.Popen([caffeinate_bin, "-i", "-s", "-m", "-w", str(proc.pid)])
+
     latest_line = {"text": ""}
     phase = {"name": "starting", "done": 0, "total": 0, "rate": ""}
 
@@ -1629,7 +1872,7 @@ def run_boltz(yaml_dir: Path, out_dir: Path, manifest: list, workers: int, accel
             outer = progress.add_task("targets", total=total, mem="")
             inner = progress.add_task("phase: starting", total=1, mem="")
             while proc.poll() is None:
-                done = sum(1 for t in pending if _target_complete(pred_dir, t.stem, need_affinity))
+                done = sum(1 for t in pending if _target_complete(pred_dir, t.stem, t.needs_affinity))
                 mem_str = f"{mem_state['rss_gb']:.1f}/{total_ram_gb:.0f}GB"
                 progress.update(outer, completed=done, mem=mem_str)
                 rate_suffix = f" [{phase['rate']}]" if phase["rate"] else ""
@@ -1639,7 +1882,7 @@ def run_boltz(yaml_dir: Path, out_dir: Path, manifest: list, workers: int, accel
                 )
                 time.sleep(1)
             reader_thread.join(timeout=5)
-            done = sum(1 for t in pending if _target_complete(pred_dir, t.stem, need_affinity))
+            done = sum(1 for t in pending if _target_complete(pred_dir, t.stem, t.needs_affinity))
             progress.update(outer, completed=done, mem=f"{mem_state['rss_gb']:.1f}/{total_ram_gb:.0f}GB")
     except KeyboardInterrupt:
         print("\nBoltzMaker: interrupted -- terminating boltz predict...")
@@ -1660,7 +1903,7 @@ def run_boltz(yaml_dir: Path, out_dir: Path, manifest: list, workers: int, accel
 
         # Recorded even on interrupt (partial progress is still worth knowing) -- read
         # back by write_html() to show run parameters/runtime in the summary table.
-        completed_count = sum(1 for t in pending if _target_complete(pred_dir, t.stem, need_affinity))
+        completed_count = sum(1 for t in pending if _target_complete(pred_dir, t.stem, t.needs_affinity))
         record = {
             "started_at": time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(run_start)),
             "finished_at": time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(run_end)),
@@ -1675,7 +1918,7 @@ def run_boltz(yaml_dir: Path, out_dir: Path, manifest: list, workers: int, accel
         with (campaign_dir / RUN_HISTORY_FILENAME).open("a") as hf:
             hf.write(json.dumps(record) + "\n")
 
-    still_missing = [t.stem for t in pending if not _target_complete(pred_dir, t.stem, need_affinity)]
+    still_missing = [t.stem for t in pending if not _target_complete(pred_dir, t.stem, t.needs_affinity)]
     print(f"BoltzMaker: boltz predict exited with code {proc.returncode}")
     if still_missing:
         print(f"WARNING: {len(still_missing)} target(s) did not complete: {still_missing}")
@@ -1953,7 +2196,7 @@ def _analyze_target_interactions(t: Target, cif_path: Path, campaign: Campaign, 
             "contacts": contacts, "png": png_rel, "pse": pse_rel}
 
 
-def analyze(yaml_dir: Path, out_dir: Path, campaign_dir: Path, need_affinity: bool,
+def analyze(yaml_dir: Path, out_dir: Path, campaign_dir: Path,
             campaign: Campaign, skip_interactions: bool = False) -> pd.DataFrame:
     manifest = load_manifest(yaml_dir)
     pred_dir = find_any_predictions_dir(out_dir)
@@ -1963,15 +2206,22 @@ def analyze(yaml_dir: Path, out_dir: Path, campaign_dir: Path, need_affinity: bo
     run_plip = _plip_available() and not skip_interactions
     all_contacts = []
     plip_targets_done = 0
-    plip_targets_total = sum(1 for t in manifest if pred_dir and (pred_dir / t.stem).is_dir()) if run_plip else 0
+    plip_targets_total = sum(1 for t in manifest if t.ligand_id is not None and pred_dir
+                              and (pred_dir / t.stem).is_dir()) if run_plip else 0
 
     ligand_by_id = {l.id: l for l in campaign.ligands}
+    family_by_id = {f.id: f for f in campaign.families}
 
     rows = []
     for t in manifest:
         lig = ligand_by_id.get(t.ligand_id)
         ligand_smiles = (lig.smiles or lig.ccd) if lig else None
-        row = {"target_id": t.stem, "family_id": t.family_id, "ligand_id": t.ligand_id,
+        fam = family_by_id.get(t.family_id)
+        family_group = (fam.group if fam and fam.group else None) or t.family_id
+        partner_ids = ", ".join(_partner_display_id(p) for p in fam.partners) if fam and fam.partners else ""
+        display_name = _target_display_name(fam, t.ligand_id)
+        row = {"target_id": t.stem, "family_id": t.family_id, "family_group": family_group,
+               "partner_ids": partner_ids, "display_name": display_name, "ligand_id": t.ligand_id,
                "ligand_smiles": ligand_smiles, "flags": ""}
         d = pred_dir / t.stem if pred_dir else None
         if not d or not d.is_dir():
@@ -1993,7 +2243,7 @@ def analyze(yaml_dir: Path, out_dir: Path, campaign_dir: Path, need_affinity: bo
             shutil.copy2(cif_files[0], cif_dst / cif_files[0].name)
             row["cif_file"] = cif_files[0].name
 
-            if run_plip:
+            if run_plip and t.ligand_id is not None:
                 plip_targets_done += 1
                 result = _analyze_target_interactions(t, cif_dst / cif_files[0].name, campaign, campaign_dir,
                                                        plip_targets_done, plip_targets_total)
@@ -2003,10 +2253,12 @@ def analyze(yaml_dir: Path, out_dir: Path, campaign_dir: Path, need_affinity: bo
                 for itype, n in result["counts"].items():
                     row[f"plip_{itype.replace(' ', '_')}_count"] = n
                 all_contacts.extend(result["contacts"])
-        elif not skip_interactions:
+            elif run_plip:
+                row["plip_status"] = "not_applicable_apo"
+        elif not skip_interactions and t.ligand_id is not None:
             row["plip_status"] = "skipped_no_env"
 
-        if not conf_files or not cif_files or (need_affinity and not aff_files):
+        if not conf_files or not cif_files or (t.needs_affinity and not aff_files):
             row["flags"] = "MISSING_OUTPUTS"
         rows.append(row)
 
@@ -2037,6 +2289,8 @@ def write_xlsx(df: pd.DataFrame, path: Path) -> None:
         has_pivot = "pIC50" in df.columns and df["family_id"].nunique() > 1
         pivot = df.pivot_table(index="ligand_id", columns="family_id", values="pIC50", aggfunc="mean") if has_pivot else None
         if pivot is not None:
+            fam_label = _family_label_map(df)
+            pivot = pivot.rename(columns=fam_label)
             pivot.to_excel(writer, sheet_name="selectivity")
 
         wb = writer.book
@@ -2105,26 +2359,38 @@ def _make_bar_chart(df: pd.DataFrame, col: str, div_id: str):
     # doesn't appear twice (once baked into the chart, once in the card).
     if col not in df.columns:
         return None
-    d = df[["target_id", col]].dropna().sort_values(col, ascending=False)
+    d = df[["display_name", col]].dropna().sort_values(col, ascending=False)
     if d.empty:
         return None
     n = len(d)
     x = list(range(n))
     fig = go.Figure(go.Bar(x=x, y=d[col].tolist(), width=_BAR_WIDTH, marker_color="#4C72B0"))
-    fig.update_xaxes(tickmode="array", tickvals=x, ticktext=d["target_id"].tolist(), tickangle=-75,
+    fig.update_xaxes(tickmode="array", tickvals=x, ticktext=d["display_name"].tolist(), tickangle=-75,
                       tickfont=dict(size=_TICK_FONTSIZE), range=[-0.75, max(n - 0.25, _BAR_MIN_SLOTS - 0.75)])
     fig.update_yaxes(title_text=col, title_font=dict(size=_AXIS_LABEL_FONTSIZE), tickfont=dict(size=_TICK_FONTSIZE))
     return _plotly_to_div(fig, div_id)
+
+
+def _family_label_map(df: pd.DataFrame) -> dict:
+    """Maps the internal per-variant family_id to its human-readable {group}_{partners}
+    label (e.g. "H2ANG" -> "5HT2A", "5HT2A" -> "5HT2A_GNAQ+GNB1+GNG2"), derived straight
+    from df's own family_group/partner_ids columns -- used for family-level axis/column
+    labels (the selectivity heatmap/pivot) that must still group by the real family_id."""
+    def label(r):
+        return f"{r['family_group']}_{r['partner_ids'].replace(', ', '+')}" if r["partner_ids"] else r["family_group"]
+    return df.drop_duplicates("family_id").set_index("family_id").apply(label, axis=1).to_dict()
 
 
 def _make_selectivity_heatmap(df: pd.DataFrame):
     if "pIC50" not in df.columns or df["family_id"].nunique() < 2:
         return None
     pivot = df.pivot_table(index="ligand_id", columns="family_id", values="pIC50", aggfunc="mean")
+    fam_label = _family_label_map(df)
     fig, ax = plt.subplots(figsize=(1.2 * len(pivot.columns) + 2, 0.4 * len(pivot.index) + 2))
     im = ax.imshow(pivot.values, cmap="viridis", aspect="auto")
     ax.set_xticks(range(len(pivot.columns)))
-    ax.set_xticklabels(pivot.columns, rotation=45, ha="right", fontsize=_TICK_FONTSIZE)
+    ax.set_xticklabels([fam_label.get(c, c) for c in pivot.columns], rotation=45, ha="right",
+                        fontsize=_TICK_FONTSIZE)
     ax.set_yticks(range(len(pivot.index)))
     ax.set_yticklabels(pivot.index, fontsize=_TICK_FONTSIZE)
     for i in range(len(pivot.index)):
@@ -2148,7 +2414,7 @@ def _make_scatter(df: pd.DataFrame, div_id: str):
         return None
     colors = d["flags"].apply(lambda f: "#d62728" if f else "#2ca02c")
     fig = go.Figure(go.Scatter(
-        x=d[conf_col], y=d["pIC50"], mode="markers+text", text=d["target_id"],
+        x=d[conf_col], y=d["pIC50"], mode="markers+text", text=d["display_name"],
         textposition="top center", textfont=dict(size=_ANNOTATION_FONTSIZE),
         marker=dict(color=colors, size=8),
     ))
@@ -2161,7 +2427,7 @@ def _make_interaction_count_chart(df: pd.DataFrame, div_id: str):
     count_cols = [c for c in df.columns if c.startswith("plip_") and c.endswith("_count")]
     if not count_cols:
         return None
-    d = df[["target_id"] + count_cols].fillna(0)
+    d = df[["display_name"] + count_cols].fillna(0)
     if d[count_cols].to_numpy().sum() == 0:
         return None
     n = len(d)
@@ -2171,7 +2437,7 @@ def _make_interaction_count_chart(df: pd.DataFrame, div_id: str):
         label = col[len("plip_"):-len("_count")]
         fig.add_trace(go.Bar(x=x, y=d[col].tolist(), width=_BAR_WIDTH, name=label))
     fig.update_layout(barmode="stack", legend=dict(font=dict(size=_LEGEND_FONTSIZE)))
-    fig.update_xaxes(tickmode="array", tickvals=x, ticktext=d["target_id"].tolist(), tickangle=-75,
+    fig.update_xaxes(tickmode="array", tickvals=x, ticktext=d["display_name"].tolist(), tickangle=-75,
                       tickfont=dict(size=_TICK_FONTSIZE), range=[-0.75, max(n - 0.25, _BAR_MIN_SLOTS - 0.75)])
     fig.update_yaxes(title_text="interactions", title_font=dict(size=_AXIS_LABEL_FONTSIZE), tickfont=dict(size=_TICK_FONTSIZE))
     return _plotly_to_div(fig, div_id)
@@ -2189,6 +2455,7 @@ def _make_fingerprint_heatmaps(df: pd.DataFrame, interactions_df) -> list:
         return []
     target_meta = df.set_index("target_id")[["family_id", "ligand_id"]]
     merged = interactions_df.merge(target_meta, left_on="target_id", right_index=True, how="left")
+    fam_label = _family_label_map(df)
 
     results = []
     for family_id, fam_df in merged.groupby("family_id"):
@@ -2223,7 +2490,7 @@ def _make_fingerprint_heatmaps(df: pd.DataFrame, interactions_df) -> list:
         fig.update_layout(legend=dict(font=dict(size=_LEGEND_FONTSIZE)))
         fig.update_xaxes(tickangle=-90, tickfont=dict(size=_TICK_FONTSIZE))
         fig.update_yaxes(tickfont=dict(size=_TICK_FONTSIZE), autorange="reversed")
-        results.append((family_id, _plotly_to_div(fig, div_id)))
+        results.append((fam_label.get(family_id, family_id), _plotly_to_div(fig, div_id)))
     return results
 
 
@@ -2753,6 +3020,17 @@ tr:nth-child(even) { background: var(--md-bg-alt); }
 .full-table th.ft-group { text-align: center; background: var(--md-bg-alt); }
 .full-table td:not(.ft-num), .full-table th:not(.ft-group):not(.ft-num) { text-align: left; white-space: normal; }
 .full-table th.ft-group-start, .full-table td.ft-group-start { border-left: 2px solid var(--md-primary); }
+.full-table tr.row-group-start td { border-top: 2px solid var(--md-primary); }
+.full-table th.ft-flags, .full-table td.ft-flags { text-align: center; }
+.flag-ok, .flag-warn, .flag-bad { cursor: default; }
+.cell-na { color: var(--md-text-muted); font-style: italic; }
+.summary-table-footer { display: flex; flex-wrap: wrap; justify-content: space-between;
+  align-items: center; gap: 12px; }
+.summary-table-footer p { margin: 0; }
+.summary-legend { display: flex; flex-wrap: wrap; gap: 4px 14px; align-items: center;
+  font-size: 12px; color: var(--md-text-muted); }
+.legend-title { font-weight: 600; color: var(--md-text); }
+.legend-item { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
 .md-footer { text-align: center; padding: 24px; color: var(--md-text-muted); font-size: 13px; }
 .md-footer a { color: var(--md-primary); text-decoration: none; }
 .lig-grid-legend { display: flex; flex-wrap: wrap; gap: 6px 18px; margin-bottom: 14px; font-size: 12px; color: var(--md-text-muted); }
@@ -2866,6 +3144,32 @@ def _partner_display_id(partner_id) -> str:
     return partner_id if isinstance(partner_id, str) else "/".join(partner_id)
 
 
+def _family_display_name(fam: object) -> str:
+    """Human-readable family-level label: {group}_{partners} (partners omitted when
+    there are none), e.g. "5HT2A_GNAQ+GNB1+GNG2" or "5HT2A". Used everywhere a whole
+    family (not a specific target) needs one label -- e.g. the residue-interaction
+    fingerprint card title and the selectivity pivot's column headers -- instead of the
+    internal per-variant family id (e.g. "H2ANG") BoltzMaker uses to keep with/without-
+    partner and apo variants of the same receptor as distinct families under the hood.
+    """
+    if fam is None:
+        return "?"
+    group = fam.group if fam.group else fam.id
+    if fam.partners:
+        return f"{group}_{'+'.join(_partner_display_id(p) for p in fam.partners)}"
+    return group
+
+
+def _target_display_name(fam: object, ligand_id: object) -> str:
+    """Human-readable, still-unique-per-target label: {group}_{partners}_{ligand-or-apo}
+    -- e.g. "5HT2A_GNAQ+GNB1+GNG2_RISP", "5HT2A_RISP" (no partner), "5HT2A_apo" (no
+    ligand). Used everywhere a single target needs one display string (chart tick
+    labels/legends, card titles, the campaign-summary target list) instead of the
+    internal disambiguation stem (e.g. "H2ANG_RISP") BoltzMaker uses internally.
+    """
+    return f"{_family_display_name(fam)}_{ligand_id if ligand_id else 'apo'}"
+
+
 def _build_campaign_summary(campaign: Campaign, campaign_dir: Path) -> list:
     # Three columns: Field/Value stay short and scannable, Details carries everything
     # that would otherwise clutter Value -- ids, lengths, pointers to other cards, and a
@@ -2890,7 +3194,7 @@ def _build_campaign_summary(campaign: Campaign, campaign_dir: Path) -> list:
     lig_details = "; ".join(f"{l.id} ({'SMILES' if l.smiles else f'CCD {l.ccd}'})" for l in campaign.ligands)
     rows.append(("Ligands", str(len(campaign.ligands)), lig_details))
 
-    target_stems = ", ".join(f"{fam.id}_{lig.id}" for fam, lig in targets)
+    target_stems = ", ".join(_target_display_name(fam, lig.id if lig is not None else None) for fam, lig in targets)
     rows.append(("Targets (protein x ligand)", str(len(targets)), target_stems))
 
     aff_detail = ("pIC50 predicted for every target" if campaign.settings.predict_affinity
@@ -2952,29 +3256,137 @@ _FULL_TABLE_HIDE_PATTERNS = [
     r".*_path$", r"^plip_status$",
     r"^affinity_pred_value\d*$", r"^affinity_probability_binary[12]$",
     r"^pIC50_[12]$", r"^pIC50_ensemble_mean$",
+    r"^family_group$",  # substituted in for family_id's column slot below, not its own entry
+    r"^display_name$",  # composed {group}_{partners}_{ligand} label used in charts/titles,
+                          # redundant here since Target/Partner/Ligand are already separate columns
 ]
 
 _FULL_TABLE_RENAME = {
-    "family_id": "Target", "ligand_id": "Ligand", "flags": "Flags",
-    "confidence_score": "Score", "ptm": "pTM", "iptm": "ipTM",
+    "family_id": "Target", "family_group": "Target", "partner_ids": "Partner", "ligand_id": "Ligand",
+    "flags": "Summary", "confidence_score": "Score", "ptm": "pTM", "iptm": "ipTM",
     "ligand_iptm": "Lig ipTM", "protein_iptm": "PPI ipTM",
     "complex_plddt": "pLDDT", "pIC50": "pIC50", "pIC50_ensemble_std": "pIC50 SD",
     "affinity_probability_binary": "Binder p", "cif_file": "CIF",
 }
 _FULL_TABLE_GROUPS = {
-    "family_id": "Identity", "ligand_id": "Identity", "flags": "Identity",
+    "family_id": "Identity", "family_group": "Identity", "partner_ids": "Identity",
+    "ligand_id": "Identity", "flags": "Identity",
     "confidence_score": "Confidence", "ptm": "Confidence", "iptm": "Confidence",
     "ligand_iptm": "Confidence", "protein_iptm": "Confidence", "complex_plddt": "Confidence",
     "pIC50": "Affinity", "affinity_probability_binary": "Affinity",
     "cif_file": "Structure",
 }
 _FULL_TABLE_GROUP_ORDER = ["Identity", "Confidence", "Affinity", "Interactions", "Structure", "Other"]
-_FULL_TABLE_TEXT_COLS = {"family_id", "ligand_id", "flags"}
+_FULL_TABLE_TEXT_COLS = {"family_id", "family_group", "partner_ids", "ligand_id", "flags"}
 _PLIP_COUNT_LABELS = {
     "hydrogen_bonds": "H-bond", "hydrophobic": "Phobic", "pi_stacks": "π-stack",
     "salt_bridges": "Salt", "pi_cation": "π-cation", "halogen_bonds": "Halogen",
     "water_bridges": "Water",
 }
+
+# Columns that mean "no interface exists" / "no ligand to score" rather than a genuine
+# poor result whenever the row is a ligand-free (apo) target -- shown as an explicit
+# N/A (see cell_html) instead of a blank cell or a misleading 0.00.
+_APO_NA_COLS = {"ligand_id", "iptm", "ligand_iptm", "protein_iptm"}
+
+_FLAG_ICON_WARN = "&#9888;&#65039;"  # amber warning triangle -- used for advisories the two icons below don't otherwise show
+_FLAG_ICON_BAD = "&#10060;"  # red cross -- prediction never completed, nothing to score
+
+# Emoji glyphs render pre-coloured by the OS/font and can't be recoloured via CSS, so the
+# bullseye (affinity) and shield (confidence) icons are small inline SVGs with
+# fill/stroke="currentColor", tinted per-tier via a wrapping <span style="color:...">.
+_BULLSEYE_SVG = ("<svg width='14' height='14' viewBox='0 0 24 24' fill='none' "
+                 "xmlns='http://www.w3.org/2000/svg' aria-hidden='true'>"
+                 "<circle cx='12' cy='12' r='9' stroke='currentColor' stroke-width='2'/>"
+                 "<circle cx='12' cy='12' r='5' stroke='currentColor' stroke-width='2'/>"
+                 "<circle cx='12' cy='12' r='1.5' fill='currentColor'/></svg>")
+_SHIELD_SVG = ("<svg width='14' height='14' viewBox='0 0 24 24' fill='currentColor' "
+               "xmlns='http://www.w3.org/2000/svg' aria-hidden='true'>"
+               "<path d='M12 2 L20 5 V11 C20 16.5 16.5 20.8 12 22 C7.5 20.8 4 16.5 4 11 V5 Z'/></svg>")
+
+_TIER_GREEN = "#00d084"
+_TIER_AMBER = "#fcb900"
+_TIER_RED = "#d62728"
+
+# Boltz's own docs (docs/prediction.md) define confidence_score/ptm/plddt as [0, 1],
+# higher = better, and affinity_probability_binary as a [0, 1] binder-probability with
+# 0.5 as the natural binder/non-binder decision boundary -- but publish no tri-colour
+# bands. These reuse BoltzMaker's own existing LOW_CONFIDENCE_THRESHOLD (0.5) as the
+# confidence red/amber boundary (so the shield agrees with the LOW_CONFIDENCE flag it's
+# partly replacing) and a symmetric +/-0.2 buffer around Boltz's 0.5 binder boundary for
+# affinity, rather than inventing unrelated cutoffs.
+CONFIDENCE_GREEN_THRESHOLD = 0.7
+AFFINITY_GREEN_THRESHOLD = 0.7
+AFFINITY_RED_THRESHOLD = 0.3
+
+
+def _confidence_tier(score) -> tuple:
+    if pd.isna(score):
+        return None, "confidence score unavailable"
+    if score >= CONFIDENCE_GREEN_THRESHOLD:
+        return _TIER_GREEN, f"confidence_score {score:.2f} -- high"
+    if score >= LOW_CONFIDENCE_THRESHOLD:
+        return _TIER_AMBER, f"confidence_score {score:.2f} -- moderate"
+    return _TIER_RED, f"confidence_score {score:.2f} -- low"
+
+
+def _affinity_tier(prob) -> tuple:
+    if pd.isna(prob):
+        return None, "not applicable -- ligand-free (apo) target"
+    if prob >= AFFINITY_GREEN_THRESHOLD:
+        return _TIER_GREEN, f"binder probability {prob:.2f} -- likely binder"
+    if prob >= AFFINITY_RED_THRESHOLD:
+        return _TIER_AMBER, f"binder probability {prob:.2f} -- uncertain"
+    return _TIER_RED, f"binder probability {prob:.2f} -- likely non-binder/decoy"
+
+
+def _summary_cell_html(row) -> str:
+    flags_val = row.get("flags")
+    flags_str = "" if pd.isna(flags_val) else str(flags_val)
+    flag_list = [f for f in flags_str.split(";") if f]
+
+    if "MISSING_OUTPUTS" in flag_list:
+        title = html.escape(_flags_to_note(flags_str), quote=True)
+        return f"<span class='flag-bad' title='{title}'>{_FLAG_ICON_BAD}</span>"
+
+    aff_color, aff_title = _affinity_tier(row.get("affinity_probability_binary"))
+    conf_color, conf_title = _confidence_tier(row.get("confidence_score"))
+
+    # Advisories not already obvious from the two tier colours alone (a confidence/
+    # affinity mismatch *is* visually apparent as contrasting colours; low-pocket-pLDDT
+    # is a different, pocket-local metric neither icon otherwise represents).
+    other_flags = [f for f in flag_list if f != "LOW_CONFIDENCE"]
+    if other_flags:
+        note = " -- " + _flags_to_note(";".join(other_flags))
+        aff_title += note
+        conf_title += note
+
+    def icon(svg: str, color: object, title: str) -> str:
+        if color is None:
+            return f"<span class='cell-na' title='{html.escape(title, quote=True)}'>N/A</span>"
+        return f"<span style='color:{color}' title='{html.escape(title, quote=True)}'>{svg}</span>"
+
+    cell = f"{icon(_BULLSEYE_SVG, aff_color, aff_title)} {icon(_SHIELD_SVG, conf_color, conf_title)}"
+    if "LOW_POCKET_PLDDT" in flag_list:
+        cell += (f" <span class='flag-warn' title='{html.escape(_FLAG_TEMPLATES['LOW_POCKET_PLDDT'], quote=True)}'>"
+                 f"{_FLAG_ICON_WARN}</span>")
+    return cell
+
+
+def _build_summary_legend_html() -> str:
+    def swatch(svg: str, color: str, label: str) -> str:
+        return f"<span class='legend-item'><span style='color:{color}'>{svg}</span> {label}</span>"
+
+    items = [
+        swatch(_BULLSEYE_SVG, _TIER_GREEN, f"Likely binder (p &ge; {AFFINITY_GREEN_THRESHOLD:.1f})"),
+        swatch(_BULLSEYE_SVG, _TIER_AMBER, f"Uncertain ({AFFINITY_RED_THRESHOLD:.1f}-{AFFINITY_GREEN_THRESHOLD:.1f})"),
+        swatch(_BULLSEYE_SVG, _TIER_RED, f"Likely non-binder (p &lt; {AFFINITY_RED_THRESHOLD:.1f})"),
+        swatch(_SHIELD_SVG, _TIER_GREEN, f"High confidence (&ge; {CONFIDENCE_GREEN_THRESHOLD:.1f})"),
+        swatch(_SHIELD_SVG, _TIER_AMBER, f"Moderate confidence ({LOW_CONFIDENCE_THRESHOLD:.1f}-{CONFIDENCE_GREEN_THRESHOLD:.1f})"),
+        swatch(_SHIELD_SVG, _TIER_RED, f"Low confidence (&lt; {LOW_CONFIDENCE_THRESHOLD:.1f})"),
+    ]
+    return (f"<div class='summary-legend'><span class='legend-title'>&#127919; affinity "
+            f"&middot; &#128737;&#65039; confidence:</span>{''.join(items)}</div>")
 
 
 def _full_table_label(col: str) -> str:
@@ -3004,23 +3416,32 @@ def _resolve_summary_table_columns(df: pd.DataFrame) -> list:
     cols = [c for c in df.columns if not hidden.match(c)]
 
     # Conditional-by-content, not by config: a column that's empty/zero for every row in
-    # *this* campaign (no partner chain -> protein_iptm always 0; no flags raised at all)
-    # is dropped, rather than hardcoding "only show for multi-chain campaigns".
+    # *this* campaign (no partner chain -> protein_iptm always 0) is dropped, rather than
+    # hardcoding "only show for multi-chain campaigns". Flags is the one exception: it's
+    # always kept even when nothing was ever flagged, since the column now renders a
+    # per-row confidence/affinity icon pair unconditionally -- see _summary_cell_html.
     kept = []
     for c in cols:
         if c == "pIC50_ensemble_std":
             continue  # merged into the pIC50 cell/column as "± SD", never its own column
         s = df[c]
         if c == "flags":
-            if not s.fillna("").astype(str).str.strip().any():
-                continue
+            pass
         elif c == "protein_iptm":
             if s.fillna(0).eq(0).all():
+                continue
+        elif c == "partner_ids":
+            if s.fillna("").astype(str).str.strip().eq("").all():
                 continue
         elif pd.api.types.is_numeric_dtype(s) and s.isna().all():
             continue
         kept.append(c)
     cols = kept
+    # family_group substitutes for family_id's column slot (same "Target" header/position)
+    # so the dashboard shows the shared receptor name (e.g. "5HT2A") rather than the
+    # internal per-variant family id (e.g. "H2ANG", "H2AAP") BoltzMaker uses to keep
+    # with/without-partner and apo variants as distinct targets under the hood.
+    cols = ["family_group" if c == "family_id" else c for c in cols]
     cols.sort(key=lambda c: _FULL_TABLE_GROUP_ORDER.index(_full_table_group(c)))
     return cols
 
@@ -3059,7 +3480,8 @@ def _build_full_table_html(df: pd.DataFrame) -> str:
     def column_header_row() -> str:
         cells, prev = [], None
         for c, g in zip(cols, groups):
-            classes = ([] if g == prev else ["ft-group-start"]) + ([] if c in _FULL_TABLE_TEXT_COLS else ["ft-num"])
+            classes = ([] if g == prev else ["ft-group-start"])
+            classes += ["ft-flags"] if c == "flags" else ([] if c in _FULL_TABLE_TEXT_COLS else ["ft-num"])
             cells.append(f"<th class='{' '.join(classes)}'>{_full_table_label(c)}</th>")
             prev = g
         return f"<tr>{''.join(cells)}</tr>"
@@ -3068,6 +3490,12 @@ def _build_full_table_html(df: pd.DataFrame) -> str:
         v = row[c]
         if c == "cif_file":
             return "" if pd.isna(v) else f"<a href='boltz_cif/{v}'>CIF</a>"
+        if c == "flags":
+            return _summary_cell_html(row)
+        is_apo = pd.isna(row.get("ligand_id"))
+        if is_apo and (c in _APO_NA_COLS or _full_table_group(c) == "Affinity"
+                       or (c.startswith("plip_") and c.endswith("_count"))):
+            return "<span class='cell-na' title='not applicable -- ligand-free (apo) target'>N/A</span>"
         if c in _FULL_TABLE_TEXT_COLS:
             return "" if pd.isna(v) else str(v)
         if pd.isna(v):
@@ -3077,15 +3505,26 @@ def _build_full_table_html(df: pd.DataFrame) -> str:
             text += f" ± {row['pIC50_ensemble_std']:.2f}"
         return text
 
-    def body_row(row) -> str:
+    def body_row(row, is_new_family_group: bool) -> str:
         cells, prev = [], None
         for c, g in zip(cols, groups):
-            classes = ([] if g == prev else ["ft-group-start"]) + ([] if c in _FULL_TABLE_TEXT_COLS else ["ft-num"])
+            classes = ([] if g == prev else ["ft-group-start"])
+            classes += ["ft-flags"] if c == "flags" else ([] if c in _FULL_TABLE_TEXT_COLS else ["ft-num"])
             cells.append(f"<td class='{' '.join(classes)}'>{cell_html(row, c)}</td>")
             prev = g
-        return f"<tr>{''.join(cells)}</tr>"
+        tr_class = " class='row-group-start'" if is_new_family_group else ""
+        return f"<tr{tr_class}>{''.join(cells)}</tr>"
 
-    body = "".join(body_row(row) for _, row in df.iterrows())
+    # Rows already come out of the manifest grouped by family (each family's targets are
+    # contiguous), so this only needs to notice when family_group changes between
+    # consecutive rows -- no re-sorting -- and mark that row with a top border, the same
+    # blue divider already used between column groups (border-left, see .ft-group-start).
+    body_parts, prev_group = [], None
+    for _, row in df.iterrows():
+        group = row.get("family_group")
+        body_parts.append(body_row(row, prev_group is not None and group != prev_group))
+        prev_group = group
+    body = "".join(body_parts)
     return (f"<table class='full-table'><thead>{group_header_row()}{column_header_row()}</thead>"
             f"<tbody>{body}</tbody></table>")
 
@@ -3100,8 +3539,9 @@ def write_html(df: pd.DataFrame, path: Path, campaign_dir: Path, campaign: Campa
     write_summary_csv(df, summary_view_path)
     csv_links = ("<p><a href='boltz_summary.csv'>Download full CSV</a> &middot; "
                  f"<a href='{summary_view_path.name}'>Download summary CSV</a></p>")
+    footer = f"<div class='summary-table-footer'>{csv_links}{_build_summary_legend_html()}</div>"
     parts.append(f"<div class='md-card table-card'><h2>Summary table</h2>"
-                 f"{_build_full_table_html(df)}{csv_links}</div>")
+                 f"{_build_full_table_html(df)}{footer}</div>")
 
     lig_notes = _ligand_chemistry_notes(campaign)
     if lig_notes:
@@ -3162,6 +3602,7 @@ def write_html(df: pd.DataFrame, path: Path, campaign_dir: Path, campaign: Campa
             if not png_path.exists():
                 continue
             target_id = row["target_id"]
+            display_name = row.get("display_name", target_id)
             b64 = base64.b64encode(png_path.read_bytes()).decode("ascii")
             img_download = f"boltz_binding_site_{target_id}.png"
             image_links = [f"<a href='data:image/png;base64,{b64}' download='{img_download}'>Download image</a>"]
@@ -3228,7 +3669,7 @@ def write_html(df: pd.DataFrame, path: Path, campaign_dir: Path, campaign: Campa
                                          f"download='boltz_contacts_{target_id}.csv'>Download CSV</a></p>")
             layout_cls = "md-side-by-side md-side-3col" if viewer_col else "md-side-by-side"
             session_cards.append(
-                f"<div class='md-card'><h2>{target_id}: binding site</h2>"
+                f"<div class='md-card'><h2>{display_name}: binding site</h2>"
                 f"<div class='{layout_cls}'>"
                 f"{viewer_col}"
                 f"{image_col}"
@@ -3244,26 +3685,38 @@ def write_html(df: pd.DataFrame, path: Path, campaign_dir: Path, campaign: Campa
                 parts.append(f"<script>{''.join(viewer_scripts)}</script>")
 
     sse_csv = campaign_dir / "boltz_sse_comparison.csv"
-    if sse_csv.exists():
-        # Purely additive: compare-sse is a separate, explicitly opt-in command, so this
-        # card only appears when its output already exists on disk (the same pattern
-        # every other optional card here already follows -- e.g. the PLIP session cards
-        # above only appear when boltz_plip/ data exists). analyze() itself never runs
-        # compare-sse; re-run it manually, then re-run analyze, to refresh this card.
-        from sse_comparison.report import _make_sse_heatmap, _make_sse_shift_chart
-        sse_df = pd.read_csv(sse_csv)
-        sse_table_html = sse_df.drop(columns=["flagged_residues"], errors="ignore").to_html(index=False, na_rep="")
-        parts.append(f"<div class='md-card table-card'><h2>Secondary structure shifts (apo vs holo)</h2>"
-                     f"{sse_table_html}<p><a href='boltz_sse_comparison.csv'>Download CSV</a></p></div>")
-        sse_charts = []
-        sse_bar = _make_sse_shift_chart(sse_df, "chart-sse-shift")
-        if sse_bar:
-            sse_charts.append(f"<div class='md-card'><h2>Per-motif Ca RMSD</h2>{sse_bar}</div>")
-        sse_heat = _make_sse_heatmap(sse_df, "chart-sse-heatmap")
-        if sse_heat:
-            sse_charts.append(f"<div class='md-card md-card-span2'><h2>Motif x target RMSD</h2>{sse_heat}</div>")
-        if sse_charts:
-            parts.append(f"<div class='md-chart-grid'>{''.join(sse_charts)}</div>")
+    sse_status_path = campaign_dir / "boltz_sse_family_status.json"
+    if sse_csv.exists() or sse_status_path.exists():
+        # Core, not optional: `analyze`/`all` run compare-sse automatically (see main()),
+        # so this card reflects whatever it found -- including families with no 'Apo
+        # structure:' configured at all, reported rather than silently omitted. Reads
+        # from disk (rather than taking a df/status param) so a standalone `compare-sse`
+        # re-run followed by a plain `analyze` still picks up the latest result, matching
+        # how the PLIP interaction cards above already work.
+        from sse_comparison.report import (_make_sse_heatmap, _make_sse_shift_chart,
+                                            build_family_status_html, build_sse_table_html,
+                                            build_summary_stats_html, compute_summary_stats)
+        sse_df = pd.read_csv(sse_csv) if sse_csv.exists() else pd.DataFrame()
+        family_status = json.loads(sse_status_path.read_text()) if sse_status_path.exists() else {}
+
+        sse_intro = build_family_status_html(family_status) + build_summary_stats_html(compute_summary_stats(sse_df))
+        card_html = f"<div class='md-card table-card'><h2>Secondary structure shifts (apo vs holo)</h2>{sse_intro}"
+        if not sse_df.empty:
+            card_html += (f"{build_sse_table_html(sse_df)}"
+                          f"<p><a href='boltz_sse_comparison.csv'>Download CSV</a></p>")
+        card_html += "</div>"
+        parts.append(card_html)
+
+        if not sse_df.empty:
+            sse_charts = []
+            sse_bar = _make_sse_shift_chart(sse_df, "chart-sse-shift")
+            if sse_bar:
+                sse_charts.append(f"<div class='md-card'><h2>Per-motif Ca RMSD</h2>{sse_bar}</div>")
+            sse_heat = _make_sse_heatmap(sse_df, "chart-sse-heatmap")
+            if sse_heat:
+                sse_charts.append(f"<div class='md-card'><h2>Motif x target RMSD</h2>{sse_heat}</div>")
+            if sse_charts:
+                parts.append(f"<div class='md-chart-grid'>{''.join(sse_charts)}</div>")
 
     if PLOTLY_JS_PATH.exists():
         plotly_script = f"<script>{PLOTLY_JS_PATH.read_text()}</script>"
@@ -3340,6 +3793,10 @@ def _build_argparser() -> argparse.ArgumentParser:
                         "each worker can duplicate large in-memory structures for big complexes)")
         sp.add_argument("--accelerator", choices=["auto", "gpu", "cpu"], default="auto")
         sp.add_argument("--limit", type=int, default=None, help="cap how many pending targets `run` submits")
+        sp.add_argument("--max-retries", type=int, default=2, help="if a target doesn't complete (e.g. an "
+                        "OOM crash), automatically retry it up to this many times, in isolation one target "
+                        "at a time -- lets a multi-hour campaign recover unattended instead of stopping on "
+                        "a transient memory failure (0 to disable and match the old fail-once behavior)")
         sp.add_argument("--strict", action="store_true", help="promote preflight WARN to FAIL")
         sp.add_argument("-y", "--yes", action="store_true")
         sp.add_argument("--mps-watermark", type=float, default=1.0, help="PYTORCH_MPS_HIGH_WATERMARK_RATIO -- "
@@ -3352,6 +3809,11 @@ def _build_argparser() -> argparse.ArgumentParser:
                         "(default: Boltz's own default of 3)")
         sp.add_argument("--sampling-steps", type=int, default=None, help="boltz --sampling_steps passthrough "
                         "(default: Boltz's own default of 200)")
+        sp.add_argument("--diffusion-samples", type=int, default=1, help="boltz --diffusion_samples "
+                        "passthrough -- how many independent structure samples to predict per target "
+                        "(default 1; each additional sample costs roughly proportional diffusion time). "
+                        "Boltz writes {stem}_model_0.cif .. {stem}_model_{N-1}.cif; BoltzMaker's own "
+                        "analyze/compare-sse only ever look at model_0)")
         sp.add_argument("--diffusion-samples-affinity", type=int, default=None, help="boltz "
                         "--diffusion_samples_affinity passthrough (default: Boltz's own default of 5)")
         sp.add_argument("--sampling-steps-affinity", type=int, default=None, help="boltz "
@@ -3362,6 +3824,8 @@ def _build_argparser() -> argparse.ArgumentParser:
                         "total residue/atom count exceeds this (empirical heuristic, see preflight check)")
         sp.add_argument("--skip-interactions", action="store_true", help="skip cif2plip protein-ligand "
                         "interaction analysis during `analyze`, even if `setup-plip` has been run")
+        sp.add_argument("--skip-sse", action="store_true", help="skip compare-sse apo-vs-holo secondary-"
+                        "structure analysis during `analyze`, even if a family has 'Apo structure:' set")
     return p
 
 
@@ -3401,7 +3865,6 @@ def main() -> None:
     if not output_dir.is_absolute():
         output_dir = (campaign_dir / output_dir).resolve()
     out_dir = args.out_dir if args.out_dir else (campaign_dir / "boltz_output")
-    need_affinity = campaign.settings.predict_affinity
 
     if args.command in ("generate", "all"):
         manifest = generate_yamls(campaign, output_dir)
@@ -3418,17 +3881,25 @@ def main() -> None:
 
     if args.command in ("run", "all"):
         accelerator = resolve_accelerator(args.accelerator)
-        run_boltz(output_dir, out_dir, manifest, args.workers, accelerator, need_affinity, campaign_dir,
+        run_boltz(output_dir, out_dir, manifest, args.workers, accelerator, campaign_dir,
                   limit=args.limit, mps_watermark=args.mps_watermark, max_parallel_samples=args.max_parallel_samples,
                   recycling_steps=args.recycling_steps, sampling_steps=args.sampling_steps,
+                  diffusion_samples=args.diffusion_samples,
                   diffusion_samples_affinity=args.diffusion_samples_affinity,
-                  sampling_steps_affinity=args.sampling_steps_affinity, max_msa_seqs=args.max_msa_seqs)
+                  sampling_steps_affinity=args.sampling_steps_affinity, max_msa_seqs=args.max_msa_seqs,
+                  max_retries=args.max_retries)
 
     if args.command in ("analyze", "all"):
-        df = analyze(output_dir, out_dir, campaign_dir, need_affinity, campaign,
+        df = analyze(output_dir, out_dir, campaign_dir, campaign,
                      skip_interactions=args.skip_interactions)
         write_csv(df, campaign_dir / "boltz_summary.csv")
         write_xlsx(df, campaign_dir / "boltz_summary.xlsx")
+        if not args.skip_sse:
+            # Core, not optional: every family always gets a status (even "no Apo
+            # structure: configured"), written to boltz_sse_family_status.json and
+            # picked up by write_html below -- never aborts analyze over this.
+            from sse_comparison.cli import run_compare_sse
+            run_compare_sse(campaign, campaign_dir, strict=False)
         write_html(df, campaign_dir / "boltz_dashboard.html", campaign_dir, campaign)
         print(f"BoltzMaker: analysis written to {campaign_dir} "
               "(boltz_summary.csv / .xlsx / boltz_summary_view.csv / boltz_dashboard.html)")

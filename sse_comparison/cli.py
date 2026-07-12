@@ -1,20 +1,23 @@
 """compare-sse orchestration: resolves which families/targets to compare, runs the
 annotate -> superpose -> metrics -> report pipeline once per target, and writes the
-campaign-level CSV/HTML/.pml outputs. Called from BoltzMaker.py's CLI dispatch.
+campaign-level CSV/HTML/.pml outputs, plus a small family-coverage JSON sidecar.
+Called both from BoltzMaker.py's `compare-sse` CLI dispatch and, since compare-sse is
+now a core part of the pipeline, automatically from `analyze`/`all` (non-strict).
 """
 
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from BoltzMaker import _expand_targets  # noqa: E402
+from BoltzMaker import _expand_targets, _family_display_name, _target_display_name  # noqa: E402
 
 from .alignment import InsufficientReferenceRegionError, build_comparison_frame
 from .annotators.gpcrdb import GPCRdbAnnotator
 from .annotators.klifs import KLIFSAnnotator
 from .annotators.pfam import PfamFallbackAnnotator
 from .metrics import classify_state, compute_motif_row
-from .report import build_metrics_dataframe, write_csv, write_pymol_script, write_sse_html
+from .report import (build_metrics_dataframe, write_csv, write_family_status,
+                      write_pymol_script, write_sse_html)
 from .structures import load_structure_for_comparison
 
 _KINASE_DFG_ASP = "DFG"
@@ -53,26 +56,38 @@ def run_compare_sse(campaign: object, campaign_dir: Path, family_id: object = No
                      target_stem: object = None, out_dir: object = None,
                      phi_psi_threshold: float = 30.0, dfg_distance_threshold: float = 8.0,
                      alphac_distance_threshold: float = 10.0, render_pymol: bool = True,
-                     refresh_cache: bool = False) -> object:
+                     refresh_cache: bool = False, strict: bool = True) -> dict:
+    """Returns {"df": DataFrame, "family_status": dict}.
+
+    strict=True (the standalone `compare-sse` command's default): an explicit --family/
+    --target that matches nothing, or a campaign where literally no family has anything
+    comparable, raises SystemExit. strict=False (used when analyze/all auto-run this):
+    never raises -- every family always gets a status entry, always written to
+    boltz_sse_family_status.json, and the dashboard reports it instead of the whole
+    pipeline aborting over an optional, additive feature.
+    """
     out_dir = Path(out_dir) if out_dir else campaign_dir
 
-    families = ([f for f in campaign.families if f.id == family_id] if family_id
-                else [f for f in campaign.families if f.apo_structure])
-    if family_id is not None and not families:
-        raise SystemExit(f"BoltzMaker: no protein family '{family_id}' found")
-    if not families:
-        raise SystemExit("BoltzMaker: no protein family in this campaign has an 'Apo structure:' "
-                          "set -- nothing to compare.")
+    all_families = campaign.families if family_id is None else [f for f in campaign.families if f.id == family_id]
+    if family_id is not None and not all_families:
+        msg = f"no protein family '{family_id}' found"
+        if strict:
+            raise SystemExit(f"BoltzMaker: {msg}")
+        print(f"BoltzMaker: WARNING: compare-sse: {msg}")
+        return {"df": build_metrics_dataframe([]), "family_status": {}}
 
     all_targets = _expand_targets(campaign)
-    rows, session_specs = [], []
+    rows, session_specs, family_status = [], [], {}
 
-    for fam in families:
+    for fam in all_families:
         if not fam.apo_structure:
-            print(f"BoltzMaker: WARNING: family '{fam.id}' has no 'Apo structure:' -- skipped")
+            family_status[fam.id] = {"status": "no_apo_structure", "display": _family_display_name(fam),
+                                      "message": "No 'Apo structure:' configured for this family"}
             continue
         apo_path = (campaign_dir / fam.apo_structure).resolve()
         if not apo_path.exists():
+            family_status[fam.id] = {"status": "apo_not_found", "display": _family_display_name(fam),
+                                      "message": f"Apo structure file not found: {apo_path}"}
             print(f"BoltzMaker: WARNING: apo structure '{apo_path}' not found for family "
                   f"'{fam.id}' -- skipped")
             continue
@@ -89,6 +104,9 @@ def run_compare_sse(campaign: object, campaign_dir: Path, family_id: object = No
                 motifs, annotator_source = found, annotator.family_type
                 break
         if not motifs:
+            family_status[fam.id] = {"status": "annotation_failed", "display": _family_display_name(fam),
+                                      "message": "No motif annotation available (GPCRdb/KLIFS/PDBe all "
+                                                 "failed or don't apply to this sequence)"}
             print(f"BoltzMaker: WARNING: no motif annotation available for family '{fam.id}' -- "
                   f"superposition/metrics need at least a stable reference region, skipped")
             continue
@@ -97,14 +115,20 @@ def run_compare_sse(campaign: object, campaign_dir: Path, family_id: object = No
         if target_stem:
             fam_targets = [(f, lig) for f, lig in fam_targets if f"{f.id}_{lig.id}" == target_stem]
             if not fam_targets:
-                raise SystemExit(f"BoltzMaker: target '{target_stem}' not found for family '{fam.id}'")
+                msg = f"target '{target_stem}' not found for family '{fam.id}'"
+                if strict:
+                    raise SystemExit(f"BoltzMaker: {msg}")
+                family_status[fam.id] = {"status": "no_targets", "display": _family_display_name(fam),
+                                          "message": msg}
+                print(f"BoltzMaker: WARNING: {msg}")
+                continue
 
+        fam_row_count, fam_target_count, missing_holo = 0, 0, 0
         for fam2, lig in fam_targets:
             stem = f"{fam2.id}_{lig.id}"
             holo_path = campaign_dir / "boltz_cif" / f"{stem}_model_0.cif"
             if not holo_path.exists():
-                print(f"BoltzMaker: WARNING: {stem} has no predicted structure yet -- run "
-                      f"`analyze` first, skipped")
+                missing_holo += 1
                 continue
 
             try:
@@ -135,26 +159,40 @@ def run_compare_sse(campaign: object, campaign_dir: Path, family_id: object = No
                 row = compute_motif_row(frame, motif, phi_psi_threshold)
                 if not row:
                     continue
-                row.update(family_id=fam.id, target_stem=stem, ligand_id=lig.id,
+                row.update(family_id=fam.id, family_display=_family_display_name(fam),
+                           target_stem=stem, target_display=_target_display_name(fam, lig.id),
+                           ligand_id=lig.id,
                            annotator_source=annotator_source, dfg_state_apo=dfg_apo,
                            dfg_state_holo=dfg_holo, dfg_state_changed=dfg_changed,
                            alphac_state_apo=alphac_apo, alphac_state_holo=alphac_holo,
                            alphac_state_changed=alphac_changed, notes=None)
                 target_rows.append(row)
             rows.extend(target_rows)
+            fam_row_count += len(target_rows)
+            fam_target_count += 1
             session_specs.append((stem, apo_path, holo_path, apo.chain.name, holo.chain.name,
                                    motifs, target_rows))
             print(f"BoltzMaker: compare-sse {stem}: {len(target_rows)} motif(s), "
                   f"annotator={annotator_source}")
 
-    if not rows:
-        raise SystemExit("BoltzMaker: compare-sse produced no comparable targets -- nothing written.")
+        if fam_target_count:
+            family_status[fam.id] = {"status": "ok", "display": _family_display_name(fam),
+                                      "message": f"{fam_row_count} motif row(s) across {fam_target_count} "
+                                                 f"target(s), annotator={annotator_source}"}
+        elif missing_holo:
+            family_status[fam.id] = {"status": "no_predicted_structures", "display": _family_display_name(fam),
+                                      "message": "No predicted (holo) structures yet for this family's "
+                                                 "targets -- run `analyze`/`run` first"}
+        else:
+            family_status[fam.id] = {"status": "no_targets", "display": _family_display_name(fam),
+                                      "message": "No targets defined for this family"}
 
     df = build_metrics_dataframe(rows)
     out_dir.mkdir(parents=True, exist_ok=True)
     write_csv(df, out_dir / "boltz_sse_comparison.csv")
+    write_family_status(family_status, out_dir / "boltz_sse_family_status.json")
 
-    if render_pymol:
+    if render_pymol and session_specs:
         sessions_dir = out_dir / "boltz_sse_comparison_sessions"
         sessions_dir.mkdir(parents=True, exist_ok=True)
         for stem, apo_path, holo_path, apo_chain, holo_chain, motifs, target_rows in session_specs:
@@ -162,7 +200,15 @@ def run_compare_sse(campaign: object, campaign_dir: Path, family_id: object = No
                                 motifs, target_rows, sessions_dir / f"{stem}.pml")
         print(f"BoltzMaker: wrote {len(session_specs)} PyMOL session script(s) to {sessions_dir}")
 
-    write_sse_html(df, out_dir / "boltz_sse_comparison.html")
+    write_sse_html(df, out_dir / "boltz_sse_comparison.html", family_status)
     print(f"BoltzMaker: compare-sse wrote {out_dir / 'boltz_sse_comparison.csv'} and "
           f"{out_dir / 'boltz_sse_comparison.html'}")
-    return df
+
+    if not rows:
+        msg = "compare-sse produced no comparable targets"
+        status_path = out_dir / "boltz_sse_family_status.json"
+        if strict and family_id is None and target_stem is None:
+            raise SystemExit(f"BoltzMaker: {msg} -- see {status_path} for why.")
+        print(f"BoltzMaker: WARNING: {msg} -- see {status_path} for why.")
+
+    return {"df": df, "family_status": family_status}

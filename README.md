@@ -71,7 +71,7 @@ See [CHANGELOG.md](CHANGELOG.md) for what's changed recently, and
 | 2. Generate | `generate` | `boltz_yamls/*.yaml` + manifest |
 | 3. Preflight | `preflight` | PASS/WARN/FAIL: CLI, GPU/MPS, disk, iCloud, YAML/SMILES/chain-id/chemistry, memory |
 | 4. Predict | `run` | `boltz predict` -> `boltz_output/`, live progress + memory monitor, resumable |
-| 5. Analyze | `analyze` | `boltz_summary.csv`/`.xlsx`, `boltz_dashboard.html`, `boltz_cif/`, plus interaction files if `setup-plip` has run |
+| 5. Analyze | `analyze` | `boltz_summary.csv`/`.xlsx`, `boltz_dashboard.html`, `boltz_cif/`, plus interaction files if `setup-plip` has run, plus `boltz_sse_comparison.csv`/`.html` for any family with an `Apo structure:` set (see **compare-sse** below) |
 
 Each stage reads only the manifest + files the previous stage wrote, so any stage can be
 re-run on its own (`generate`, `preflight`, `run`, or `analyze` individually) without
@@ -129,14 +129,15 @@ Boltz-predicted structure). Every other `compare-sse` metric works without it.
 
 ## 🧪 Examples
 
-Three small, entirely public-domain campaigns in `examples/`, run any of them with
+Four entirely public-domain campaigns in `examples/`, run any of them with
 `python3 BoltzMaker.py all examples/<name>/boltz_input.md`:
 
 | Example | Demonstrates | Dashboard | Input |
 |---|---|---|---|
 | `t4_lysozyme` | One protein (T4 lysozyme L99A, UniProt P00720) + one ligand (benzene). No partners, no pocket_contacts. The minimal shape; smallest/fastest smoke test. | [boltz_dashboard.html](https://bellcheddar.github.io/BoltzMaker/examples/t4_lysozyme/boltz_dashboard.html) | [boltz_input.md](https://github.com/bellcheddar/BoltzMaker/blob/main/examples/t4_lysozyme/boltz_input.md) |
 | `egfr_covalent` | EGFR kinase domain (UniProt P00533) + a generic covalent fragment, linked via `bond_constraints` at Cys797. Demonstrates covalent-linkage modelling. | [boltz_dashboard.html](https://bellcheddar.github.io/BoltzMaker/examples/egfr_covalent/boltz_dashboard.html) | [boltz_input.md](https://github.com/bellcheddar/BoltzMaker/blob/main/examples/egfr_covalent/boltz_input.md) |
-| `adrb2_gs_panel` | Beta-2 adrenergic receptor (UniProt P07550) + Gs alpha partner (UniProt P63092) crossed with two ligands (agonist + antagonist), giving 2 targets. Demonstrates the family x partners x ligand cross-product. | [boltz_dashboard.html](https://bellcheddar.github.io/BoltzMaker/examples/adrb2_gs_panel/boltz_dashboard.html) | [boltz_input.md](https://github.com/bellcheddar/BoltzMaker/blob/main/examples/adrb2_gs_panel/boltz_input.md) |
+| `adrb2_gs_panel` | Beta-2 adrenergic receptor (UniProt P07550), agonist vs antagonist, as two separate `Protein:` blocks sharing one sequence rather than one family crossed with both ligands: the agonist target co-folds a Gs alpha partner (UniProt P63092), the antagonist target doesn't (Gs only forms a stable complex with the active, agonist-bound receptor in reality -- co-folding it with the antagonist too made Boltz predict a near-identical active-like fold for both, 0.38 Angstrom apart; splitting them out gets a real conformational difference, 1.28 Angstrom apart, TM6 shift roughly doubled for the agonist). Demonstrates `compare-sse` (see below) and why co-folded partners should match each ligand's real biology, not just get crossed with everything. | [boltz_dashboard.html](https://bellcheddar.github.io/BoltzMaker/examples/adrb2_gs_panel/boltz_dashboard.html) | [boltz_input.md](https://github.com/bellcheddar/BoltzMaker/blob/main/examples/adrb2_gs_panel/boltz_input.md) |
+| `5ht2_gq_panel` | Three serotonin receptors (5-HT2A/2B/2C, UniProt P28223/P41595/P28335), each with a real agonist/antagonist pair (Psilocin/Risperidone, LSD/Balovaptan, Lorcaserin/SB-242084), each predicted both with and without the Gq heterotrimer (GNAQ+GNB1+GNG2) co-folded -- a 3x2x2 panel, plus a native ligand-free (`Ligands: none`) apo target per receptor, used as each receptor's `compare-sse` reference since no genuinely apo experimental structure exists for any of the three (checked entity-by-entity across all 59 deposited structures). Demonstrates `Ligands: none`, a larger size-heterogeneous campaign in one manifest, Apple Silicon MPS support for large multi-chain complexes (see below), and `compare-sse` against a *predicted* rather than experimental apo reference -- TM6 centroid shift comes out consistently larger for the Gq-bound targets than their no-Gq counterparts across all three receptors, the expected activation signal (see [findings.md](https://github.com/bellcheddar/BoltzMaker/blob/main/examples/5ht2_gq_panel/findings.md) for the full statistical write-up). | [boltz_dashboard.html](https://bellcheddar.github.io/BoltzMaker/examples/5ht2_gq_panel/boltz_dashboard.html) | [boltz_input.md](https://github.com/bellcheddar/BoltzMaker/blob/main/examples/5ht2_gq_panel/boltz_input.md) |
 
 **Verified end-to-end** (`generate` -> `preflight` -> real `boltz predict` -> `analyze`,
 including cif2plip interaction analysis) on an Apple M1 Max, 64GB:
@@ -145,14 +146,29 @@ including cif2plip interaction analysis) on an Apple M1 Max, 64GB:
 |---|---|---|---|
 | `t4_lysozyme` | 1 | 3m 16s | confidence 0.98, pIC50 8.9, 7 hydrophobic contacts matching the known L99A cavity residues |
 | `egfr_covalent` | 1 | 5m 31s | confidence 0.92, covalent Cys797 SG-to-fragment bond confirmed at 1.75 Angstrom |
-| `adrb2_gs_panel` | 2 | 1h 28m 36s | confidence 0.79 / 0.80 |
+| `adrb2_gs_panel` | 2 | 1h 28m 36s (`ADRB2_ISO1`, agonist+Gs) + 25m 6s (`AR2NG_PRO1`, antagonist alone) | confidence 0.79 (`ADRB2_ISO1`) / 0.83 (`AR2NG_PRO1`) |
+| `5ht2_gq_panel` | 15 | 9 small targets (apo + receptor-alone) ~4-5m each; 6 large receptor+Gq-heterotrimer complexes ~43-48m each | All 15 completed successfully (12 ligand-bound + 3 apo); confidence 0.66-0.81, iPTM up to 0.99 for the ligand-bound complexes |
 
-Run time scales with complex size, not just target count: `adrb2_gs_panel`'s two-chain
-receptor+partner complex (crossed with 2 ligands) took disproportionately longer than the
-single-chain examples, since attention-style operations scale worse than linearly with
-sequence length. One contributing factor on Apple Silicon specifically: `torch.linalg.svd`
-(used in the diffusion step) has no MPS implementation and silently falls back to CPU --
-worth budgeting for on large multi-chain campaigns.
+Run time scales with complex size, not just target count: `ADRB2_ISO1`'s two-chain
+receptor+Gs-partner complex took disproportionately longer than the single-chain
+examples, since attention-style operations scale worse than linearly with sequence
+length -- confirmed directly by `AR2NG_PRO1` (same receptor, no partner) finishing in a
+fraction of the time. One contributing factor on Apple Silicon specifically:
+`torch.linalg.svd` (used in the diffusion step) has no MPS implementation and silently
+falls back to CPU -- worth budgeting for on large multi-chain campaigns.
+
+`5ht2_gq_panel`'s six large 4-chain receptor+Gq-heterotrimer targets (~1250-1280 tokens)
+originally crashed on Apple Silicon: boltz's triangular attention computes the full
+row-wise QK^T score matrix for the whole complex in one unchunked matmul, which exceeds
+MPS's single-tensor size ceiling past roughly 1250 residues and crashes the process
+inside PyTorch's internal tiled-bmm fallback. Each row's attention is independent, so
+chunking along that axis is exact, not an approximation -- `setup` now patches this
+directly into the installed `boltz` package (idempotent, and checked against boltz's
+exact source so a future upgrade can't be silently mis-patched). `run` also wraps
+`boltz predict` with `caffeinate` automatically (macOS only, silently skipped if
+unavailable) as general sleep-prevention hygiene for long GPU jobs. All 15
+`5ht2_gq_panel` targets, including the six large complexes, now complete successfully --
+see [CHANGELOG.md](CHANGELOG.md) for the fix in full.
 
 ## 🧭 boltz_input.md format
 
@@ -183,6 +199,12 @@ Partners: CHNX, CHNY            # optional: co-folded chains, defined as their o
                                 # Partner: blocks below
 # Ligands: LIG1, LIG3           # optional: restrict this protein to a ligand subset
                                 # (default: crossed with every ligand below)
+# Ligands: none                 # optional: ligand-free (apo) target -- no ligand entity,
+                                # no pocket constraint, no affinity property, whatever
+                                # `Predict affinity:` says. Stem is just the protein name
+                                # (e.g. `RECP1.yaml`, not `RECP1_LIG1.yaml`), runs through
+                                # the same generate/preflight/run/analyze pipeline and the
+                                # same staged `boltz predict` batch as every other target.
 # Modifications: SEP:5          # optional: CCD:position tokens for modified residues
                                 # (e.g. phosphoserine)
 # Cyclic: yes                   # optional: cyclic polymer (e.g. a cyclic peptide)
@@ -194,11 +216,19 @@ Partners: CHNX, CHNY            # optional: co-folded chains, defined as their o
                                 # generated YAML for that rarer case)
 # Apo structure: reference/apo.pdb
                                 # optional: a reference apo/unbound structure, used only
-                                # by `compare-sse` (see below), never by generate/run
+                                # by `compare-sse` (see below), never by generate/run.
+                                # No genuinely apo experimental structure? Predict one:
+                                # give another `Protein:` block the same `Sequence:` and
+                                # `Ligands: none` (see above), run the campaign once, then
+                                # point `Apo structure:` at its output in `boltz_cif/`.
 # Apo chain: A                 # optional: explicit chain id in the apo structure above
                                 # (omit to auto-detect via sequence identity)
 # Family type: gpcr            # optional: gpcr / kinase / auto (default) -- selects
                                 # `compare-sse`'s motif annotator
+# Group: RECP1                  # optional: shared display/report name for multiple
+                                # `Protein:` blocks that are the same underlying receptor
+                                # (e.g. with/without a partner, or a predicted apo
+                                # variant) -- defaults to this block's own name if unset
 
 Partner: CHNX
 Sequence: MTLES...
@@ -219,8 +249,9 @@ Distance constraint: RECP1 residue 10 to RECP1 residue 80 within 8.0 Angstrom
 ```
 
 Every protein is crossed with every ligand (unless a protein sets `Ligands:` to scope
-itself to a subset), producing one `{protein}_{ligand}.yaml` per pair. See `example.md`
-for the full copy-paste template and `examples/` for complete working campaigns.
+itself to a subset, or `Ligands: none` for a single ligand-free/apo target), producing
+one `{protein}_{ligand}.yaml` per pair. See `example.md` for the full copy-paste
+template and `examples/` for complete working campaigns.
 
 ## 🚀 Commands
 
@@ -265,8 +296,10 @@ trace.
 | `--out-dir` | `./boltz_output` | Boltz's own `--out_dir`, next to the md file |
 | `--accelerator` | `auto` | `auto` / `gpu` / `cpu` |
 | `--limit N` | none | Cap how many pending targets `run` submits (smoke test before a full batch) |
+| `--max-retries` | `2` | Auto-retry a target that doesn't complete (e.g. an OOM), isolating to one target at a time -- see "Memory on Mac" below (`0` disables) |
 | `--strict` | off | Promote preflight WARN to FAIL |
 | `--skip-interactions` | off | Skip cif2plip interaction analysis during `analyze`, even if `setup-plip` has been run |
+| `--skip-sse` | off | Skip compare-sse apo-vs-holo analysis during `analyze`, even if a family has `Apo structure:` set |
 
 **Memory-control options** (see below for why these matter on Mac/unified-memory hardware):
 
@@ -286,7 +319,10 @@ trace.
 affinity json if `predict_affinity` is on) are skipped on re-run, so an interrupted batch
 can just be re-run as-is.
 
-**`compare-sse` options** (see the section below for what the command does):
+**`compare-sse` options** (see the section below for what it does -- it now also runs
+automatically as part of `analyze`/`all` for every family with an `Apo structure:` set;
+the standalone command below is for re-running just this analysis on its own, e.g.
+after adding an apo structure without re-running `boltz predict`):
 
 | Option | Default | Description |
 |---|---|---|
@@ -318,10 +354,16 @@ being killed, worth knowing about before running anything large. Mitigations bui
 - `run`'s progress bar shows live memory usage (RSS summed across the whole `boltz
   predict` process tree), and logs a warning if usage stays above 90% of system RAM for
   60+ seconds with no new completed target: a sign of thrashing, not genuine progress.
+- `run`/`all` auto-retries (`--max-retries`, default 2) any target that doesn't
+  complete, isolating every still-incomplete target to its own single-target `boltz
+  predict` invocation from the first retry onward -- a real 4-target cascade on
+  `5ht2_gq_panel` (an OOM on 2 of 6 large targets run together crashed the shared
+  affinity phase for 2 more that had already succeeded) recovered cleanly this way. This
+  means a large campaign can be started and left unattended: a transient OOM no longer
+  needs a human to notice, wait, and manually re-run just the affected targets.
 
-If a target still thrashes even with all of the above at their safest settings, that's a
-real finding (this hardware may not be viable for a complex that size), not something to
-force through.
+If a target still fails after every automatic retry, that's a real finding (this
+hardware may not be viable for a complex that size), not something to force through.
 
 ## ⚙️ Progress bar
 
@@ -347,9 +389,10 @@ Written next to `boltz_input.md`:
 | `boltz_plip/` (optional) | Per-target cif2plip output: the converted PDB, PLIP's XML/TXT reports, the ray-traced binding-site PNG, and the PyMOL `.pse` session -- cached here so re-running `analyze` doesn't re-profile a target that's already been done |
 | `boltz_interactions.csv` (optional) | Long format, one row per detected contact across every target: interaction type, residue, distance -- the raw data behind the dashboard's fingerprint heatmap and per-target contact tables |
 | `boltz_dashboard_sessions/` (optional) | Each target's PyMOL `.pse` session, copied here and linked from the dashboard -- this is the one thing that makes `boltz_dashboard.html` no longer a single self-contained file once interaction analysis has run; without `setup-plip`, the dashboard stays exactly as self-contained as before |
-| `boltz_dashboard.html` | A campaign summary table with a third "Details" column alongside Field/Value -- a linked path to the input file, each protein/partner's id and sequence length, each ligand's id and SMILES-vs-CCD source, the full list of target stems, which specific ligands got flagged in ligand-chemistry review (linking to the card below), and a plain-English gloss for each of the more cryptic run parameters (accelerator, MPS watermark, recycling/sampling steps, etc.) -- tracked across every `run` invocation in a small hidden sidecar file. Then a "Summary table" directly below it: grouped into named column bands (Identity, Confidence, Affinity, Interactions, Structure) with short human headers instead of raw JSON field names, redundant/granular columns (per-chain and per-chain-pair confidence breakdowns, individual ensemble sub-model values) hidden by regex pattern rather than a fixed list -- so it scales correctly to campaigns with more than two chains -- and two download links, one for the full underlying CSV and one for a CSV matching just this trimmed/renamed view. Then a "Ligand preparation" card (the same stereocentre/protonation-state/disconnected-fragment checks as `preflight`'s `ligand_preparation` check, shown per-ligand rather than as a single summary line), then a "Ligand structures" card: a paginated 5x5 grid of every ligand's rendered 2D structure (building on [smiles2grid](https://github.com/bellcheddar/smiles2grid)'s design, adapted for a single campaign's scale), with stereocentre/ionizable-group findings highlighted directly on each structure, ligands sharing a Bemis-Murcko scaffold (or, failing that, a verified whole-group maximum-common-substructure) grouped and colour-highlighted together with their depictions aligned to a common orientation, and a captioned legend (badge-by-badge: what S/A/N/Ph/SO3/salt each mean, plus the cluster colour key) stating exactly what was found and on how many ligands -- never an unexplained highlight -- plus "Download PDF" (the same grid as a print/share-friendly file, `boltz_ligand_grid.pdf`) and "Download SMILES" (`boltz_ligands.csv`: ID, SMILES, stereocentre/ionizable-group/fragment findings, MW, cLogP, TPSA) links side by side on one line, matching the Summary table's own download-links style. Then interactive [Plotly](https://plotly.com/javascript/) charts in a grid (ranked pIC50, ranked confidence, confidence-vs-affinity scatter, interaction counts by type -- hover/zoom/pan; plotly.js itself is vendored and inlined into the file rather than CDN-loaded, so the dashboard has no runtime dependency on an external script host). When `setup-plip` has run: a per-family residue-interaction fingerprint heatmap (also interactive Plotly -- shown for every family with interaction data, even a single ligand, though the similarity-based reordering that helps SAR ranking within a series only kicks in from 3+ ligands) and, per target, its binding-site image (residues labelled and interaction distances shown -- PLIP's own images have neither, so these are re-rendered from its PyMOL session with both added, with a "Download image" link of its own) next to an interactive, auto-rotating [3Dmol.js](https://3dmol.org) view of the same predicted structure (built directly from the mmCIF, ligand highlighted), side by side with a table of that target's contacts (with its own "Download CSV" link) plus a download link for the full PyMOL session. |
-| `boltz_sse_comparison.csv` / `.html` (optional, `compare-sse` only) | One row per family/target/motif: Ca RMSD, centroid shift, helix-axis rotation/kink angles, SSE boundary shift, flagged phi/psi residues, and (kinases) DFG-in/out and alphaC-in/out states. The HTML is a standalone dashboard (Plotly bar chart + motif x target heatmap) |
-| `boltz_sse_comparison_sessions/` (optional, `compare-sse` only) | A plain-text PyMOL `.pml` script per target -- colours/labels each motif, highlights the ones with a significant shift |
+| `boltz_dashboard.html` | A campaign summary table with a third "Details" column alongside Field/Value -- a linked path to the input file, each protein/partner's id and sequence length, each ligand's id and SMILES-vs-CCD source, the full list of target stems, which specific ligands got flagged in ligand-chemistry review (linking to the card below), and a plain-English gloss for each of the more cryptic run parameters (accelerator, MPS watermark, recycling/sampling steps, etc.) -- tracked across every `run` invocation in a small hidden sidecar file. Then a "Summary table" directly below it: grouped into named column bands (Identity, Confidence, Affinity, Interactions, Structure) with short human headers instead of raw JSON field names, redundant/granular columns (per-chain and per-chain-pair confidence breakdowns, individual ensemble sub-model values) hidden by regex pattern rather than a fixed list -- so it scales correctly to campaigns with more than two chains -- and two download links, one for the full underlying CSV and one for a CSV matching just this trimmed/renamed view. The "Target" column shows a `{group}_{partners}_{ligand}` display name (e.g. `5HT2A_GNAQ+GNB1+GNG2_RISP`, partners omitted when there are none, `apo` in place of a ligand for a ligand-free target) rather than the internal per-variant family id/stem (`H2ANG_RISP`, `H2AAP`) -- and this isn't just a table label: the same display name (or its family-level `{group}_{partners}` form, with no ligand, for whole-family contexts) replaces the internal id in every chart tick/legend/point label (ranked pIC50, ranked confidence, confidence-vs-affinity scatter, interaction counts, the residue-interaction fingerprint heatmap), every per-target/per-family card title, the campaign-summary target list, and the selectivity pivot's columns (both the dashboard heatmap and the XLSX `selectivity` sheet) -- see **compare-sse** below for the same treatment there. The raw per-variant ids stay alongside the display name in every underlying CSV/XLSX `targets` sheet, for cross-referencing against real output filenames. A "Partner" column lists each target's co-folded partner chain(s) (hidden when the campaign has none), and rows are grouped by `Group:`/family id with a blue top border marking each new group -- the same blue used for column-group boundaries, just rotated. The "Flags" column is renamed "Summary" and icon-based: a bullseye (affinity) and a shield (confidence) icon per row, each tinted green/amber/red by tier (exact value and interpretation on hover), reusing the existing `LOW_CONFIDENCE_THRESHOLD` and a symmetric buffer around Boltz's documented 0.5 binder decision boundary -- Boltz's own docs define these metrics' [0, 1] range but publish no official tri-colour bands. A `MISSING_OUTPUTS` failure collapses the cell to a single red cross; a legend to the right of the download links spells out all six tier/icon combinations. Always shown now (previously hidden entirely when nothing was flagged), so a clean campaign reads as a row of green icons rather than a column that silently disappears. A ligand-free (apo) target's ligand/affinity/interface/interaction columns (including the bullseye) show an explicit `N/A` rather than a blank cell or a misleading `0.00`, since there's no ligand or inter-chain interface for those to describe. Then a "Ligand preparation" card (the same stereocentre/protonation-state/disconnected-fragment checks as `preflight`'s `ligand_preparation` check, shown per-ligand rather than as a single summary line), then a "Ligand structures" card: a paginated 5x5 grid of every ligand's rendered 2D structure (building on [smiles2grid](https://github.com/bellcheddar/smiles2grid)'s design, adapted for a single campaign's scale), with stereocentre/ionizable-group findings highlighted directly on each structure, ligands sharing a Bemis-Murcko scaffold (or, failing that, a verified whole-group maximum-common-substructure) grouped and colour-highlighted together with their depictions aligned to a common orientation, and a captioned legend (badge-by-badge: what S/A/N/Ph/SO3/salt each mean, plus the cluster colour key) stating exactly what was found and on how many ligands -- never an unexplained highlight -- plus "Download PDF" (the same grid as a print/share-friendly file, `boltz_ligand_grid.pdf`) and "Download SMILES" (`boltz_ligands.csv`: ID, SMILES, stereocentre/ionizable-group/fragment findings, MW, cLogP, TPSA) links side by side on one line, matching the Summary table's own download-links style. Then interactive [Plotly](https://plotly.com/javascript/) charts in a grid (ranked pIC50, ranked confidence, confidence-vs-affinity scatter, interaction counts by type -- hover/zoom/pan; plotly.js itself is vendored and inlined into the file rather than CDN-loaded, so the dashboard has no runtime dependency on an external script host). When `setup-plip` has run: a per-family residue-interaction fingerprint heatmap (also interactive Plotly -- shown for every family with interaction data, even a single ligand, though the similarity-based reordering that helps SAR ranking within a series only kicks in from 3+ ligands) and, per target, its binding-site image (residues labelled and interaction distances shown -- PLIP's own images have neither, so these are re-rendered from its PyMOL session with both added, with a "Download image" link of its own) next to an interactive, auto-rotating [3Dmol.js](https://3dmol.org) view of the same predicted structure (built directly from the mmCIF, ligand highlighted), side by side with a table of that target's contacts (with its own "Download CSV" link) plus a download link for the full PyMOL session. Finally, a "Secondary structure shifts" card (see **compare-sse** below): a "Family coverage" table (every protein family in the campaign, with its status -- `OK` and a target/motif count, or a plain-English reason it was skipped, e.g. "No apo structure configured"), an "Overall shift statistics" summary, and, when there's data, the full per-motif table plus its own Plotly charts. |
+| `boltz_sse_comparison.csv` / `.html` | Written automatically by `analyze`/`all` whenever any family has `Apo structure:` set (or on demand via the standalone `compare-sse` command). One row per family/target/motif: Ca RMSD, centroid shift, helix-axis rotation/kink angles, SSE boundary shift, flagged phi/psi residues, and (kinases) DFG-in/out and alphaC-in/out states -- a metric that genuinely wasn't computed for a motif shows as `N/A`, not a blank cell. The Family/Target columns, chart legends, and family-coverage table all show the same `{group}_{partners}` / `{group}_{partners}_{ligand}` display names used throughout the main dashboard; the CSV also keeps the raw `family_id`/`target_stem` columns alongside for cross-referencing. The HTML is a standalone dashboard (family coverage, overall shift statistics, Plotly bar chart + motif x target heatmap); the same content is also embedded directly into `boltz_dashboard.html` (see below) |
+| `boltz_sse_family_status.json` | One entry per protein family: `ok` (with a target/motif count) / `no_apo_structure` / `apo_not_found` / `annotation_failed` / `no_predicted_structures` -- the machine-readable form of the dashboard's "Family coverage" table, so a family with no `Apo structure:` configured reads as "not configured" rather than silently missing |
+| `boltz_sse_comparison_sessions/` (optional) | A plain-text PyMOL `.pml` script per target -- colours/labels each motif, highlights the ones with a significant shift |
 
 ## 🔬 Ligand validation & scaffold highlighting
 
@@ -433,10 +476,14 @@ protein. `compare-sse` answers it in terms a structural biologist actually reaso
 ("TM6 swung out 4.2 Angstrom", "the DFG motif flipped from in to out"), not raw DSSP
 fragment coordinates.
 
-It's a fully separate, explicitly opt-in command: it does not run as part of
-`all`/`analyze` and never touches `boltz_dashboard.html` -- most campaigns won't use it,
-since it needs an apo reference structure you supply yourself via the `Apo structure:`
-field (see **boltz_input.md format** above).
+It's a core part of `analyze`/`all`: any family with an `Apo structure:` field set (see
+**boltz_input.md format** above) gets compared automatically, no separate command
+needed, and the result is embedded directly into `boltz_dashboard.html`. A family with
+no apo structure configured isn't silently skipped either -- the dashboard's "Family
+coverage" table says so explicitly, alongside any family that *was* compared. Pass
+`--skip-sse` to `analyze`/`all` to opt out, or use the standalone `compare-sse` command
+below to re-run just this analysis on its own (its own `--family`/`--target` flags let
+you target one family/target instead of the whole campaign).
 
 Motifs are annotated by one of three pluggable sources, auto-selected per family (or set
 explicitly with `Family type:`):
@@ -460,17 +507,36 @@ the global fit. Each motif then gets:
 | Flagged phi/psi residues | Per-residue backbone dihedral outliers above `--phi-psi-threshold` |
 | DFG-in/out, alphaC-in/out (kinases only) | A coarse Ca-Ca distance classifier, not a full dihedral model -- good for detecting a state *change* between apo and holo, not publication-grade conformational classification |
 
+A metric that genuinely wasn't computed for a given motif (e.g. axis rotation for a
+loop, DFG state for a non-kinase family, boundary shift with no DSSP data available)
+shows as an explicit `N/A` in both the CSV and every dashboard table, not a blank cell.
+
+Above the per-motif table, both `boltz_dashboard.html`'s embedded card and the
+standalone `boltz_sse_comparison.html` show:
+
+| Section | Content |
+|---|---|
+| Family coverage | One row per protein family: `OK` (with a target/motif count) / `No apo structure configured` / `Apo structure file not found` / `No motif annotation available` / `No predicted (holo) structures yet` |
+| Overall shift statistics | Targets/motifs compared; mean/median/max Ca RMSD (and which target + motif had the largest shift); mean centroid shift; total flagged phi/psi residues; kinase DFG/alphaC state-change counts |
+
 ```sh
 python3 BoltzMaker.py compare-sse boltz_input.md
 ```
 
 Writes, next to `boltz_input.md` (or `--out-dir`): `boltz_sse_comparison.csv` (one row
-per family/target/motif), a standalone self-contained `boltz_sse_comparison.html`
+per family/target/motif) and `boltz_sse_family_status.json` (the family-coverage table
+above, machine-readable), a standalone self-contained `boltz_sse_comparison.html`
 (Plotly bar chart + motif x target heatmap, vendored the same way as the main
 dashboard), and `boltz_sse_comparison_sessions/<target>.pml` -- a plain-text PyMOL
 script per target that colours/labels each motif and highlights the ones with a
 significant shift. It's just text: opens in any local PyMOL install, no `pymol`
 dependency in BoltzMaker's own venv.
+
+When auto-run by `analyze`/`all`, a campaign with no apo structures configured
+anywhere just gets a dashboard section saying so -- it never aborts the rest of the
+pipeline over an optional, additive feature. The standalone command above still exits
+with a clear error if you explicitly pass a `--family`/`--target` that matches
+nothing, since that's a real mistake worth stopping for.
 
 ## 🩹 Troubleshooting / FAQ
 

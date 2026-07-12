@@ -7,6 +7,73 @@ everything so far is tracked under `Unreleased`.
 ## [Unreleased]
 
 ### Added
+- New optional `Group:` field on a `Protein:` block: a shared display/report name for
+  multiple `Protein:` blocks that represent the same underlying receptor (e.g. with vs
+  without a co-folded partner, or a predicted apo variant) but must otherwise stay
+  separate family ids under the hood -- `5ht2_gq_panel`'s `5HT2A`/`H2ANG`/`H2AAP` all
+  set `Group: 5HT2A`, for instance (also applied to `adrb2_gs_panel`'s `ADRB2`/`AR2NG`,
+  the same pattern). Defaults to the family's own id when unset, so existing campaigns
+  are unaffected.
+- New shared `{group}_{partners}_{ligand}` display-name convention (partners joined
+  with `+`, omitted when there are none; `apo` in place of a ligand for a ligand-free
+  target), e.g. `5HT2A_GNAQ+GNB1+GNG2_RISP` / `5HT2A_RISP` / `5HT2A_apo`, replacing the
+  internal disambiguation stem (`H2ANG_RISP`, `H2AAP`) everywhere a single target needs
+  one human-readable label -- not just the Summary table's "Target" column, but every
+  chart (ranked pIC50/confidence, confidence-vs-affinity scatter, interaction counts,
+  the per-family residue-interaction fingerprint heatmap, `compare-sse`'s per-motif RMSD
+  bar chart and motif x target heatmap), every card title (each target's binding-site
+  panel, each family's fingerprint panel), the campaign-summary target list, and the
+  selectivity pivot's column headers (both the dashboard's PNG heatmap and the XLSX
+  `selectivity` sheet). A family-level variant (`{group}_{partners}`, no ligand) is used
+  wherever a whole family rather than one target needs a label. The raw, precise
+  per-variant ids (`family_id`/`target_stem`) are always kept alongside the display name
+  in every underlying CSV (`boltz_summary.csv`, `boltz_sse_comparison.csv`) and in
+  `boltz_summary.xlsx`'s `targets` sheet, for anyone cross-referencing against actual
+  output filenames or doing further analysis -- only the human-facing views (dashboard,
+  `boltz_summary_view.csv`, the `selectivity` sheet, `compare-sse`'s own dashboard/HTML)
+  switch to the display name.
+- New "Partner" column in the dashboard's Summary table (Identity group, between Target
+  and Ligand): lists each target's co-folded partner chain(s) (e.g. `GNAQ, GNB1, GNG2`),
+  blank when a target has none. Hidden automatically when no target in the campaign has
+  any partners, the same conditional-by-content rule already used for `protein_iptm`.
+- The Summary table's rows are now grouped by `Group:` (or family id when unset), with a
+  blue top border on the first row of each new group -- the same blue used for column
+  groups, just rotated 90 degrees. Rows already come out of the manifest grouped by
+  family, so this only detects the group boundary, no re-sorting.
+- `run`/`all` now automatically retries a target that doesn't complete (e.g. an OOM
+  crash), instead of just reporting the failure and stopping there -- a real 4-target
+  cascade on `5ht2_gq_panel` showed why this matters: an OOM during structure
+  prediction for 2 of 6 large targets run together (boltz's own clean-fail path, not a
+  crash) left a `pre_affinity_*.npz` missing, which then crashed the shared affinity
+  phase and took 2 more already-succeeded targets down with it. The first attempt runs
+  exactly as before (grouped); each retry after that isolates every still-incomplete
+  target into its own single-target `boltz predict` invocation with a 15s pause first
+  (a crashed subprocess's MPS/Metal memory is only released once it fully exits, so
+  this gives the OS a moment to reclaim it) -- the same mitigation that recovered the
+  real cascade above. New `--max-retries` flag (default 2, `0` to disable and match the
+  old fail-once behavior); a target still incomplete after all retries is reported
+  clearly and the rest of the pipeline still proceeds.
+- `compare-sse` is now a core part of `analyze`/`all`, not a standalone opt-in step --
+  every `analyze`/`all` run automatically compares apo vs holo for every family that
+  has an `Apo structure:` configured, and the standalone `compare-sse` command still
+  exists for re-running it on its own (e.g. after adding an apo structure without
+  re-running `boltz predict`). New `--skip-sse` flag to opt out, mirroring
+  `--skip-interactions`. The dashboard's "Secondary structure shifts" card is written
+  unconditionally now: a "Family coverage" table lists every protein family and its
+  status (`OK`, `No apo structure configured`, `Apo structure file not found`, `No
+  motif annotation available`, `No predicted (holo) structures yet`) so a family with
+  no `Apo structure:` reads as "not configured" rather than silently vanishing from
+  the dashboard, plus an "Overall shift statistics" summary (targets/motifs compared,
+  mean/median/max Ca RMSD and where the largest shift landed, mean centroid shift,
+  total flagged phi/psi residues, kinase DFG/alphaC state-change counts) above the
+  full per-motif table. A metric that genuinely wasn't computed for a given motif
+  (e.g. axis rotation for a loop, DFG state for a non-kinase family, SSE boundary
+  shift with no DSSP available) now renders as an explicit `N/A` in both
+  `boltz_sse_comparison.csv` and the dashboard table, rather than a blank cell. New
+  `boltz_sse_family_status.json` sidecar (per-family coverage, machine-readable) next
+  to `boltz_sse_comparison.csv`. `analyze`'s auto-run never aborts the pipeline over
+  this (unlike the standalone command, which still exits with a clear error if you
+  explicitly ask for a `--family`/`--target` that doesn't exist).
 - New `compare-sse` command: compares secondary-structure-element shifts between a
   protein family's apo (unbound) reference structure and its predicted holo target(s),
   grouped by biologically annotated motif rather than raw DSSP fragments -- GPCR
@@ -93,8 +160,36 @@ everything so far is tracked under `Unreleased`.
   structure; ligands sharing a Bemis-Murcko scaffold (or a verified whole-group MCS as a
   fallback) are grouped, colour-highlighted, and depiction-aligned to a common
   orientation; a captioned legend states exactly what was found and on how many ligands.
+- Native ligand-free (apo) target support: a `Protein:` block can now set
+  `Ligands: none` to generate exactly one ligand-free target for that family, running
+  through the normal `generate`/`preflight`/`run`/`analyze` pipeline alongside every
+  other target in the same campaign (same manifest, same staged `boltz predict`
+  batch) -- no more hand-building a YAML and a separate staging directory to fold a
+  receptor alone. The generated YAML has no ligand entity, no pocket constraint, and
+  no affinity property (affinity is meaningless without a binder); its target stem is
+  just the family id (e.g. `5HT2A`, not `5HT2A_LIG1`). `--skip-interactions`/PLIP and
+  `predict_affinity` are both automatically skipped per-target for apo targets even
+  when the rest of the campaign has them on. Preflight's `memory_heuristic` and
+  `yaml_validity` checks both account for ligand-free targets correctly (sequence +
+  partner size only, no false "missing affinity property" failure).
 
 ### Fixed
+- `adrb2_gs_panel`'s antagonist target no longer co-folds the Gs alpha partner. The
+  original campaign crossed one `ADRB2` family (with `Partners: GNAS`) against both
+  ligands, so the antagonist prediction got a Gs chain too -- but Gs only forms a
+  stable ternary complex with an *active*, agonist-bound receptor in reality, and
+  Boltz has no constraint against predicting one anyway when asked. Confirmed
+  directly: the two resulting holo structures superposed at 0.38 Angstrom RMSD over
+  the reference-region scaffold, i.e. essentially the same fold, silently defeating
+  the point of comparing an agonist against an antagonist via `compare-sse`. Split
+  into two `Protein:` blocks sharing one sequence, each scoped to one ligand via
+  `Ligands:` -- `ADRB2` (agonist ISO1, +Gs) and `AR2NG` (antagonist PRO1, no partner,
+  "ADRB2, No Gs" within the 5-character chain-id limit). Re-running the antagonist
+  target this way gives a real conformational difference: 1.28 Angstrom holo-holo
+  RMSD (up from 0.38), TM6 shift roughly doubled for the agonist relative to the
+  unliganded apo reference (5.84 vs 3.06 Angstrom) -- and finishes in a fraction of
+  the original run time (25m vs the two-target campaign's 1h 28m), since it no
+  longer folds Gs alpha's ~394 extra residues at all.
 - cif2plip ligand disambiguation now matches on InChIKey first, falling back to exact
   SMILES only if that fails. PLIP's own re-derived SMILES (via OpenBabel) can differ in
   canonical form from RDKit's, so a plain string match could silently miss the correct
@@ -185,3 +280,77 @@ everything so far is tracked under `Unreleased`.
   `egfr_covalent`, `adrb2_gs_panel`), each run end to end on real hardware (Apple M1 Max,
   64GB) with real `boltz predict` GPU runs -- see the README's Examples section for
   measured run times and results.
+- `5ht2_gq_panel`: all 15 targets (12 ligand-bound + 3 native apo) completed
+  successfully end to end via `BoltzMaker.py all`, including the six large 4-chain
+  receptor+Gq-heterotrimer complexes (~1250-1280 tokens) that previously crashed --
+  see the MPS large-complex attention fix under Fixed below.
+
+### Fixed
+- `run`'s `boltz predict` subprocess is now wrapped with `caffeinate -i -s -m -w <pid>`
+  on macOS (no-op if `caffeinate` isn't on `PATH`, e.g. CI/Linux) -- real, verified
+  hygiene against sleep interrupting an in-flight GPU job, confirmed via `pmset -g
+  assertions` holding the assertion for the subprocess's full lifetime.
+- Fixed a crash where `boltz predict`'s affinity-prediction phase iterates over every
+  staged/processed input regardless of whether that input's YAML declared a
+  properties/affinity block, raising `FileNotFoundError` loading a `pre_affinity_*.npz`
+  that only ever gets generated for the affinity ones -- hit whenever a campaign mixes
+  native `Ligands: none` apo targets with `predict_affinity: yes` targets in the same
+  batch. `run_boltz()` now splits any pending batch by `Target.needs_affinity` into up to
+  two separate `boltz predict` invocations, both reusing the same staging/predictions
+  directory so `find_any_predictions_dir` still sees one consistent output tree.
+- Root-caused and fixed the large-complex MPS crash seen on `5ht2_gq_panel`'s six
+  4-chain receptor+Gq-heterotrimer targets (~1250-1280 tokens): boltz's triangular
+  attention computes the full row-wise QK^T score matrix for the whole complex in one
+  unchunked matmul (scales as tokens x heads x tokens x tokens), which exceeds Apple's
+  MPS single-tensor size ceiling past roughly 1250 residues and crashes the process
+  inside PyTorch's internal tiled-bmm fallback. Each row's attention is independent, so
+  chunking along that axis is exact, not an approximation. BoltzMaker's `setup` now
+  patches this directly into the installed `boltz` package (idempotent, and checks
+  boltz's exact source before patching so a future boltz upgrade that changes this
+  function can't be silently mis-patched). Confirmed fixed end to end: all 15
+  `5ht2_gq_panel` targets, including all six large complexes, now complete successfully
+  on Apple M-series GPU with zero crashes.
+- Dashboard generation crashed (`AttributeError: 'NoneType' object has no attribute
+  'id'`) building the campaign-summary target list whenever a campaign included a
+  native apo (`Ligands: none`) target, since that code path assumed every target has a
+  ligand. Now handles the ligand-free case the same way the rest of the codebase
+  already does.
+- `compare-sse`'s GPCRdb annotator uploads the apo structure's own chain to GPCRdb's
+  generic-numbering API as a temporary legacy PDB file, whose chain-id column is 1
+  character -- BoltzMaker's own chain ids (the family stem, e.g. `H2AAP`) are routinely
+  longer and made every GPCR family's annotation fail with "chain name too long for the
+  PDB format". Renamed to a short placeholder for that temporary upload only; GPCRdb's
+  response is matched back purely by residue number, never by chain name, so this is
+  safe. Also wired up `5ht2_gq_panel`'s three `Apo structure:` fields, previously
+  pointing at a `reference/*_apo_predicted.cif` path that was never actually generated,
+  to the real Boltz-predicted apo cifs (`boltz_cif/H2AAP_model_0.cif` etc.) -- both
+  fixes together bring all 12 ligand-bound `5ht2_gq_panel` targets into `compare-sse`
+  for the first time, confirming the expected biology: TM6 centroid shift is
+  consistently larger for the Gq-bound targets than their no-Gq counterparts across all
+  three receptors.
+- Summary table completeness for ligand-free (apo) targets: `ligand_id`, `iptm`/
+  `ligand_iptm`/`protein_iptm` (no inter-chain interface exists for a monomer),
+  affinity columns, and PLIP interaction counts now render as an explicit `N/A` for
+  apo rows instead of a blank cell or a misleading `0.00`, matching the same
+  explicit-N/A convention `compare-sse` already uses.
+- The "Flags" column is renamed "Summary" and is icon-based now instead of a raw
+  semicolon-joined flag string: a bullseye (affinity) and a shield (confidence) icon,
+  each tinted green/amber/red by tier, with the exact value and interpretation as a
+  hover tooltip. Boltz's own docs (`docs/prediction.md`) define `confidence_score`/
+  `affinity_probability_binary` as [0, 1] with higher = better and 0.5 as the binder/
+  non-binder decision boundary, but publish no tri-colour bands -- BoltzMaker's tiers
+  reuse the existing `LOW_CONFIDENCE_THRESHOLD` (0.5) as the confidence red/amber
+  boundary and a symmetric +/-0.2 buffer around the documented 0.5 binder boundary for
+  affinity (green >= 0.7, red < 0.3 for both). Plain emoji can't be recoloured via CSS,
+  so both icons are small inline SVGs tinted through a wrapping `<span style="color:
+  ...">`. A `MISSING_OUTPUTS` failure collapses the cell to a single red cross (nothing
+  was computed to score); `LOW_POCKET_PLDDT` appends a small amber warning icon, since
+  it's a pocket-local metric neither the bullseye nor shield otherwise represents; the
+  confidence/affinity mismatch flags (`HIGH_CONFIDENCE_POOR_AFFINITY` etc.) surface as
+  extra tooltip text on both icons, on top of already being visually apparent as
+  contrasting tier colours. The column is always shown now (previously hidden entirely
+  whenever nothing was flagged), so a clean campaign reads as a row of green icons
+  rather than the column silently disappearing, and apo rows' N/A bullseye no longer
+  reads as another blank cell. A new legend to the right of the summary table's
+  download links spells out all six tier/icon combinations. The underlying flag values
+  and CSV export are unchanged (still plain text, for further analysis).

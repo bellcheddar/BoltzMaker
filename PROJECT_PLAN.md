@@ -63,11 +63,23 @@ removes the re-typing and re-matching of target names between them.
 The core pipeline (`generate` / `preflight` / `run` / `analyze` / `all`), the `new`
 wizard, optional PLIP-based interaction analysis, and a fairly rich interactive dashboard
 (Plotly charts, a scaffold-highlighted ligand structure grid, an interactive 3Dmol.js
-binding-site view, PDF/CSV exports throughout) are all built and verified against three
-real public-domain example campaigns. A separate `compare-sse` command (apo-vs-holo
-secondary-structure motif shifts, GPCR/kinase/Pfam-fallback annotation) is also built,
-with its own first-ever pytest suite in the repo. See [CHANGELOG.md](CHANGELOG.md) for
-the detailed, dated history.
+binding-site view, PDF/CSV exports throughout) are all built and verified against four
+real public-domain example campaigns, including `5ht2_gq_panel` (a 3-receptor
+agonist/antagonist/G-protein-trimer panel, 15 targets), which also verified Apple
+Silicon MPS support for large multi-chain complexes: boltz's triangular attention was
+crashing past ~1250 residues on an unchunked matmul exceeding MPS's tensor-size ceiling,
+now fixed by chunking (patched automatically into the installed `boltz` package at
+`setup` time). `compare-sse` (apo-vs-holo secondary-structure
+motif shifts, GPCR/kinase/Pfam-fallback annotation) is now a core, always-on part of
+`analyze`/`all` -- every family with an `Apo structure:` set is compared automatically,
+with a "Family coverage" status table, an "Overall shift statistics" summary, explicit
+`N/A` for metrics that genuinely weren't computed, and its own pytest suite (41 tests) --
+the standalone `compare-sse` command still exists for re-running the analysis on its own.
+A `Protein:` block can also set `Ligands: none` for a native ligand-free (apo) target,
+running through the same manifest-driven pipeline and the same staged `boltz predict`
+batch as every other target -- useful when no genuinely apo experimental reference
+structure exists and one has to be predicted instead. See [CHANGELOG.md](CHANGELOG.md)
+for the detailed, dated history.
 
 ## Roadmap
 

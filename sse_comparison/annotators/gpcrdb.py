@@ -131,6 +131,12 @@ class GPCRdbAnnotator(MotifAnnotator):
                 tmp_st = gemmi.Structure()
                 tmp_st.add_model(gemmi.Model("1"))
                 tmp_st[0].add_chain(chain)
+                # Legacy PDB's chain-id column is 1 character -- BoltzMaker's own chain ids
+                # (the family stem, e.g. "H2AAP") are frequently longer, so rename to a
+                # short placeholder for this temporary upload only. GPCRdb's response is
+                # matched back purely by residue number (_parse_generic_number_pdb), never
+                # by chain name, so this is safe.
+                tmp_st[0][0].name = "A"
                 tmp_st.setup_entities()
                 tmp_st.write_pdb(str(tmp_pdb))
                 generic = self.client.assign_generic_numbers(tmp_pdb)

@@ -367,11 +367,199 @@ def test_classify_state_missing_anchor_returns_none():
 # cli.py: clean failure path
 # ---------------------------------------------------------------------------
 
-def test_run_compare_sse_no_apo_structure_configured(tmp_path):
-    from sse_comparison.cli import run_compare_sse
+def _minimal_campaign_no_apo():
     settings = bm.Settings()
     fam = bm.ProteinFamily(id="TESTR", sequence="MDILCEENT")
     ligand = bm.Ligand(id="LIG1", smiles="CC(=O)Oc1ccccc1C(=O)O")
-    campaign = bm.Campaign(settings=settings, partners={}, families=[fam], ligands=[ligand])
-    with pytest.raises(SystemExit, match="nothing to compare"):
-        run_compare_sse(campaign, tmp_path)
+    return bm.Campaign(settings=settings, partners={}, families=[fam], ligands=[ligand])
+
+
+def test_run_compare_sse_strict_no_apo_structure_configured(tmp_path):
+    # Standalone `compare-sse` command's default (strict=True): nothing configured
+    # anywhere is a real error worth stopping for.
+    from sse_comparison.cli import run_compare_sse
+    with pytest.raises(SystemExit, match="produced no comparable targets"):
+        run_compare_sse(_minimal_campaign_no_apo(), tmp_path)
+
+
+def test_run_compare_sse_nonstrict_no_apo_structure_never_raises(tmp_path):
+    # analyze/all's auto-run (strict=False): must never abort the pipeline over an
+    # optional, additive feature -- always returns, always reports family_status.
+    from sse_comparison.cli import run_compare_sse
+    result = run_compare_sse(_minimal_campaign_no_apo(), tmp_path, strict=False)
+    assert result["df"].empty
+    assert result["family_status"]["TESTR"]["status"] == "no_apo_structure"
+
+
+def test_run_compare_sse_writes_family_status_sidecar(tmp_path):
+    from sse_comparison.cli import run_compare_sse
+    run_compare_sse(_minimal_campaign_no_apo(), tmp_path, strict=False)
+    status_path = tmp_path / "boltz_sse_family_status.json"
+    assert status_path.exists()
+    status = json.loads(status_path.read_text())
+    assert status["TESTR"]["status"] == "no_apo_structure"
+    assert "Apo structure" in status["TESTR"]["message"]
+
+
+# ---------------------------------------------------------------------------
+# report.py: family coverage, summary stats, N/A rendering
+# ---------------------------------------------------------------------------
+
+def test_build_family_status_html_reports_unconfigured_family():
+    from sse_comparison.report import build_family_status_html
+    html = build_family_status_html({
+        "ADRB2": {"status": "ok", "message": "14 motif row(s) across 2 target(s)"},
+        "OTHERFAM": {"status": "no_apo_structure", "message": "No 'Apo structure:' configured"},
+    })
+    assert "ADRB2" in html
+    assert "OTHERFAM" in html
+    assert "No apo structure configured" in html  # human label, not the raw status code
+
+
+def test_build_family_status_html_empty_returns_empty_string():
+    from sse_comparison.report import build_family_status_html
+    assert build_family_status_html({}) == ""
+
+
+def test_compute_summary_stats_real_adrb2(adrb2_apo_path, adrb2_holo_cif_path, adrb2_sequence):
+    from pathlib import Path
+    from sse_comparison.report import compute_summary_stats
+    fake_client = _FakeGPCRdbClient(Path(__file__).parent / "fixtures" / "sse" / "gpcrdb_2rh1_response.json")
+    ann = GPCRdbAnnotator(client=fake_client)
+    motifs = ann.annotate(adrb2_sequence, structure_path=str(adrb2_apo_path))
+    apo = load_structure_for_comparison(adrb2_apo_path, None, adrb2_sequence)
+    holo = load_structure_for_comparison(adrb2_holo_cif_path, "ADRB2", adrb2_sequence)
+    frame = build_comparison_frame(apo, holo, adrb2_sequence, motifs, "gpcr")
+    rows = [compute_motif_row(frame, m) for m in motifs]
+    rows = [r for r in rows if r]
+    for r in rows:
+        r["target_stem"] = "ADRB2_ISO1"
+        r["target_display"] = "ADRB2_ISO1"
+    from sse_comparison.report import build_metrics_dataframe
+    df = build_metrics_dataframe(rows)
+    stats = compute_summary_stats(df)
+    assert stats["n_targets"] == 1
+    assert stats["n_motifs"] == len(rows)
+    assert stats["max_rmsd_label"].startswith("ADRB2_ISO1")
+    # self-consistency: the reported max really is the row-wise max of the input df
+    assert stats["max_rmsd"] == df["ca_rmsd_A"].max()
+    assert stats["mean_rmsd"] == pytest.approx(df["ca_rmsd_A"].mean())
+
+
+def test_compute_summary_stats_empty_df_returns_empty_dict():
+    from sse_comparison.report import build_metrics_dataframe, compute_summary_stats
+    assert compute_summary_stats(build_metrics_dataframe([])) == {}
+
+
+def test_write_csv_uses_na_for_missing_metrics(tmp_path):
+    from sse_comparison.report import build_metrics_dataframe, write_csv
+    df = build_metrics_dataframe([{
+        "family_id": "F", "target_stem": "F_L", "ligand_id": "L", "motif_name": "loop1",
+        "motif_kind": "loop", "annotator_source": "pfam", "n_residues": 5, "ca_rmsd_A": 1.2,
+        "centroid_shift_A": 0.5, "axis_rotation_deg": None, "n_flagged_phipsi_residues": 0,
+        "flagged_residues": [],
+    }])
+    out = tmp_path / "out.csv"
+    write_csv(df, out)
+    text = out.read_text()
+    assert ",N/A," in text or text.rstrip().endswith("N/A")
+
+
+# ---------------------------------------------------------------------------
+# report.py: grouped SSE table (short headers, rounding, all-N/A group dropping)
+# ---------------------------------------------------------------------------
+
+def _gpcr_style_row(**overrides):
+    row = {
+        "family_id": "F", "family_display": "F", "target_stem": "F_L", "target_display": "F_L",
+        "ligand_id": "L", "motif_name": "TM1",
+        "motif_kind": "helix", "annotator_source": "gpcr", "n_residues": 33,
+        "ca_rmsd_A": 1.737864498, "centroid_shift_A": 0.892157501,
+        "axis_rotation_deg": 4.471211655, "n_flagged_phipsi_residues": 2,
+        "flagged_residues": [1, 2],
+    }
+    row.update(overrides)
+    return row
+
+
+def test_sse_table_rounds_floats_to_two_decimal_places():
+    from sse_comparison.report import build_metrics_dataframe, build_sse_table_html
+    df = build_metrics_dataframe([_gpcr_style_row()])
+    html = build_sse_table_html(df)
+    assert "1.74" in html  # ca_rmsd_A rounded, not the raw 1.737864498...
+    assert "1.737864498" not in html
+    assert "0.89" in html  # centroid_shift_A rounded
+
+
+def test_sse_table_uses_short_grouped_headers():
+    from sse_comparison.report import build_metrics_dataframe, build_sse_table_html
+    df = build_metrics_dataframe([_gpcr_style_row()])
+    html = build_sse_table_html(df)
+    assert "RMSD (A)" in html  # short label, not the raw ca_rmsd_A
+    assert ">Shift<" in html  # a colspan group header band is present
+    assert "ca_rmsd_A" not in html  # raw snake_case header no longer shown
+
+
+def test_sse_table_drops_all_na_kinase_columns_for_gpcr_family():
+    from sse_comparison.report import build_metrics_dataframe, build_sse_table_html
+    # A GPCR-family row never has DFG/alphaC state populated -- the whole "Kinase
+    # state" column group should be dropped, not shown as a wall of N/A cells.
+    df = build_metrics_dataframe([_gpcr_style_row()])
+    html = build_sse_table_html(df)
+    assert "Kinase state" not in html
+    assert "DFG apo" not in html
+
+
+def test_sse_table_keeps_kinase_columns_when_populated():
+    from sse_comparison.report import build_metrics_dataframe, build_sse_table_html
+    df = build_metrics_dataframe([_gpcr_style_row(
+        annotator_source="kinase", motif_name="DFG",
+        dfg_state_apo="out", dfg_state_holo="out", dfg_state_changed=False,
+        alphac_state_apo="in", alphac_state_holo="out", alphac_state_changed=True,
+    )])
+    html = build_sse_table_html(df)
+    assert "Kinase state" in html
+    assert "DFG apo" in html
+    assert "alphaC apo" in html
+
+
+def test_sse_table_drops_only_genuinely_empty_columns_not_whole_group():
+    # Fine-grained, per-column dropping: DFG is populated but alphaC isn't (e.g. one of
+    # the two anchor residues couldn't be resolved) -- DFG columns stay, alphaC columns
+    # (genuinely all-N/A for this campaign) are dropped, not the whole Kinase state group.
+    from sse_comparison.report import build_metrics_dataframe, build_sse_table_html
+    df = build_metrics_dataframe([_gpcr_style_row(
+        annotator_source="kinase", motif_name="DFG",
+        dfg_state_apo="out", dfg_state_holo="out", dfg_state_changed=False,
+    )])
+    html = build_sse_table_html(df)
+    assert "DFG apo" in html
+    assert "alphaC apo" not in html
+
+
+def test_sse_table_always_keeps_identity_and_shift_columns():
+    from sse_comparison.report import _resolve_sse_table_columns, build_metrics_dataframe
+    df = build_metrics_dataframe([_gpcr_style_row(axis_rotation_deg=None)])
+    cols = _resolve_sse_table_columns(df)
+    assert {"family_display", "target_display", "motif_name", "n_residues", "ca_rmsd_A"} <= set(cols)
+
+
+def test_sse_table_sorted_by_ligand_then_kind_then_motif():
+    import re
+    from sse_comparison.report import build_metrics_dataframe, build_sse_table_html
+    rows = [
+        _gpcr_style_row(ligand_id="PRO1", target_stem="F_PRO1", motif_kind="helix", motif_name="TM2"),
+        _gpcr_style_row(ligand_id="ISO1", target_stem="F_ISO1", motif_kind="loop", motif_name="ICL1"),
+        _gpcr_style_row(ligand_id="ISO1", target_stem="F_ISO1", motif_kind="helix", motif_name="TM1"),
+        _gpcr_style_row(ligand_id="PRO1", target_stem="F_PRO1", motif_kind="helix", motif_name="TM1"),
+    ]
+    df = build_metrics_dataframe(rows)
+    html = build_sse_table_html(df)
+    # rendered column order is Ligand, then Motif (name), then Kind -- extract all three
+    # per row and confirm the *sort* (by ligand, then kind, then motif name) held.
+    rows_found = re.findall(r"<td class=''>(ISO1|PRO1)</td><td class=''>(TM1|TM2|ICL1)</td>"
+                             r"<td class=''>(helix|loop)</td>", html)
+    assert rows_found == [
+        ("ISO1", "TM1", "helix"), ("ISO1", "ICL1", "loop"),
+        ("PRO1", "TM1", "helix"), ("PRO1", "TM2", "helix"),
+    ]
