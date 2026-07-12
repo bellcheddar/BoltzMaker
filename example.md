@@ -36,6 +36,22 @@ Partners: CHNX, CHNY               # optional: co-folded chains, defined as thei
                                   # to all protein chains (no per-chain mapping --
                                   # hand-edit the generated YAML for that rarer case)
 
+# Apo structure: reference/apo.pdb
+                                  # optional: a reference apo/unbound structure, used only
+                                  # by `compare-sse`, never by generate/run. No genuinely
+                                  # apo experimental structure? Predict one: give another
+                                  # Protein: block the same Sequence: and Ligands: none
+                                  # (see below), run the campaign once, then point this at
+                                  # its output in boltz_cif/{that_protein}_model_0.cif.
+# Apo chain: A                    # optional: explicit chain id in the apo structure above
+                                  # (omit to auto-detect via sequence identity)
+# Family type: gpcr               # optional: gpcr / kinase / auto (default) -- selects
+                                  # `compare-sse`'s motif annotator
+# Group: RECP1                    # optional: shared display/report name for multiple
+                                  # Protein: blocks that are the same underlying receptor
+                                  # (e.g. with/without a partner, or a predicted apo
+                                  # variant) -- defaults to this block's own name if unset
+
 # A second protein -- repeat the whole block as needed:
 
 Protein: RECP2
@@ -54,6 +70,9 @@ Sequence: MSELDQLRQEAEQLKNQIRD...
 
 Ligand: LIG1
 SMILES: FC(F)CNC(C1=CC=CC=C1)=O  # exactly one of SMILES/CCD is required
+
+# Role: agonist                  # optional: agonist / antagonist -- reporting only
+                                  # (dashboard chart shapes), never affects generate/run
 
 Ligand: LIG2
 CCD: GOL  # a Chemical Component Dictionary code (e.g. common crystallization

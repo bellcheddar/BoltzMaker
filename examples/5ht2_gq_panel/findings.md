@@ -29,14 +29,14 @@ harder targets computationally (see the MPS chunking work below).
 
 ## 2. Affinity predictions
 
-| Ligand | Receptor | Agonist/Antagonist | Binder probability (no Gq / with Gq) | Read |
-|---|---|---|---|---|
-| Risperidone (RISP) | 5HT2A | Antagonist | 1.00 / 0.99 | Confident binder |
-| Psilocin (PSIL) | 5HT2A | Agonist | 0.97 / 0.97 | Confident binder |
-| LSD (LSD1) | 5HT2B | Agonist | 0.95 / 0.96 | Confident binder |
-| Balovaptan (BALO) | 5HT2B | Antagonist | 0.49 / 0.52 | **Ambiguous** — near coin-flip in both conditions |
-| Lorcaserin (LORC) | 5HT2C | Agonist | 0.97 / 0.97 | Confident binder |
-| SB-242084 (SB24) | 5HT2C | Antagonist | 0.71 / 0.76 | Binder, moderate confidence |
+| Ligand | Receptor | Agonist/Antagonist | Binder probability (no Gq / with Gq) | Affinity (pIC50) (no Gq / with Gq) | Read |
+|---|---|---|---|---|---|
+| Psilocin (PSIL) | 5HT2A | Agonist | 0.97 / 0.97 | 9.15 / 8.96 | Confident binder |
+| Risperidone (RISP) | 5HT2A | Antagonist | 1.00 / 0.99 | 12.99 / 12.60 | Confident binder |
+| LSD (LSD1) | 5HT2B | Agonist | 0.95 / 0.96 | 11.17 / 11.59 | Confident binder |
+| Balovaptan (BALO) | 5HT2B | Antagonist | 0.49 / 0.52 | 9.28 / 9.49 | **Ambiguous** — near coin-flip in both conditions |
+| Lorcaserin (LORC) | 5HT2C | Agonist | 0.97 / 0.97 | 9.96 / 9.88 | Confident binder |
+| SB-242084 (SB24) | 5HT2C | Antagonist | 0.71 / 0.76 | 10.84 / 11.02 | Binder, moderate confidence |
 
 Balovaptan is the one ligand whose binder-probability call doesn't clear ~0.5 either way,
 consistent regardless of Gq co-folding — worth flagging as the weakest affinity call in
@@ -121,11 +121,47 @@ currently be used to bin a compound as agonist or antagonist** — no metric bel
 statistical significance at this sample size, and the one metric that comes close (TM6
 shift without Gq) stops separating the two classes entirely once Gq is co-folded.
 
-| Metric | Agonist (no Gq) | Antagonist (no Gq) | Δ (no Gq) | p (no Gq) | Agonist (Gq) | Antagonist (Gq) | Δ (Gq) | p (Gq) |
-|---|---|---|---|---|---|---|---|---|
-| TM6 centroid shift (A) | 0.85 | 0.63 | 0.23 | 0.09 | 2.17 | 2.10 | 0.07 | 0.77 |
-| confidence_score | 0.79 | 0.78 | 0.01 | 0.41 | 0.82 | 0.82 | 0.00 | 0.29 |
-| Binder probability | 0.96 | 0.73 | 0.23 | 0.24 | 0.97 | 0.76 | 0.21 | 0.25 |
+<div class="emd-table-wrap"><table class="emd-data-table">
+<thead>
+<tr><th rowspan="2">Metric</th><th colspan="4">No Gq</th><th colspan="4">Gq</th></tr>
+<tr><th>Agonist</th><th>Antagonist</th><th>&Delta;</th><th>p</th><th>Agonist</th><th>Antagonist</th><th>&Delta;</th><th>p</th></tr>
+</thead>
+<tbody>
+<tr>
+<td data-label="Metric">TM6 centroid shift (A)</td>
+<td data-label="No Gq Agonist">0.85</td>
+<td data-label="No Gq Antagonist">0.63</td>
+<td data-label="No Gq Delta">0.23</td>
+<td data-label="No Gq p">0.09</td>
+<td data-label="Gq Agonist">2.17</td>
+<td data-label="Gq Antagonist">2.10</td>
+<td data-label="Gq Delta">0.07</td>
+<td data-label="Gq p">0.77</td>
+</tr>
+<tr>
+<td data-label="Metric">confidence_score</td>
+<td data-label="No Gq Agonist">0.79</td>
+<td data-label="No Gq Antagonist">0.78</td>
+<td data-label="No Gq Delta">0.01</td>
+<td data-label="No Gq p">0.41</td>
+<td data-label="Gq Agonist">0.82</td>
+<td data-label="Gq Antagonist">0.82</td>
+<td data-label="Gq Delta">0.00</td>
+<td data-label="Gq p">0.29</td>
+</tr>
+<tr>
+<td data-label="Metric">Binder probability</td>
+<td data-label="No Gq Agonist">0.96</td>
+<td data-label="No Gq Antagonist">0.73</td>
+<td data-label="No Gq Delta">0.23</td>
+<td data-label="No Gq p">0.24</td>
+<td data-label="Gq Agonist">0.97</td>
+<td data-label="Gq Antagonist">0.76</td>
+<td data-label="Gq Delta">0.21</td>
+<td data-label="Gq p">0.25</td>
+</tr>
+</tbody>
+</table></div>
 
 None of these reach conventional significance at n=3 receptor pairs — a paired t-test with
 3 pairs only has power to detect a very large, near-universal effect, so this is "no
