@@ -32,6 +32,9 @@ boltz_sse_comparison_sessions/
 !examples/*/boltz_sse_comparison_sessions/*
 .DS_Store
 
+# Local staging bundle for manual upload to WordPress -- not tracked in git
+wordpress/
+
 # Elementor README/report forge output (regenerate with readme_forge.py as needed)
 *.polished.md
 README.html
