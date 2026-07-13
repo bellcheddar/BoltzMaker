@@ -7,6 +7,38 @@ everything so far is tracked under `Unreleased`.
 ## [Unreleased]
 
 ### Added
+- Styled CLI: a small "BoltzMaker" ASCII banner (marcdeller.com brand blue, same
+  `pyfiglet` `small_slant` font as the ChemSage project) plus `ok`/`info`/`warn`/`err`/
+  `step` icon helpers, replacing all ~89 previously-plain `print("BoltzMaker: ...")`
+  call sites across `setup`/`setup-plip`/`new`/`format`/`run`/`analyze`. Built as a
+  stdlib-only ANSI layer (no new dependency) so it works even before the managed venv
+  exists; respects `NO_COLOR` and auto-disables on a non-tty (piped output, CI, log
+  redirection). The `new` wizard's prompts get a coloured `?` marker and `y/N` hints;
+  `preflight`'s summary table gets a rounded border, brand header, and coloured PASS/
+  WARN/FAIL icons; the `run` progress bar gets brand-coloured spinner/bar/memory
+  columns.
+- `pixi.toml`/`pixi.lock`: an alternative, unified installation path (macOS + Linux/
+  CUDA) via [pixi](https://pixi.sh), replacing the need to separately run `setup` +
+  `setup-plip` -- pixi solves conda-forge (rdkit, gemmi, OpenBabel, PyMOL) and PyPI
+  (boltz) packages together in one reproducible, committed lockfile. `install.sh`
+  bootstraps it (installs pixi if missing, then `pixi install` + `pixi run
+  postinstall` for plip/pdb-tools, which sit outside pixi's own solver -- see the
+  file's own comments for why). `BoltzMaker.py` detects it's running inside a
+  pixi-provisioned environment (via `CONDA_PREFIX`, covering both `pixi run`/`pixi
+  shell` and a Tier B pack's plain `source activate.sh`) and skips its own `.venv`/
+  `.plip_env` bootstrap entirely in that case; `setup`/`setup-plip` refuse to run
+  there with a redirect instead. `docs/tier_b_offline_install.md` covers building and
+  using a fully offline self-extracting installer (`pixi-pack --create-executable`,
+  one per platform, no `pixi`/`conda`/network needed on the target machine) and its
+  known caveats -- three PyPI packages boltz hard-pins to versions that are sdist-only
+  (`ihm`, `modelcif`, `antlr4-python3-runtime`) silently vanish from a
+  `--ignore-pypi-non-wheel` pack and crash the packed `boltz` CLI on any invocation
+  unless sourced from conda-forge instead (now are); a fourth, `fairscale`, needs one
+  extra `pip install` after unpacking specifically because conda-forge's own build of
+  it hard-requires an incompatible conda-managed pytorch. Verified end-to-end against
+  a genuinely fresh extraction (old `.venv`/`.plip_env` renamed out of the way, no
+  `pixi` on PATH) for the osx-arm64 pack; the linux-64 pack cross-builds successfully
+  but hasn't been run on a real CUDA machine.
 - `write_html()`'s generated dashboard now posts its own real content height to any
   parent window via `postMessage` on load, resize, and via a `ResizeObserver` on
   `<body>` -- lets a page embedding the dashboard in an iframe (e.g. `findings.md`'s

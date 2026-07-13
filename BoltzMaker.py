@@ -504,12 +504,17 @@ def cmd_setup_plip(argv: list) -> None:
 # ==========================================================================
 
 def _in_pixi_env() -> bool:
-    # Set by `pixi run`/`pixi shell` for the exact duration of that session -- the
-    # reliable signal that pixi (not our own .venv/.plip_env machinery) already owns
-    # dependency management here. `PIXI_PROJECT_ROOT` also matches this checkout
-    # specifically (not some unrelated pixi project the shell happens to be nested
-    # under), which `PIXI_IN_SHELL` alone wouldn't guarantee.
-    return os.environ.get("PIXI_PROJECT_ROOT") == str(SCRIPT_DIR)
+    # True both for `pixi run`/`pixi shell` (this checkout's pixi.toml, Tier A) and for
+    # a Tier B offline install.sh/pixi-pack executable's `source .../activate.sh` --
+    # the latter never runs `pixi` at all, so PIXI_PROJECT_ROOT (which only the pixi
+    # CLI itself sets) can't be the signal. CONDA_PREFIX is exported by both: pixi
+    # itself sets it for `run`/`shell`, and pixi-pack's generated activate.sh sets it
+    # unconditionally (confirmed by reading a real extracted activate.sh). Checking it
+    # matches sys.prefix (not just "is set to something") confirms this process is
+    # actually running from that environment, not just inheriting a stale var from an
+    # unrelated parent shell.
+    conda_prefix = os.environ.get("CONDA_PREFIX")
+    return bool(conda_prefix) and Path(conda_prefix).resolve() == Path(sys.prefix).resolve()
 
 
 def _bootstrap_or_relaunch(argv: list) -> None:
@@ -1404,7 +1409,12 @@ class CheckResult:
 def check_boltz_cli() -> CheckResult:
     boltz_path = _boltz_bin()
     if not boltz_path.exists():
-        fix = "run `pixi install`" if _in_pixi_env() else "run `setup`"
+        if not _in_pixi_env():
+            fix = "run `setup`"
+        elif shutil.which("pixi"):
+            fix = "run `pixi install`"
+        else:
+            fix = "the environment looks incomplete -- re-run the offline installer"
         return CheckResult("boltz_cli", "FAIL", f"{boltz_path} not found -- {fix}")
     try:
         out = subprocess.run([str(boltz_path), "--help"], capture_output=True, text=True, timeout=20)
@@ -1693,7 +1703,15 @@ def check_plip_env() -> CheckResult:
     # an ordinary run over a feature that isn't required).
     if _plip_available():
         return CheckResult("plip_env", "PASS", "cif2plip environment found -- interaction analysis will run")
-    fix = "run `pixi run postinstall`" if _in_pixi_env() else "run `setup-plip`"
+    if not _in_pixi_env():
+        fix = "run `setup-plip`"
+    elif shutil.which("pixi"):
+        fix = "run `pixi run postinstall`"
+    else:
+        # A Tier B offline pack's extracted environment: no `pixi` CLI is present at
+        # all (that's the point), so the fix is the same underlying pip command
+        # `postinstall` itself runs, spelled out directly.
+        fix = "run `python3 -m pip install --no-build-isolation plip pdb-tools`"
     return CheckResult("plip_env", "PASS", "cif2plip environment not found -- interaction analysis will be "
                         f"skipped (optional; {fix} to enable)")
 

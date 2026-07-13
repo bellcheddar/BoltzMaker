@@ -127,6 +127,34 @@ needed for one specific `compare-sse` metric (secondary-structure-element bounda
 shift, used when a structure has no deposited HELIX/SHEET records -- true for every
 Boltz-predicted structure). Every other `compare-sse` metric works without it.
 
+### Alternative: `pixi` (one unified environment, macOS + Linux/CUDA)
+
+```sh
+./install.sh
+```
+
+Installs [`pixi`](https://pixi.sh) if it isn't already on your machine, then solves and
+installs everything (`boltz`, `rdkit`, PLIP's OpenBabel/PyMOL stack, and the rest of
+`requirements.txt`) as **one** environment from `pixi.toml`/`pixi.lock`, replacing the
+need to separately run `setup` + `setup-plip` above. Reproducible (the committed
+`pixi.lock` pins every package on both `osx-arm64` and `linux-64`), and the only path
+here that's actually tested against Linux/CUDA rather than macOS/MPS alone. Once
+installed:
+
+```sh
+pixi run preflight my_campaign.md
+pixi run all my_campaign.md
+```
+
+(or `pixi shell` to activate the environment directly and run `python3 BoltzMaker.py
+...` as normal). PLIP needs one extra one-time step, same spirit as `setup-plip` above:
+`pixi run postinstall`.
+
+**No internet on the target machine at all?** See
+[`docs/tier_b_offline_install.md`](docs/tier_b_offline_install.md) for building a single
+self-extracting installer script per platform (`pixi-pack --create-executable`) that
+needs no `pixi`, no `conda`, and no network to run.
+
 ## 🧪 Examples
 
 Four entirely public-domain campaigns in `examples/`, run any of them with
@@ -585,7 +613,7 @@ and CLI-resolution tests for the parser fields above.
 ## 📋 To do
 
 - [ ] Share pip cache between the two environments (`PIP_CACHE_DIR`) so `setup-plip` doesn't re-download wheels the main venv already fetched
-- [ ] Pin exact dependency versions in both installers and add a cached/offline install mode for reproducible installs
+- [x] Pin exact dependency versions and add a cached/offline install mode for reproducible installs -- via `pixi.toml`/`pixi.lock` and `install.sh` (see **Alternative: pixi** above and `docs/tier_b_offline_install.md`), not by pinning `setup`/`setup-plip`'s own unpinned `requirements.txt`-driven installs, which remain as they were
 - [ ] Add `BoltzMaker.py doctor` -- a post-install check that imports boltz/rdkit/plip/openbabel/pymol in-process and reports exactly which env/feature is broken
 - [ ] Add an explicit Boltz model-weights cache dir + a `preflight` check for it (ties into the existing iCloud dataless-file eviction check)
 - [ ] Detect the MPS `torch.linalg.svd` CPU-fallback at `preflight` and warn with an estimated runtime multiplier for large multi-chain complexes

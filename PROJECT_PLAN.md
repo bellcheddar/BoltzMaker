@@ -87,7 +87,9 @@ The README's To-Do checklist is the authoritative, checkable list; grouped here 
 so the *shape* of the remaining work is visible at a glance.
 
 **Reliability & reproducibility** -- making a fresh install and a repeated run trustworthy:
-- Pin exact dependency versions in both installers + a cached/offline install mode
+- ~~Pin exact dependency versions + a cached/offline install mode~~ -- done via
+  `pixi.toml`/`pixi.lock`/`install.sh` (Tier A) and `docs/tier_b_offline_install.md`'s
+  self-extracting installer (Tier B); `setup`/`setup-plip` themselves remain unpinned
 - Share `PIP_CACHE_DIR` between the two environments so `setup-plip` doesn't re-fetch
   wheels the main venv already has
 - `BoltzMaker.py doctor` -- a post-install check that reports exactly which env/feature
