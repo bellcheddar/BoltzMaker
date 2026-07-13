@@ -85,8 +85,81 @@ cmd.png(output_path, width=1200, height=900, dpi=150, ray=1)
 '''
 
 
+# ==========================================================================
+# CLI styling -- stdlib-only (no pyfiglet/rich dependency) so the banner and
+# colored prompts work even in `setup`/`setup-plip`, which run on whatever
+# bare python3 the user has, before the managed venv (and rich) exists.
+# Respects NO_COLOR (https://no-color.org) and auto-disables on a non-tty
+# (piped output, log redirection, CI) so scripted use stays clean.
+# ==========================================================================
+
+_NO_COLOR = bool(os.environ.get("NO_COLOR")) or not sys.stdout.isatty()
+
+
+def _c(code: str) -> str:
+    return "" if _NO_COLOR else code
+
+
+_RESET = _c("\x1b[0m")
+_BOLD = _c("\x1b[1m")
+_DIM = _c("\x1b[2m")
+# marcdeller.com brand palette (matches the HTML dashboard's :root custom properties).
+_BLUE = _c("\x1b[38;2;30;115;190m")    # #1e73be -- primary
+_CYAN = _c("\x1b[38;2;74;159;212m")    # #4a9fd4 -- primary-light
+_AMBER = _c("\x1b[38;2;252;185;0m")    # #fcb900 -- accent
+_GREEN = _c("\x1b[38;2;0;208;132m")    # #00d084 -- accent
+_RED = _c("\x1b[38;2;214;39;40m")
+
+_BANNER_ART = r"""   ___       ____      __  ___     __
+  / _ )___  / / /____ /  |/  /__ _/ /_____ ____
+ / _  / _ \/ / __/_ // /|_/ / _ `/  '_/ -_) __/
+/____/\___/_/\__//__/_/  /_/\_,_/_/\_\\__/_/
+"""
+
+
+def _print_banner() -> None:
+    if _NO_COLOR:
+        print("BoltzMaker")
+        return
+    print()
+    for line in _BANNER_ART.splitlines():
+        print(f"{_BOLD}{_BLUE}{line}{_RESET}")
+    print(f"  {_DIM}Boltz-2 batch campaigns -- structure + affinity{_RESET}")
+    print()
+
+
+def _ok(msg: str) -> None:
+    print(f"{_GREEN}✓{_RESET} {msg}")
+
+
+def _info(msg: str) -> None:
+    print(f"{_BLUE}ℹ{_RESET} {msg}")
+
+
+def _warn(msg: str) -> None:
+    print(f"{_AMBER}⚠{_RESET} {msg}")
+
+
+def _err(msg: str) -> None:
+    print(f"{_RED}✗{_RESET} {msg}")
+
+
+def _step(msg: str) -> None:
+    print(f"{_BLUE}→{_RESET} {msg}")
+
+
 def _venv_bin(name: str) -> Path:
     return VENV_DIR / ("Scripts" if os.name == "nt" else "bin") / name
+
+
+def _boltz_bin() -> Path:
+    # Under pixi, boltz's console-script entry point lands on PATH inside the pixi
+    # environment directly (installed via [pypi-dependencies] in pixi.toml) --
+    # resolved via shutil.which rather than the .venv-specific path below.
+    if _in_pixi_env():
+        found = shutil.which("boltz")
+        return Path(found) if found else _venv_bin("boltz")
+    return _venv_bin("boltz")
 
 
 def _plip_venv_bin(name: str) -> Path:
@@ -94,6 +167,11 @@ def _plip_venv_bin(name: str) -> Path:
 
 
 def _plip_python() -> Path:
+    # Under pixi, plip/openbabel/pymol/gemmi all live in the one unified environment
+    # BoltzMaker.py is already running under (installed via pixi.toml + the
+    # `postinstall` task) -- no separate .plip_env/env/bin/python to point at.
+    if _in_pixi_env():
+        return Path(sys.executable)
     return _plip_venv_bin("python")
 
 
@@ -105,7 +183,37 @@ def _plip_label_script() -> Path:
     return PLIP_VENV_DIR / "label_residues.py"
 
 
+def _ensure_plip_assets_vendored() -> None:
+    """Fetch cif2plip.py and (re)write label_residues.py, idempotently.
+
+    Shared by cmd_setup_plip()'s full micromamba-env build and, under pixi, by
+    _plip_available()'s lazy self-heal -- `pixi run postinstall` only installs the
+    plip/pdb-tools Python packages (see pixi.toml), it doesn't vendor these two
+    BoltzMaker-side asset files, so the first real check for plip availability under
+    pixi is what actually fetches them.
+    """
+    cif2plip_dir = PLIP_VENV_DIR / "cif2plip"
+    cif2plip_dir.mkdir(parents=True, exist_ok=True)
+    script_path = cif2plip_dir / "cif2plip.py"
+    if not script_path.exists():
+        url = f"https://raw.githubusercontent.com/bellcheddar/cif2plip/{CIF2PLIP_COMMIT}/cif2plip.py"
+        _step(f"vendoring cif2plip.py (pinned commit {CIF2PLIP_COMMIT[:10]})")
+        _curl_download(url, script_path)
+    # Always (re)written, even when reusing an existing env, so an env built before this
+    # script existed picks up residue labeling without needing a full rebuild.
+    _plip_label_script().write_text(_LABEL_RESIDUES_SCRIPT)
+
+
 def _plip_available() -> bool:
+    if _in_pixi_env():
+        try:
+            import importlib
+            importlib.import_module("plip")
+        except ImportError:
+            return False
+        if not _plip_script().exists():
+            _ensure_plip_assets_vendored()
+        return _plip_script().exists()
     return _plip_python().exists() and _plip_script().exists()
 
 
@@ -128,8 +236,8 @@ def _find_boltz_python() -> Path:
                 return Path(path)
         except Exception:
             continue
-    print("ERROR: could not find a python3.12 interpreter (checked /opt/homebrew/bin, /usr/local/bin, PATH).")
-    print("Install one (e.g. `brew install python@3.12`) and re-run `setup`.")
+    _err("could not find a python3.12 interpreter (checked /opt/homebrew/bin, /usr/local/bin, PATH).")
+    _info("Install one (e.g. `brew install python@3.12`) and re-run `setup`.")
     sys.exit(1)
 
 
@@ -228,23 +336,23 @@ def _patch_boltz_mps_attention(venv_dir: Path) -> None:
     matches = glob.glob(str(venv_dir / "lib" / "python3.*" / "site-packages" / "boltz" /
                              "model" / "layers" / "triangular_attention" / "primitives.py"))
     if not matches:
-        print("BoltzMaker: WARNING -- could not find boltz's triangular_attention/primitives.py "
+        _warn("could not find boltz's triangular_attention/primitives.py "
               "to patch (MPS large-complex fix not applied).")
         return
     target = Path(matches[0])
     text = target.read_text()
 
     if "_MPS_ATTN_MAX_SCORE_ELEMENTS" in text:
-        print("BoltzMaker: MPS triangular-attention chunking patch already applied.")
+        _ok("MPS triangular-attention chunking patch already applied.")
         return
     if _BOLTZ_MPS_ATTN_ORIGINAL not in text:
-        print("BoltzMaker: WARNING -- boltz's _attention() source doesn't match the expected "
+        _warn("boltz's _attention() source doesn't match the expected "
               "vanilla text (boltz version changed?) -- skipping MPS large-complex patch. "
               "Large multi-chain complexes (>~1250 residues) may crash on Apple Silicon MPS.")
         return
 
     target.write_text(text.replace(_BOLTZ_MPS_ATTN_ORIGINAL, _BOLTZ_MPS_ATTN_PATCHED))
-    print("BoltzMaker: patched boltz's triangular attention to chunk on MPS for large complexes.")
+    _ok("patched boltz's triangular attention to chunk on MPS for large complexes.")
 
 
 def cmd_setup(argv: list) -> None:
@@ -255,21 +363,21 @@ def cmd_setup(argv: list) -> None:
         shutil.rmtree(VENV_DIR)
     if not VENV_DIR.exists():
         interpreter = _find_boltz_python()
-        print(f"BoltzMaker: creating venv at {VENV_DIR} using {interpreter}")
+        _step(f"creating venv at {VENV_DIR} using {interpreter}")
         subprocess.run([str(interpreter), "-m", "venv", str(VENV_DIR)], check=True)
     else:
-        print(f"BoltzMaker: reusing existing venv at {VENV_DIR} (pass --force to recreate)")
+        _info(f"reusing existing venv at {VENV_DIR} (pass --force to recreate)")
 
     pip = _venv_bin("pip")
     subprocess.run([str(pip), "install", "--upgrade", "pip"], check=True)
 
-    print("BoltzMaker: about to install boltz + dependencies into the managed venv.")
-    print("  This pulls PyTorch (~2-3 GB) and, on the first `boltz predict` run,")
-    print("  Boltz will download several GB of model weights over the network.")
+    _step("about to install boltz + dependencies into the managed venv.")
+    print(f"  {_DIM}This pulls PyTorch (~2-3 GB) and, on the first `boltz predict` run,{_RESET}")
+    print(f"  {_DIM}Boltz will download several GB of model weights over the network.{_RESET}")
     if not yes:
-        resp = input("Continue? [y/N] ").strip().lower()
+        resp = input(f"{_BLUE}?{_RESET} Continue? {_DIM}(y/N){_RESET} ").strip().lower()
         if resp != "y":
-            print("Aborted.")
+            _err("Aborted.")
             sys.exit(1)
 
     subprocess.run(
@@ -281,7 +389,7 @@ def cmd_setup(argv: list) -> None:
     (VENV_DIR / "requirements.lock.txt").write_text(freeze.stdout)
 
     boltz_check = subprocess.run([str(_venv_bin("boltz")), "--help"], capture_output=True, text=True)
-    print(f"BoltzMaker: boltz CLI check exit={boltz_check.returncode}")
+    (_ok if boltz_check.returncode == 0 else _warn)(f"boltz CLI check exit={boltz_check.returncode}")
 
     _patch_boltz_mps_attention(VENV_DIR)
 
@@ -290,8 +398,11 @@ def cmd_setup(argv: list) -> None:
         [str(py), "-c", "import torch; print('mps:', torch.backends.mps.is_available()); print('cuda:', torch.cuda.is_available())"],
         capture_output=True, text=True,
     )
-    print(torch_check.stdout.strip() or f"WARNING: torch import check failed: {torch_check.stderr[-500:]}")
-    print("BoltzMaker: setup complete. Run `python3 BoltzMaker.py all <boltz_input.md>` next.")
+    if torch_check.stdout.strip():
+        _info(torch_check.stdout.strip())
+    else:
+        _warn(f"torch import check failed: {torch_check.stderr[-500:]}")
+    _ok("setup complete. Run `python3 BoltzMaker.py all <boltz_input.md>` next.")
 
 
 # ==========================================================================
@@ -315,11 +426,11 @@ def _download_micromamba(dest: Path) -> None:
     arch = platform.machine()
     plat = {"arm64": "osx-arm64", "x86_64": "osx-64"}.get(arch)
     if plat is None:
-        print(f"ERROR: no known micromamba build for platform {arch!r}.")
-        print(f"Install micromamba yourself (https://micro.mamba.pm) and place the binary at {dest}")
+        _err(f"no known micromamba build for platform {arch!r}.")
+        _info(f"Install micromamba yourself (https://micro.mamba.pm) and place the binary at {dest}")
         sys.exit(1)
     url = f"https://micro.mamba.pm/api/micromamba/{plat}/latest"
-    print(f"BoltzMaker: downloading micromamba from {url}")
+    _step(f"downloading micromamba from {url}")
     dest.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory() as tmp:
         tar_path = Path(tmp) / "micromamba.tar.bz2"
@@ -343,24 +454,24 @@ def cmd_setup_plip(argv: list) -> None:
 
     env_dir = PLIP_VENV_DIR / "env"
     if not env_dir.exists():
-        print("BoltzMaker: about to build a separate environment for cif2plip (protein-ligand")
-        print("  interaction analysis) via conda-forge (python + gemmi + openbabel + pymol-open-source).")
-        print("  This is roughly 1-1.5GB (mostly Qt/PyMOL's own dependencies), separate from")
-        print("  BoltzMaker's own pip-only venv, and entirely optional -- BoltzMaker works fully")
-        print("  without it.")
+        _step("about to build a separate environment for cif2plip (protein-ligand")
+        print(f"  {_DIM}interaction analysis) via conda-forge (python + gemmi + openbabel + pymol-open-source).{_RESET}")
+        print(f"  {_DIM}This is roughly 1-1.5GB (mostly Qt/PyMOL's own dependencies), separate from{_RESET}")
+        print(f"  {_DIM}BoltzMaker's own pip-only venv, and entirely optional -- BoltzMaker works fully{_RESET}")
+        print(f"  {_DIM}without it.{_RESET}")
         if not yes:
-            resp = input("Continue? [y/N] ").strip().lower()
+            resp = input(f"{_BLUE}?{_RESET} Continue? {_DIM}(y/N){_RESET} ").strip().lower()
             if resp != "y":
-                print("Aborted.")
+                _err("Aborted.")
                 sys.exit(1)
-        print(f"BoltzMaker: creating {env_dir} via micromamba")
+        _step(f"creating {env_dir} via micromamba")
         subprocess.run(
             [str(micromamba), "create", "-y", "-p", str(env_dir), "-c", "conda-forge",
              "python=3.11", "gemmi", "openbabel", "pymol-open-source"],
             check=True,
         )
     else:
-        print(f"BoltzMaker: reusing existing plip env at {env_dir} (pass --force to recreate)")
+        _info(f"reusing existing plip env at {env_dir} (pass --force to recreate)")
 
     pip = env_dir / "bin" / "pip"
     subprocess.run([str(pip), "install", "pdb-tools"], check=True)
@@ -370,29 +481,21 @@ def cmd_setup_plip(argv: list) -> None:
     # isolation must be off for that check to find it and skip the (broken) rebuild.
     subprocess.run([str(pip), "install", "--no-build-isolation", "plip"], check=True)
 
-    cif2plip_dir = PLIP_VENV_DIR / "cif2plip"
-    cif2plip_dir.mkdir(parents=True, exist_ok=True)
-    script_path = cif2plip_dir / "cif2plip.py"
-    url = f"https://raw.githubusercontent.com/bellcheddar/cif2plip/{CIF2PLIP_COMMIT}/cif2plip.py"
-    print(f"BoltzMaker: vendoring cif2plip.py (pinned commit {CIF2PLIP_COMMIT[:10]})")
-    _curl_download(url, script_path)
+    (PLIP_VENV_DIR / "cif2plip" / "cif2plip.py").unlink(missing_ok=True)  # force a re-fetch below
+    _ensure_plip_assets_vendored()
 
-    # Always (re)written, even when reusing an existing env, so an env built before this
-    # script existed picks up residue labeling without needing a full rebuild.
-    _plip_label_script().write_text(_LABEL_RESIDUES_SCRIPT)
-
-    print("BoltzMaker: smoke-testing the plip environment...")
+    _step("smoke-testing the plip environment...")
     smoke = subprocess.run(
         [str(env_dir / "bin" / "python"), "-c", "import pymol, openbabel, gemmi, plip; print('SMOKE_OK')"],
         capture_output=True, text=True,
     )
     if smoke.returncode != 0 or "SMOKE_OK" not in smoke.stdout:
-        print("ERROR: plip environment smoke test failed:")
+        _err("plip environment smoke test failed:")
         print(smoke.stderr[-2000:])
         sys.exit(1)
-    print("BoltzMaker: setup-plip complete.")
-    print("  `analyze` will now run interaction analysis automatically, and `new` can suggest")
-    print("  pocket residues from a reference structure.")
+    _ok("setup-plip complete.")
+    print(f"  {_DIM}`analyze` will now run interaction analysis automatically, and `new` can suggest{_RESET}")
+    print(f"  {_DIM}pocket residues from a reference structure.{_RESET}")
 
 
 # ==========================================================================
@@ -400,23 +503,51 @@ def cmd_setup_plip(argv: list) -> None:
 # command below this point can assume rich/pandas/yaml/rdkit are importable.
 # ==========================================================================
 
+def _in_pixi_env() -> bool:
+    # Set by `pixi run`/`pixi shell` for the exact duration of that session -- the
+    # reliable signal that pixi (not our own .venv/.plip_env machinery) already owns
+    # dependency management here. `PIXI_PROJECT_ROOT` also matches this checkout
+    # specifically (not some unrelated pixi project the shell happens to be nested
+    # under), which `PIXI_IN_SHELL` alone wouldn't guarantee.
+    return os.environ.get("PIXI_PROJECT_ROOT") == str(SCRIPT_DIR)
+
+
 def _bootstrap_or_relaunch(argv: list) -> None:
     subcommand = argv[1] if len(argv) > 1 else None
-    if subcommand == "setup":
-        cmd_setup(argv[2:])
+    if subcommand in ("setup", "setup-plip"):
+        if _in_pixi_env():
+            _print_banner()
+            _err(f"'{subcommand}' builds BoltzMaker's own .venv/.plip_env -- redundant "
+                 "and not needed inside a pixi environment.")
+            _info("Dependencies here are already managed by pixi.toml. Run `pixi install`, "
+                  "then `pixi run postinstall` once for plip/pdb-tools.")
+            sys.exit(1)
+        _print_banner()
+        (cmd_setup if subcommand == "setup" else cmd_setup_plip)(argv[2:])
         sys.exit(0)
-    if subcommand == "setup-plip":
-        cmd_setup_plip(argv[2:])
-        sys.exit(0)
+
+    if _in_pixi_env():
+        # Already running under pixi's own interpreter with every dependency this
+        # script needs (rich/pandas/yaml/rdkit/...) installed by pixi.toml -- skip the
+        # .venv existence check/execv relaunch below entirely, straight through to the
+        # rest of the script.
+        if subcommand != "format":
+            _print_banner()
+        return
 
     venv_python = _venv_bin("python3")
     if not venv_python.exists():
-        print("BoltzMaker: no managed environment found.")
-        print(f"Run: python3 {SCRIPT_PATH} setup")
+        _err("no managed environment found.")
+        _info(f"Run: python3 {SCRIPT_PATH} setup")
         sys.exit(1)
     if Path(sys.executable).resolve() != venv_python.resolve():
         os.execv(str(venv_python), [str(venv_python), str(SCRIPT_PATH)] + argv[1:])
     # else: already running under venv python -- fall through to the rest of the script.
+    # Printed here (not at the top of this function) so it appears exactly once per
+    # invocation, after the execv relaunch above, not once in each process image.
+    # Skipped for `format`: a fast, often-scripted operation that should stay quiet.
+    if subcommand != "format":
+        _print_banner()
 
 
 _bootstrap_or_relaunch(sys.argv)
@@ -438,9 +569,16 @@ from dataclasses import dataclass, field, asdict
 import yaml
 import pandas as pd
 import psutil
+from rich import box as _rich_box
 from rich.console import Console
 from rich.table import Table
 from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn, TimeElapsedColumn, TimeRemainingColumn
+
+# marcdeller.com brand palette, for rich components (Table/Progress) that render
+# post-bootstrap -- matches the plain-ANSI _BLUE/_AMBER/_GREEN used pre-bootstrap above.
+_RICH_BLUE = "#1e73be"
+_RICH_AMBER = "#fcb900"
+_RICH_GREEN = "#00d084"
 from openpyxl.styles import Font
 from openpyxl.utils import get_column_letter
 from openpyxl.formatting.rule import ColorScaleRule
@@ -669,7 +807,7 @@ def _split_records(lines: list) -> list:
         field_name, field_value = fm.group(1).strip().lower(), _strip_quotes(fm.group(2).strip())
         allowed = _RECORD_ALLOWED_FIELDS.get(current[0], set())
         if field_name not in allowed:
-            print(f"BoltzMaker: WARNING: unrecognized field '{fm.group(1).strip()}:' in "
+            _warn(f"unrecognized field '{fm.group(1).strip()}:' in "
                   f"{current[0].capitalize()} '{current[1]}' (line {lineno}) -- ignored, typo?")
             continue
         current[2][field_name] = field_value
@@ -820,13 +958,13 @@ def cmd_format(md_path: Path, check: bool = False) -> None:
     parse_md(md_path)  # validate first: surfaces MDParseError / unknown-field warnings
     formatted = format_md_text(original)
     if formatted == original:
-        print(f"BoltzMaker: {md_path} already formatted.")
+        _ok(f"{md_path} already formatted.")
         return
     if check:
-        print(f"BoltzMaker: {md_path} would be reformatted (comment alignment / blank-line spacing).")
+        _warn(f"{md_path} would be reformatted (comment alignment / blank-line spacing).")
         sys.exit(1)
     md_path.write_text(formatted)
-    print(f"BoltzMaker: reformatted {md_path}.")
+    _ok(f"reformatted {md_path}.")
 
 
 # ==========================================================================
@@ -839,9 +977,9 @@ def cmd_format(md_path: Path, check: bool = False) -> None:
 # ==========================================================================
 
 def _wiz_prompt(msg: str, default: str = None) -> str:
-    suffix = f" [{default}]" if default is not None else ""
+    suffix = f" {_DIM}[{default}]{_RESET}" if default is not None else ""
     while True:
-        val = input(f"{msg}{suffix}: ").strip()
+        val = input(f"{_BLUE}?{_RESET} {msg}{suffix}{_DIM}:{_RESET} ").strip()
         if val:
             return val
         if default is not None:
@@ -849,27 +987,27 @@ def _wiz_prompt(msg: str, default: str = None) -> str:
 
 
 def _wiz_yesno(msg: str, default: bool = False) -> bool:
-    hint = "Y/n" if default else "y/N"
+    hint = f"{_GREEN}Y{_RESET}{_DIM}/n{_RESET}" if default else f"{_DIM}y/{_RESET}{_GREEN}N{_RESET}"
     while True:
-        val = input(f"{msg} ({hint}): ").strip().lower()
+        val = input(f"{_BLUE}?{_RESET} {msg} {_DIM}({_RESET}{hint}{_DIM}){_RESET} ").strip().lower()
         if not val:
             return default
         if val in ("y", "yes"):
             return True
         if val in ("n", "no"):
             return False
-        print("  please answer y or n")
+        _warn("please answer y or n")
 
 
 def _wiz_name(msg: str, taken: set) -> str:
     while True:
-        val = input(f"{msg}: ").strip()
+        val = input(f"{_BLUE}?{_RESET} {msg}{_DIM}:{_RESET} ").strip()
         if not val:
-            print("  a name is required")
+            _warn("a name is required")
         elif len(val) > 5:
-            print(f"  '{val}' is {len(val)} characters -- Boltz needs chain ids MAX 5 CHARACTERS, try again")
+            _warn(f"'{val}' is {len(val)} characters -- Boltz needs chain ids MAX 5 CHARACTERS, try again")
         elif val in taken:
-            print(f"  '{val}' is already used, pick a different name")
+            _warn(f"'{val}' is already used, pick a different name")
         else:
             return val
 
@@ -904,48 +1042,49 @@ def _wiz_reference_structure_suggestions(name: str, sequence: str) -> list:
         return []
     ref_path = Path(_wiz_prompt("  Path to the reference structure (.cif/.pdb/.mmcif)")).expanduser()
     if not ref_path.exists():
-        print(f"  {ref_path} not found -- skipping")
+        _warn(f"{ref_path} not found -- skipping")
         return []
 
     import tempfile
     with tempfile.TemporaryDirectory() as tmp:
         work_dir = Path(tmp)
-        print("  running cif2plip on the reference structure...")
+        _step("running cif2plip on the reference structure...")
         try:
             proc = _run_cif2plip(ref_path, work_dir)
         except subprocess.TimeoutExpired:
-            print("  cif2plip timed out on that structure -- skipping")
+            _warn("cif2plip timed out on that structure -- skipping")
             return []
         inter_csv = work_dir / f"{ref_path.stem}_interactions.csv"
         summ_csv = work_dir / f"{ref_path.stem}_ligand_summary.csv"
         pdb_path = work_dir / f"{ref_path.stem}.pdb"
         if proc.returncode != 0 or not inter_csv.exists() or not summ_csv.exists():
-            print("  cif2plip couldn't process that structure -- skipping")
+            _warn("cif2plip couldn't process that structure -- skipping")
             return []
 
         inter_df = pd.read_csv(inter_csv)
         summ_df = pd.read_csv(summ_csv).reset_index(drop=True)
         if summ_df.empty:
-            print("  no ligands detected in that structure -- skipping")
+            _warn("no ligands detected in that structure -- skipping")
             return []
 
         if len(summ_df) == 1:
             chosen = summ_df.iloc[0]["ligand"]
         else:
-            print("  Multiple ligands detected in the reference structure:")
+            _info("Multiple ligands detected in the reference structure:")
             for i, r in summ_df.iterrows():
-                print(f"    [{i + 1}] {r['ligand']} (SMILES: {r.get('smiles', '?')}, "
+                print(f"    {_DIM}[{i + 1}]{_RESET} {r['ligand']} (SMILES: {r.get('smiles', '?')}, "
                       f"{r.get('total_interactions', '?')} interactions)")
-            choice = input(f"  Which one is the relevant bound ligand? [1-{len(summ_df)}]: ").strip()
+            choice = input(f"{_BLUE}?{_RESET}   Which one is the relevant bound ligand? "
+                           f"{_DIM}[1-{len(summ_df)}]:{_RESET} ").strip()
             try:
                 chosen = summ_df.iloc[int(choice) - 1]["ligand"]
             except (ValueError, IndexError):
-                print("  not a valid choice -- skipping")
+                _warn("not a valid choice -- skipping")
                 return []
 
         sub = inter_df[inter_df["ligand"] == chosen]
         if sub.empty:
-            print("  that ligand has no recorded interactions -- skipping")
+            _warn("that ligand has no recorded interactions -- skipping")
             return []
         ref_chain_id = sub.iloc[0]["prot_chain"]
         contact_resnrs = sorted(int(x) for x in sub["prot_resnr"].unique())
@@ -958,7 +1097,7 @@ def _wiz_reference_structure_suggestions(name: str, sequence: str) -> list:
             ref_seq = polymer.make_one_letter_sequence()
             resnr_to_pos = {res.seqid.num: i for i, res in enumerate(polymer)}
         except Exception as exc:
-            print(f"  couldn't extract the reference chain's sequence -- skipping ({exc})")
+            _warn(f"couldn't extract the reference chain's sequence -- skipping ({exc})")
             return []
 
         mapping = _align_positions(ref_seq, sequence)
@@ -972,24 +1111,28 @@ def _wiz_reference_structure_suggestions(name: str, sequence: str) -> list:
             suggested.append(target_pos + 1)  # 1-indexed residue number, matching Boltz convention
 
         if not suggested:
-            print(f"  none of the reference structure's contact residues could be mapped onto "
+            _warn(f"none of the reference structure's contact residues could be mapped onto "
                   f"{name}'s sequence -- skipping")
             return []
         if skipped:
-            print(f"  ({skipped} reference residue(s) had no equivalent position in {name}'s sequence, skipped)")
-        print(f"  Found {len(suggested)} candidate pocket residue(s) from the reference structure: "
-              f"{', '.join(str(r) for r in suggested)}")
+            _info(f"({skipped} reference residue(s) had no equivalent position in {name}'s sequence, skipped)")
+        _ok(f"Found {len(suggested)} candidate pocket residue(s) from the reference structure: "
+            f"{', '.join(str(r) for r in suggested)}")
         if _wiz_yesno("  Add these as pocket-contact constraints", default=True):
             return suggested
         return []
 
 
+def _wiz_section(title: str) -> None:
+    print(f"\n{_BOLD}{_AMBER}{title}{_RESET}")
+
+
 def cmd_new(md_path: Path) -> None:
     if md_path.exists() and not _wiz_yesno(f"{md_path} already exists -- overwrite", default=False):
-        print("BoltzMaker: aborted, nothing written.")
+        _err("aborted, nothing written.")
         return
 
-    print("BoltzMaker: let's set up a new campaign. Press Ctrl-C any time to cancel.\n")
+    _info("let's set up a new campaign. Press Ctrl-C any time to cancel.")
     try:
         predict_affinity = _wiz_yesno("Predict binding affinity too (slower, adds Kd/pIC50 estimates)", default=False)
         out = ["Settings:", "Output folder: ./boltz_yamls",
@@ -998,7 +1141,7 @@ def cmd_new(md_path: Path) -> None:
         used_names, known_partners = set(), set()
         partner_blocks, protein_blocks, statement_lines = [], [], []
 
-        print("\nNow the protein(s) -- at least one is required.")
+        _wiz_section("Protein(s) -- at least one is required")
         first = True
         while first or _wiz_yesno("Add another protein", default=False):
             first = False
@@ -1026,7 +1169,8 @@ def cmd_new(md_path: Path) -> None:
                 block.append(f"Partners: {', '.join(partner_ids)}")
 
             while _wiz_yesno(f"Add a constraint on {name}", default=False):
-                choice = input("  [1] Covalent bond  [2] Pocket contact  [3] Distance constraint: ").strip()
+                choice = input(f"{_BLUE}?{_RESET}   {_DIM}[1]{_RESET} Covalent bond  {_DIM}[2]{_RESET} Pocket "
+                               f"contact  {_DIM}[3]{_RESET} Distance constraint{_DIM}:{_RESET} ").strip()
                 if choice == "1":
                     r1 = _wiz_prompt(f"  {name} residue number")
                     a1 = _wiz_prompt(f"  {name} atom name (e.g. SG for a cysteine sulfur)")
@@ -1044,17 +1188,18 @@ def cmd_new(md_path: Path) -> None:
                     dist = _wiz_prompt("  Maximum distance in Angstrom", default="6.0")
                     statement_lines.append(f"Distance constraint: {name} residue {r1} to {other} residue {r2} within {dist} Angstrom")
                 else:
-                    print("  not a recognized choice, skipping")
+                    _warn("not a recognized choice, skipping")
             protein_blocks.append(block)
 
-        print("\nNow the ligand(s) -- at least one is required.")
+        _wiz_section("Ligand(s) -- at least one is required")
         ligand_blocks = []
         first = True
         while first or _wiz_yesno("Add another ligand", default=False):
             first = False
             name = _wiz_name("Ligand short name (max 5 letters)", used_names)
             used_names.add(name)
-            kind = input("  SMILES or CCD code? [1] SMILES  [2] CCD: ").strip()
+            kind = input(f"{_BLUE}?{_RESET}   SMILES or CCD code? {_DIM}[1]{_RESET} SMILES  "
+                         f"{_DIM}[2]{_RESET} CCD{_DIM}:{_RESET} ").strip()
             if kind == "2":
                 code = _wiz_prompt(f"  CCD code for {name}")
                 ligand_blocks.append([f"Ligand: {name}", f"CCD: {code}"])
@@ -1063,12 +1208,12 @@ def cmd_new(md_path: Path) -> None:
                 try:
                     from rdkit import Chem
                     if Chem.MolFromSmiles(smiles) is None:
-                        print("  WARNING: rdkit couldn't parse that SMILES -- saved anyway, double-check it")
+                        _warn("rdkit couldn't parse that SMILES -- saved anyway, double-check it")
                 except Exception:
                     pass
                 ligand_blocks.append([f"Ligand: {name}", f"SMILES: {smiles}"])
     except (KeyboardInterrupt, EOFError):
-        print("\nBoltzMaker: cancelled, nothing written.")
+        _err("cancelled, nothing written.")
         return
 
     for block in protein_blocks + partner_blocks + ligand_blocks:
@@ -1079,8 +1224,9 @@ def cmd_new(md_path: Path) -> None:
         out.extend(statement_lines)
 
     md_path.write_text("\n".join(out) + "\n")
-    print(f"\nBoltzMaker: wrote {md_path}")
-    print(f"Next: python3 BoltzMaker.py preflight {md_path}")
+    print()
+    _ok(f"wrote {md_path}")
+    _info(f"Next: python3 BoltzMaker.py preflight {md_path}")
 
 
 def parse_md(path: Path) -> Campaign:
@@ -1238,7 +1384,7 @@ def generate_yamls(campaign: Campaign, output_dir: Path) -> list:
 def load_manifest(output_dir: Path) -> list:
     manifest_path = output_dir / MANIFEST_FILENAME
     if not manifest_path.exists():
-        print(f"BoltzMaker: no manifest at {manifest_path} -- run `generate` first.")
+        _err(f"no manifest at {manifest_path} -- run `generate` first.")
         sys.exit(1)
     with manifest_path.open() as f:
         return [Target(**d) for d in json.load(f)]
@@ -1256,9 +1402,10 @@ class CheckResult:
 
 
 def check_boltz_cli() -> CheckResult:
-    boltz_path = _venv_bin("boltz")
+    boltz_path = _boltz_bin()
     if not boltz_path.exists():
-        return CheckResult("boltz_cli", "FAIL", f"{boltz_path} not found -- run `setup`")
+        fix = "run `pixi install`" if _in_pixi_env() else "run `setup`"
+        return CheckResult("boltz_cli", "FAIL", f"{boltz_path} not found -- {fix}")
     try:
         out = subprocess.run([str(boltz_path), "--help"], capture_output=True, text=True, timeout=20)
         ok = out.returncode == 0
@@ -1546,8 +1693,9 @@ def check_plip_env() -> CheckResult:
     # an ordinary run over a feature that isn't required).
     if _plip_available():
         return CheckResult("plip_env", "PASS", "cif2plip environment found -- interaction analysis will run")
+    fix = "run `pixi run postinstall`" if _in_pixi_env() else "run `setup-plip`"
     return CheckResult("plip_env", "PASS", "cif2plip environment not found -- interaction analysis will be "
-                        "skipped (optional; run `setup-plip` to enable)")
+                        f"skipped (optional; {fix} to enable)")
 
 
 def run_preflight(manifest: list, output_dir: Path, campaign: Campaign, md_path: Path, strict: bool = False,
@@ -1566,14 +1714,16 @@ def run_preflight(manifest: list, output_dir: Path, campaign: Campaign, md_path:
         check_duplicate_targets(manifest),
         check_plip_env(),
     ]
-    table = Table(title="BoltzMaker preflight")
+    table = Table(title=f"[bold {_RICH_BLUE}]BoltzMaker preflight[/bold {_RICH_BLUE}]",
+                  box=_rich_box.ROUNDED, header_style=f"bold {_RICH_BLUE}", border_style="dim")
     table.add_column("Check")
     table.add_column("Status")
     table.add_column("Detail")
-    style = {"PASS": "green", "WARN": "yellow", "FAIL": "red"}
+    style = {"PASS": _RICH_GREEN, "WARN": _RICH_AMBER, "FAIL": "red"}
+    icon = {"PASS": "✓", "WARN": "⚠", "FAIL": "✗"}
     worst = "PASS"
     for r in results:
-        table.add_row(r.name, f"[{style[r.status]}]{r.status}[/{style[r.status]}]", r.message)
+        table.add_row(r.name, f"[{style[r.status]}]{icon[r.status]} {r.status}[/{style[r.status]}]", r.message)
         if r.status == "FAIL" or (strict and r.status == "WARN"):
             worst = "FAIL"
         elif r.status == "WARN" and worst != "FAIL":
@@ -1660,7 +1810,7 @@ def run_boltz(yaml_dir: Path, out_dir: Path, manifest: list, workers: int, accel
     if limit is not None:
         pending = pending[:limit]
     if not pending:
-        print(f"BoltzMaker: {len(complete)}/{len(manifest)} target(s) already complete, nothing to run.")
+        _ok(f"{len(complete)}/{len(manifest)} target(s) already complete, nothing to run.")
         return
 
     # Boltz's own "Running affinity prediction for N inputs" phase iterates over every
@@ -1714,7 +1864,7 @@ def _run_boltz_batch_with_retry(batch: list, total_pending: int, manifest_len: i
                               max_parallel_samples, recycling_steps, sampling_steps, diffusion_samples,
                               diffusion_samples_affinity, sampling_steps_affinity, max_msa_seqs)
         else:
-            print(f"BoltzMaker: retrying {len(remaining)} incomplete target(s) in isolation "
+            _step(f"retrying {len(remaining)} incomplete target(s) in isolation "
                   f"(attempt {attempt}/{max_retries}, one at a time, {_RETRY_SETTLE_SECONDS}s pause "
                   f"before each so memory settles): {[t.stem for t in remaining]}")
             for t in remaining:
@@ -1729,10 +1879,10 @@ def _run_boltz_batch_with_retry(batch: list, total_pending: int, manifest_len: i
             return
         attempt += 1
         if attempt > max_retries:
-            print(f"BoltzMaker: {len(remaining)} target(s) still incomplete after {max_retries} "
-                  f"automatic retr{'y' if max_retries == 1 else 'ies'} -- giving up: "
-                  f"{[t.stem for t in remaining]}. Re-run `run`/`all` later to try again, or investigate "
-                  f"the per-target log under {campaign_dir}.")
+            _err(f"{len(remaining)} target(s) still incomplete after {max_retries} "
+                 f"automatic retr{'y' if max_retries == 1 else 'ies'} -- giving up: "
+                 f"{[t.stem for t in remaining]}. Re-run `run`/`all` later to try again, or investigate "
+                 f"the per-target log under {campaign_dir}.")
             return
 
 
@@ -1745,7 +1895,7 @@ def _run_boltz_batch(pending: list, total_pending: int, manifest_len: int, compl
     _stage_targets(yaml_dir, pending, stage_dir)
     check_hidden_files(stage_dir)
 
-    boltz_bin = _venv_bin("boltz")
+    boltz_bin = _boltz_bin()
     cmd = [
         str(boltz_bin), "predict", str(stage_dir),
         "--use_potentials", "--diffusion_samples", str(diffusion_samples), "--use_msa_server",
@@ -1789,9 +1939,9 @@ def _run_boltz_batch(pending: list, total_pending: int, manifest_len: int, compl
                 f"PYTORCH_MPS_LOW_WATERMARK_RATIO={env.get('PYTORCH_MPS_LOW_WATERMARK_RATIO', 'unset')} ===\n")
     log_f.flush()
 
-    print(f"BoltzMaker: {complete_len}/{manifest_len} campaign target(s) already complete; "
+    _info(f"{complete_len}/{manifest_len} campaign target(s) already complete; "
           f"running {len(pending)}/{total_pending} target(s) in this batch.")
-    print(f"BoltzMaker: log -> {log_path}")
+    _info(f"log -> {log_path}")
 
     run_start = time.time()
     proc = subprocess.Popen(cmd, cwd=str(yaml_dir), env=env, stdout=subprocess.PIPE,
@@ -1871,9 +2021,11 @@ def _run_boltz_batch(pending: list, total_pending: int, manifest_len: int, compl
     total = len(pending)
     try:
         with Progress(
-            SpinnerColumn(), TextColumn("[progress.description]{task.description}"), BarColumn(),
+            SpinnerColumn(spinner_name="dots", style=f"bold {_RICH_BLUE}"),
+            TextColumn(f"[bold {_RICH_BLUE}]{{task.description}}[/bold {_RICH_BLUE}]"),
+            BarColumn(complete_style=_RICH_GREEN, finished_style=_RICH_GREEN, pulse_style=_RICH_AMBER),
             TextColumn("{task.completed}/{task.total}"), TimeElapsedColumn(), TimeRemainingColumn(),
-            TextColumn("mem: {task.fields[mem]}"),
+            TextColumn(f"[{_RICH_AMBER}]mem: {{task.fields[mem]}}[/{_RICH_AMBER}]"),
         ) as progress:
             outer = progress.add_task("targets", total=total, mem="")
             inner = progress.add_task("phase: starting", total=1, mem="")
@@ -1891,12 +2043,13 @@ def _run_boltz_batch(pending: list, total_pending: int, manifest_len: int, compl
             done = sum(1 for t in pending if _target_complete(pred_dir, t.stem, t.needs_affinity))
             progress.update(outer, completed=done, mem=f"{mem_state['rss_gb']:.1f}/{total_ram_gb:.0f}GB")
     except KeyboardInterrupt:
-        print("\nBoltzMaker: interrupted -- terminating boltz predict...")
+        print()
+        _warn("interrupted -- terminating boltz predict...")
         proc.terminate()
         try:
             proc.wait(timeout=15)
         except subprocess.TimeoutExpired:
-            print("BoltzMaker: boltz predict did not exit within 15s -- sending SIGKILL.")
+            _warn("boltz predict did not exit within 15s -- sending SIGKILL.")
             proc.kill()
             proc.wait(timeout=30)
         raise
@@ -1925,11 +2078,11 @@ def _run_boltz_batch(pending: list, total_pending: int, manifest_len: int, compl
             hf.write(json.dumps(record) + "\n")
 
     still_missing = [t.stem for t in pending if not _target_complete(pred_dir, t.stem, t.needs_affinity)]
-    print(f"BoltzMaker: boltz predict exited with code {proc.returncode}")
+    _info(f"boltz predict exited with code {proc.returncode}")
     if still_missing:
-        print(f"WARNING: {len(still_missing)} target(s) did not complete: {still_missing}")
+        _warn(f"{len(still_missing)} target(s) did not complete: {still_missing}")
     else:
-        print(f"BoltzMaker: all {total} submitted target(s) completed successfully.")
+        _ok(f"all {total} submitted target(s) completed successfully.")
 
 
 # ==========================================================================
@@ -2121,7 +2274,7 @@ def _analyze_target_interactions(t: Target, cif_path: Path, campaign: Campaign, 
                 "inchikey": status.get("inchikey"), "contacts": contacts,
                 "png": status.get("png"), "pse": status.get("pse")}
 
-    print(f"BoltzMaker: interaction profiling {i}/{n} ({t.stem})...")
+    _step(f"interaction profiling {i}/{n} ({t.stem})...")
     stage_dir = campaign_dir / f".boltz_plip_staging_{t.stem}"
     if stage_dir.exists():
         shutil.rmtree(stage_dir)
@@ -2164,7 +2317,7 @@ def _analyze_target_interactions(t: Target, cif_path: Path, campaign: Campaign, 
 
     if chosen is None:
         status_str, counts, inchikey, contacts = "ambiguous_ligand", {}, None, []
-        print(f"BoltzMaker: WARNING: {t.stem} -- couldn't unambiguously match the campaign "
+        _warn(f"{t.stem} -- couldn't unambiguously match the campaign "
               f"ligand against cif2plip's detected ligands, skipping interaction analysis")
     else:
         sub = inter_df[inter_df["ligand"] == chosen]
@@ -3775,7 +3928,7 @@ def write_html(df: pd.DataFrame, path: Path, campaign_dir: Path, campaign: Campa
             )
         if session_cards:
             if total_bytes:
-                print(f"BoltzMaker: bundled {total_bytes / 1e6:.1f}MB of PyMOL session(s) into "
+                _info(f"bundled {total_bytes / 1e6:.1f}MB of PyMOL session(s) into "
                       f"{sessions_dir} (this is why the dashboard is no longer a single file)")
             parts.extend(session_cards)
             if viewer_scripts:
@@ -3821,7 +3974,7 @@ def write_html(df: pd.DataFrame, path: Path, campaign_dir: Path, campaign: Campa
         # Fresh checkouts always have vendor/plotly-2.35.2.min.js committed; this is only
         # a safety net (e.g. a shallow/sparse clone), and it reintroduces the exact
         # htmlpreview-breaking failure mode the vendored copy exists to avoid.
-        print("BoltzMaker: WARNING: vendor/plotly-2.35.2.min.js not found -- falling back to "
+        _warn("vendor/plotly-2.35.2.min.js not found -- falling back to "
               "the plotly.js CDN, which is known not to render in some HTML-preview contexts")
         plotly_script = "<script src='https://cdn.plot.ly/plotly-2.35.2.min.js'></script>"
 
@@ -3830,7 +3983,7 @@ def write_html(df: pd.DataFrame, path: Path, campaign_dir: Path, campaign: Campa
         if THREEDMOL_JS_PATH.exists():
             threedmol_script = f"<script>{THREEDMOL_JS_PATH.read_text()}</script>"
         else:
-            print("BoltzMaker: WARNING: vendor/3Dmol-2.5.5-min.js not found -- falling back to the 3Dmol.js CDN")
+            _warn("vendor/3Dmol-2.5.5-min.js not found -- falling back to the 3Dmol.js CDN")
             threedmol_script = "<script src='https://cdn.jsdelivr.net/npm/3dmol@2.5.5/build/3Dmol-min.js'></script>"
 
     # Posts this page's real content height to any parent window embedding it in an
@@ -3961,7 +4114,9 @@ def _build_argparser() -> argparse.ArgumentParser:
 def main() -> None:
     argv = sys.argv[1:]
     if not argv:
-        print("usage: BoltzMaker.py [setup|setup-plip|new|format|compare-sse|generate|preflight|run|analyze|all] <boltz_input.md> [options]")
+        _info(f"{_BOLD}usage:{_RESET}{_BLUE} BoltzMaker.py {_RESET}"
+              f"{_DIM}[setup|setup-plip|new|format|compare-sse|generate|preflight|run|analyze|all]{_RESET} "
+              f"<boltz_input.md> [options]")
         sys.exit(1)
 
     known = {"format", "new", "compare-sse", "generate", "preflight", "run", "analyze", "all"}
@@ -3997,7 +4152,7 @@ def main() -> None:
 
     if args.command in ("generate", "all"):
         manifest = generate_yamls(campaign, output_dir)
-        print(f"BoltzMaker: generated {len(manifest)} target YAML(s) in {output_dir}")
+        _ok(f"generated {len(manifest)} target YAML(s) in {output_dir}")
     else:
         manifest = load_manifest(output_dir)
 
@@ -4005,7 +4160,7 @@ def main() -> None:
         ok = run_preflight(manifest, output_dir, campaign, md_path, strict=args.strict,
                             memory_warn_tokens=args.memory_warn_tokens)
         if not ok and args.command == "all":
-            print("BoltzMaker: preflight failed, aborting before run.")
+            _err("preflight failed, aborting before run.")
             sys.exit(1)
 
     if args.command in ("run", "all"):
@@ -4030,8 +4185,8 @@ def main() -> None:
             from sse_comparison.cli import run_compare_sse
             run_compare_sse(campaign, campaign_dir, strict=False)
         write_html(df, campaign_dir / "boltz_dashboard.html", campaign_dir, campaign)
-        print(f"BoltzMaker: analysis written to {campaign_dir} "
-              "(boltz_summary.csv / .xlsx / boltz_summary_view.csv / boltz_dashboard.html)")
+        _ok(f"analysis written to {campaign_dir} "
+            "(boltz_summary.csv / .xlsx / boltz_summary_view.csv / boltz_dashboard.html)")
 
 
 if __name__ == "__main__":

@@ -1,6 +1,7 @@
 .venv/
 .plip_env/
 .sse_cache/
+.pixi/
 __pycache__/
 *.pyc
 *.log

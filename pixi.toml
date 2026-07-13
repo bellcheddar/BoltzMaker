@@ -1,0 +1,102 @@
+[workspace]
+name = "boltzmaker"
+version = "0.1.0"
+description = "Generate, preflight, run, and analyze Boltz-2 batch campaigns"
+channels = ["conda-forge"]
+platforms = ["osx-arm64", "linux-64"]
+
+# Single unified environment -- replaces the two separate environments
+# BoltzMaker.py's own `setup`/`setup-plip` commands build by hand (a pip-only
+# .venv/ for boltz+rdkit+..., and a micromamba-built .plip_env/ for
+# openbabel+pymol-open-source, kept apart only because pip can't reliably
+# install those two). pixi solves conda-forge and PyPI-only packages
+# (boltz, plip, pdb-tools) together in one lockfile, so that split is no
+# longer necessary.
+#
+# python = 3.11: the ceiling, not an arbitrary pin -- pymol-open-source has
+# no conda-forge build past py311 (checked directly: `pixi search
+# pymol-open-source` returns only py37/py310/py311 builds), and separately
+# boltz pins numpy<2.0, which has no prebuilt wheel past cp312 -- 3.11
+# satisfies both.
+[dependencies]
+python = "3.11.*"
+pip = "*"  # needed by the `postinstall` task below (plip/pdb-tools)
+rdkit = "*"
+# The five below are pinned exactly (not "*") to match boltz's own hard pip
+# pins (confirmed via boltz's PyPI metadata: gemmi==0.6.5, biopython==1.84,
+# scipy==1.13.1, requests==2.32.3, pyyaml==6.0.2). pixi requires the conda
+# solve and boltz's PyPI-declared pins to agree, since both land in the same
+# environment -- leaving any of these open lets conda-forge pick a newer
+# version and the solve fails with an "unsatisfiable" pypi/conda conflict.
+gemmi = "0.6.5.*"
+biopython = "1.84.*"
+scipy = "1.13.*"
+requests = "2.32.3.*"
+pyyaml = "6.0.2.*"
+pandas = "*"
+numpy = "*"
+matplotlib = "*"
+psutil = "*"
+plotly = "*"
+reportlab = "*"
+rich = "*"
+openpyxl = "*"
+# The reason this project is on conda-forge at all, not plain pip -- PLIP's
+# own installer forces a broken from-source OpenBabel rebuild unless a
+# working OpenBabel is already importable, and PyPI's standalone
+# pymol-open-source wheel has a hardcoded broken rpath on at least some
+# machines (both confirmed empirically, see cmd_setup_plip()'s comments in
+# BoltzMaker.py). conda-forge's builds have neither problem.
+openbabel = "*"
+pymol-open-source = "*"
+
+# boltz pulls its own torch build via pip (CUDA on linux-64, MPS-capable on
+# osx-arm64) -- left as a PyPI dependency rather than moved to conda-forge's
+# pytorch package, matching what the existing (working) pip-only .venv/
+# already does; re-plumbing torch's own accelerator-variant resolution is
+# out of scope here.
+#
+# plip and pdb-tools are deliberately NOT declared here (not under
+# [pypi-dependencies]) even though they're PyPI-only -- pixi/uv's two-stage
+# conda-then-pypi solver builds every PyPI package's wheel in an isolated
+# sandbox, and plip's own metadata requires "openbabel>=3.1.1" as a normal
+# (not build-only) dependency; uv kept attempting to fetch/build openbabel
+# itself via that solver even with [pypi-options] no-build-isolation and an
+# explicit workspace.conda-pypi-map entry (both tried, both failed the same
+# way -- confirmed empirically). Installed instead via the `postinstall`
+# task below: plain `python3 -m pip install --no-build-isolation plip
+# pdb-tools`, run directly (not through pixi's own solver) against this
+# already-built environment -- the same mechanism `cmd_setup_plip()` already
+# uses successfully in BoltzMaker.py, just pointed at pixi's env instead of
+# a separate micromamba one. (This also turned out to sidestep the openbabel
+# build problem entirely: plain pip resolved a prebuilt openbabel 3.2.1
+# wheel from PyPI, not the old sdist-only 3.1.1.1 that motivated
+# cmd_setup_plip()'s conda-only approach in the first place -- openbabel's
+# PyPI packaging has evidently improved since. Both the conda-forge
+# openbabel above and this pip one coexist in the same env without conflict,
+# confirmed via the same "import pymol, openbabel, gemmi, plip" smoke test
+# cmd_setup_plip() itself runs.)
+[pypi-dependencies]
+boltz = "*"
+
+[tasks]
+postinstall = "python3 -m pip install --no-build-isolation plip pdb-tools"
+new = "python3 BoltzMaker.py new"
+format = "python3 BoltzMaker.py format"
+generate = "python3 BoltzMaker.py generate"
+preflight = "python3 BoltzMaker.py preflight"
+run = "python3 BoltzMaker.py run"
+analyze = "python3 BoltzMaker.py analyze"
+all = "python3 BoltzMaker.py all"
+compare-sse = "python3 BoltzMaker.py compare-sse"
+
+[activation.env]
+# conda-forge's scientific stack (numpy/scipy/rdkit) links against
+# conda-forge's own libomp, and PyPI's torch wheel bundles its own separate
+# libomp -- both loaded into the same process crashes with an "OMP: Error
+# #15: Initializing libomp.dylib, but found libomp.dylib already
+# initialized" abort on import. This is a known, common conda+pip-PyTorch
+# interaction on macOS, not specific to anything BoltzMaker does -- verified
+# the actual computation still runs correctly with this set (a real MPS
+# matmul, sane result) before relying on it. Harmless if unused on linux-64.
+KMP_DUPLICATE_LIB_OK = "TRUE"
