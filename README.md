@@ -65,32 +65,42 @@ path? See **One-time setup** and `docs/tier_b_offline_install.md` further down.)
 
 ### Path 1: This computer has internet access
 
-1. Open the **Terminal** app (Applications -> Utilities -> Terminal, or search for
-   "Terminal" with Spotlight), then make a folder for BoltzMaker and go into it:
-   ```sh
-   mkdir -p ~/Desktop/BoltzMaker
-   cd ~/Desktop/BoltzMaker
-   ```
-2. Download BoltzMaker into that folder:
-   ```sh
-   git clone https://github.com/bellcheddar/BoltzMaker.git .
-   ```
-   (the trailing `.` tells it to put the files directly into the folder you just made,
-   rather than inside another new folder). If this is the first time you've used `git`,
-   macOS may pop up a dialog asking to install "Command Line Tools" -- click Install
-   and wait for it to finish, then run the command again.
-3. Run the installer:
-   ```sh
-   ./install.sh
-   ```
-4. Wait for it to finish. It downloads a few GB of software the first time, so it can
-   take a while depending on your connection.
-5. Check it worked:
-   ```sh
-   pixi run preflight examples/t4_lysozyme/boltz_input.md
-   ```
-   If you see a table of green PASS results, you're ready to go -- see **Commands**
-   below for what to run next.
+**1.** Open the **Terminal** app (Applications -> Utilities -> Terminal, or search for
+"Terminal" with Spotlight), then make a folder for BoltzMaker and go into it:
+
+```sh
+mkdir -p ~/Desktop/BoltzMaker
+cd ~/Desktop/BoltzMaker
+```
+
+**2.** Download BoltzMaker into that folder:
+
+```sh
+git clone https://github.com/bellcheddar/BoltzMaker.git .
+```
+
+(the trailing `.` tells it to put the files directly into the folder you just made,
+rather than inside another new folder). If this is the first time you've used `git`,
+macOS may pop up a dialog asking to install "Command Line Tools" -- click Install and
+wait for it to finish, then run the command again.
+
+**3.** Run the installer:
+
+```sh
+./install.sh
+```
+
+Wait for it to finish. It downloads a few GB of software the first time, so it can
+take a while depending on your connection.
+
+**4.** Check it worked:
+
+```sh
+pixi run preflight examples/t4_lysozyme/boltz_input.md
+```
+
+If you see a table of green PASS results, you're ready to go -- see **Commands**
+below for what to run next.
 
 ### Path 2: This computer has no internet access
 
@@ -98,26 +108,33 @@ Use this for a lab machine, server, or any computer that's offline or behind a
 firewall. You'll need a second computer that *does* have internet access to prepare a
 single installer file first.
 
-1. On the computer **with** internet access, follow **Path 1** above, then build the
-   offline installer file:
-   ```sh
-   pixi global install pixi-pack
-   pixi-pack --platform osx-arm64 --ignore-pypi-non-wheel --create-executable -o boltzmaker-installer.sh
-   ```
-   (use `--platform linux-64` instead of `osx-arm64` if the offline computer runs
-   Linux)
-2. Copy `boltzmaker-installer.sh`, together with the whole `BoltzMaker` folder, onto
-   the offline computer (USB drive, internal network transfer, etc.).
-3. On the offline computer, in a terminal, go to where you copied those files and run:
-   ```sh
-   ./boltzmaker-installer.sh -o ./boltzmaker-env
-   source ./boltzmaker-env/activate.sh
-   export KMP_DUPLICATE_LIB_OK=TRUE
-   ```
-4. Check it worked:
-   ```sh
-   python3 BoltzMaker.py preflight examples/t4_lysozyme/boltz_input.md
-   ```
+**1.** On the computer **with** internet access, follow **Path 1** above, then build
+the offline installer file:
+
+```sh
+pixi global install pixi-pack
+pixi-pack --platform osx-arm64 --ignore-pypi-non-wheel --create-executable -o boltzmaker-installer.sh
+```
+
+(use `--platform linux-64` instead of `osx-arm64` if the offline computer runs Linux)
+
+**2.** Copy `boltzmaker-installer.sh`, together with the whole `BoltzMaker` folder,
+onto the offline computer (USB drive, internal network transfer, etc.).
+
+**3.** On the offline computer, in a terminal, go to where you copied those files and
+run:
+
+```sh
+./boltzmaker-installer.sh -o ./boltzmaker-env
+source ./boltzmaker-env/activate.sh
+export KMP_DUPLICATE_LIB_OK=TRUE
+```
+
+**4.** Check it worked:
+
+```sh
+python3 BoltzMaker.py preflight examples/t4_lysozyme/boltz_input.md
+```
 
 Full details, including a couple of one-time extra steps this path needs, are in
 [`docs/tier_b_offline_install.md`](docs/tier_b_offline_install.md).
