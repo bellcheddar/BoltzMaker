@@ -519,6 +519,10 @@ def _in_pixi_env() -> bool:
 
 def _bootstrap_or_relaunch(argv: list) -> None:
     subcommand = argv[1] if len(argv) > 1 else None
+    # `format` and `preflight --json` are both meant for scripting/tooling consumption
+    # (this web app's own subprocess wrapper included) -- the banner text on stdout
+    # would corrupt a caller trying to parse JSON straight off stdout, so both stay quiet.
+    quiet = subcommand == "format" or (subcommand == "preflight" and "--json" in argv)
     if subcommand in ("setup", "setup-plip"):
         if _in_pixi_env():
             _print_banner()
@@ -536,7 +540,7 @@ def _bootstrap_or_relaunch(argv: list) -> None:
         # script needs (rich/pandas/yaml/rdkit/...) installed by pixi.toml -- skip the
         # .venv existence check/execv relaunch below entirely, straight through to the
         # rest of the script.
-        if subcommand != "format":
+        if not quiet:
             _print_banner()
         return
 
@@ -550,8 +554,7 @@ def _bootstrap_or_relaunch(argv: list) -> None:
     # else: already running under venv python -- fall through to the rest of the script.
     # Printed here (not at the top of this function) so it appears exactly once per
     # invocation, after the execv relaunch above, not once in each process image.
-    # Skipped for `format`: a fast, often-scripted operation that should stay quiet.
-    if subcommand != "format":
+    if not quiet:
         _print_banner()
 
 
@@ -1717,7 +1720,7 @@ def check_plip_env() -> CheckResult:
 
 
 def run_preflight(manifest: list, output_dir: Path, campaign: Campaign, md_path: Path, strict: bool = False,
-                   memory_warn_tokens: int = 1000) -> bool:
+                   memory_warn_tokens: int = 1000, json_output: bool = False) -> bool:
     results = [
         check_boltz_cli(),
         check_gpu(),
@@ -1732,6 +1735,17 @@ def run_preflight(manifest: list, output_dir: Path, campaign: Campaign, md_path:
         check_duplicate_targets(manifest),
         check_plip_env(),
     ]
+    worst = "PASS"
+    for r in results:
+        if r.status == "FAIL" or (strict and r.status == "WARN"):
+            worst = "FAIL"
+        elif r.status == "WARN" and worst != "FAIL":
+            worst = "WARN"
+
+    if json_output:
+        print(json.dumps([asdict(r) for r in results]))
+        return worst != "FAIL"
+
     table = Table(title=f"[bold {_RICH_BLUE}]BoltzMaker preflight[/bold {_RICH_BLUE}]",
                   box=_rich_box.ROUNDED, header_style=f"bold {_RICH_BLUE}", border_style="dim")
     table.add_column("Check")
@@ -1739,13 +1753,8 @@ def run_preflight(manifest: list, output_dir: Path, campaign: Campaign, md_path:
     table.add_column("Detail")
     style = {"PASS": _RICH_GREEN, "WARN": _RICH_AMBER, "FAIL": "red"}
     icon = {"PASS": "✓", "WARN": "⚠", "FAIL": "✗"}
-    worst = "PASS"
     for r in results:
         table.add_row(r.name, f"[{style[r.status]}]{icon[r.status]} {r.status}[/{style[r.status]}]", r.message)
-        if r.status == "FAIL" or (strict and r.status == "WARN"):
-            worst = "FAIL"
-        elif r.status == "WARN" and worst != "FAIL":
-            worst = "WARN"
     Console().print(table)
     return worst != "FAIL"
 
@@ -4126,6 +4135,9 @@ def _build_argparser() -> argparse.ArgumentParser:
                         "interaction analysis during `analyze`, even if `setup-plip` has been run")
         sp.add_argument("--skip-sse", action="store_true", help="skip compare-sse apo-vs-holo secondary-"
                         "structure analysis during `analyze`, even if a family has 'Apo structure:' set")
+        if name == "preflight":
+            sp.add_argument("--json", action="store_true",
+                             help="emit check results as JSON instead of a rich table (for scripting/tooling)")
     return p
 
 
@@ -4176,7 +4188,8 @@ def main() -> None:
 
     if args.command in ("preflight", "all"):
         ok = run_preflight(manifest, output_dir, campaign, md_path, strict=args.strict,
-                            memory_warn_tokens=args.memory_warn_tokens)
+                            memory_warn_tokens=args.memory_warn_tokens,
+                            json_output=getattr(args, "json", False))
         if not ok and args.command == "all":
             _err("preflight failed, aborting before run.")
             sys.exit(1)
