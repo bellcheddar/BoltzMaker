@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="md-card">
+  <h2>Generate</h2>
+  <p>Paste or upload a <code>boltz_input.md</code> &mdash; get back the per-target YAML
+     files (as a zip) that <code>boltz predict</code> needs.</p>
+
+  {% if error %}
+  <div class="md-alert md-alert-error"><pre>{{ error }}</pre></div>
+  {% endif %}
+
+  <form method="post" enctype="multipart/form-data">
+    <div class="md-field">
+      <label for="md_file">Upload boltz_input.md</label>
+      <input type="file" id="md_file" name="md_file">
+      <p class="md-hint">Or paste its contents below instead.</p>
+    </div>
+    <div class="md-field">
+      <label for="md_text">Or paste boltz_input.md contents</label>
+      <textarea id="md_text" name="md_text" placeholder="Settings:&#10;Output folder: ./boltz_yamls&#10;..."></textarea>
+    </div>
+    <button type="submit" class="md-btn">Generate</button>
+  </form>
+</div>
+{% endblock %}

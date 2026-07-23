@@ -1,0 +1,153 @@
+/* Ported from BoltzMaker.py's own _BRAND_CSS (~line 3170), which already styles
+   boltz_dashboard.html -- reusing the same :root variables and base header/card/
+   footer rules gives a seamless visual thread from the CLI banner through this
+   site to the dashboard /analyze serves directly, rather than a second palette.
+   Form-specific rules (wizard loops, upload dropzones, check-result table) are
+   appended below the ported base. */
+
+:root {
+  --md-primary: #1e73be;
+  --md-primary-dark: #155a9c;
+  --md-primary-light: #4a9fd4;
+  --md-bg: #ffffff;
+  --md-bg-alt: #f4f7fb;
+  --md-surface: #ffffff;
+  --md-border: #dde4ed;
+  --md-text: #1a1a2e;
+  --md-text-muted: #6b7c93;
+  --md-text-light: #ffffff;
+  --md-accent-green: #00d084;
+  --md-accent-orange: #ff6900;
+  --md-accent-purple: #9b51e0;
+  --md-accent-amber: #fcb900;
+  --md-accent-red: #d81b8c;
+  --md-shadow-sm: 6px 6px 9px rgba(0,0,0,0.12);
+  --md-shadow-md: 12px 12px 50px rgba(0,0,0,0.18);
+  --md-radius: 8px;
+  --md-radius-lg: 16px;
+}
+*, *::before, *::after { box-sizing: border-box; }
+body {
+  margin: 0;
+  overflow-x: hidden;
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+  font-size: 15px;
+  line-height: 1.6;
+  color: var(--md-text);
+  background: var(--md-bg-alt);
+}
+img, canvas { max-width: 100%; height: auto; }
+
+.md-header {
+  background: linear-gradient(135deg, var(--md-primary-dark) 0%, var(--md-primary) 100%);
+  color: var(--md-text-light);
+  box-shadow: var(--md-shadow-sm);
+  position: sticky;
+  top: 0;
+  z-index: 100;
+}
+.md-header-inner {
+  max-width: 1000px;
+  margin: 0 auto;
+  padding: 12px 24px;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+.md-header-brand a {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: rgba(255,255,255,0.9);
+  text-decoration: none;
+  font-weight: 600;
+  font-size: 13px;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+.md-logo-dot { width: 10px; height: 10px; background: var(--md-accent-amber); border-radius: 50%; flex-shrink: 0; }
+.md-header-title { flex: 1; min-width: 0; }
+.md-header-title h1 { font-size: 16px; font-weight: 700; color: #fff; margin: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.md-header-nav { display: flex; gap: 10px; flex-shrink: 0; flex-wrap: wrap; }
+.md-header-nav a {
+  color: rgba(255,255,255,0.85);
+  text-decoration: none;
+  font-size: 12px;
+  padding: 4px 12px;
+  border: 1px solid rgba(255,255,255,0.3);
+  border-radius: 20px;
+  white-space: nowrap;
+}
+.md-header-nav a:hover, .md-header-nav a.active { background: rgba(255,255,255,0.15); border-color: rgba(255,255,255,0.6); }
+
+.md-main { max-width: 1000px; margin: 0 auto; padding: 24px; }
+.md-card { background: var(--md-surface); border: 1px solid var(--md-border); border-radius: var(--md-radius); padding: 20px; box-shadow: var(--md-shadow-sm); margin-bottom: 24px; }
+.md-card h2 { margin-top: 0; font-size: 16px; }
+.md-footer { text-align: center; padding: 24px; color: var(--md-text-muted); font-size: 13px; }
+.md-footer a { color: var(--md-primary); text-decoration: none; }
+
+/* ---- landing ---- */
+.md-tool-grid { display: grid; gap: 16px; grid-template-columns: repeat(2, 1fr); margin-bottom: 24px; }
+.md-tool-card { background: var(--md-surface); border: 1px solid var(--md-border); border-radius: var(--md-radius); padding: 20px; box-shadow: var(--md-shadow-sm); text-decoration: none; color: var(--md-text); display: block; }
+.md-tool-card:hover { border-color: var(--md-primary); }
+.md-tool-card h3 { margin: 0 0 6px; font-size: 15px; color: var(--md-primary); }
+.md-tool-card p { margin: 0; font-size: 13px; color: var(--md-text-muted); }
+.md-scope-note { background: var(--md-bg-alt); border: 1px solid var(--md-border); border-radius: var(--md-radius); padding: 14px 18px; font-size: 13px; color: var(--md-text-muted); margin-bottom: 24px; }
+
+/* ---- forms ---- */
+.md-field { margin-bottom: 14px; }
+.md-field label { display: block; font-size: 13px; font-weight: 600; margin-bottom: 4px; }
+.md-field .md-hint { font-size: 12px; color: var(--md-text-muted); margin-top: 3px; }
+.md-field input[type=text], .md-field input[type=file], .md-field textarea, .md-field select {
+  width: 100%; padding: 8px 10px; border: 1px solid var(--md-border); border-radius: var(--md-radius);
+  font-family: inherit; font-size: 14px; background: #fff; color: var(--md-text);
+}
+.md-field textarea { font-family: 'Roboto Mono', monospace; font-size: 12px; min-height: 160px; }
+.md-radio-row { display: flex; gap: 16px; }
+.md-radio-row label { font-weight: 400; display: flex; align-items: center; gap: 6px; }
+.md-btn {
+  display: inline-block; padding: 9px 20px; border-radius: 20px; border: none;
+  background: var(--md-primary); color: #fff; font-weight: 600; font-size: 14px; cursor: pointer;
+  text-decoration: none;
+}
+.md-btn:hover { background: var(--md-primary-dark); }
+.md-btn.md-btn-secondary { background: transparent; color: var(--md-primary); border: 1px solid var(--md-primary); }
+.md-btn.md-btn-secondary:hover { background: var(--md-bg-alt); }
+
+/* ---- repeating wizard rows (protein/partner/ligand/constraint) ---- */
+.md-repeat-block { border: 1px solid var(--md-border); border-radius: var(--md-radius); padding: 16px; margin-bottom: 12px; background: var(--md-bg-alt); position: relative; }
+.md-repeat-block .md-remove-row { position: absolute; top: 10px; right: 10px; background: none; border: none; color: var(--md-text-muted); cursor: pointer; font-size: 16px; line-height: 1; }
+.md-repeat-block .md-remove-row:hover { color: var(--md-accent-red); }
+.md-add-row-btn { background: none; border: 1px dashed var(--md-border); color: var(--md-primary); border-radius: var(--md-radius); padding: 8px 14px; cursor: pointer; font-size: 13px; width: 100%; text-align: center; }
+.md-add-row-btn:hover { border-color: var(--md-primary); background: var(--md-bg-alt); }
+
+/* ---- results / errors ---- */
+.md-alert { border-radius: var(--md-radius); padding: 12px 16px; margin-bottom: 16px; font-size: 13px; }
+.md-alert-error { background: #fdecea; border: 1px solid var(--md-accent-red); color: #7a1030; }
+.md-alert-error pre { white-space: pre-wrap; word-break: break-word; margin: 6px 0 0; font-size: 12px; }
+.md-alert-success { background: #e6fbf3; border: 1px solid var(--md-accent-green); color: #0a6b4c; }
+
+/* ---- preflight check table ---- */
+table.md-check-table { border-collapse: collapse; font-size: 13px; width: 100%; }
+table.md-check-table th, table.md-check-table td { border: 1px solid var(--md-border); padding: 7px 10px; text-align: left; vertical-align: top; }
+table.md-check-table th { background: var(--md-bg-alt); }
+.md-check-pass { color: var(--md-accent-green); font-weight: 600; }
+.md-check-warn { color: var(--md-accent-amber); font-weight: 600; }
+.md-check-fail { color: var(--md-accent-red); font-weight: 600; }
+tr.md-check-na { opacity: 0.55; }
+tr.md-check-na .md-check-fail { color: var(--md-text-muted); }
+.md-na-note { font-size: 11px; font-style: italic; }
+.md-readiness-banner { border-radius: var(--md-radius); padding: 14px 18px; margin-bottom: 16px; font-weight: 600; }
+.md-readiness-pass { background: #e6fbf3; border: 1px solid var(--md-accent-green); color: #0a6b4c; }
+.md-readiness-warn { background: #fff8e6; border: 1px solid var(--md-accent-amber); color: #8a6100; }
+.md-readiness-fail { background: #fdecea; border: 1px solid var(--md-accent-red); color: #7a1030; }
+
+@media (max-width: 768px) {
+  .md-header-inner { padding: 10px 16px; gap: 8px; }
+  .md-header-title h1 { font-size: 14px; }
+  .md-header-nav a { font-size: 11px; padding: 3px 8px; }
+  .md-main { padding: 14px; }
+  .md-card { padding: 14px; }
+  .md-tool-grid { grid-template-columns: 1fr; }
+}

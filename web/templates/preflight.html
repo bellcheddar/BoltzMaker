@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="md-card">
+  <h2>Preflight</h2>
+  <p>Paste or upload a <code>boltz_input.md</code> to validate it &mdash; SMILES, chain
+     ids, ligand chemistry, duplicate targets &mdash; before spending hours of GPU time.</p>
+
+  {% if error %}
+  <div class="md-alert md-alert-error"><pre>{{ error }}</pre></div>
+  {% endif %}
+
+  <form method="post" enctype="multipart/form-data">
+    <div class="md-field">
+      <label for="md_file">Upload boltz_input.md</label>
+      <input type="file" id="md_file" name="md_file">
+      <p class="md-hint">Or paste its contents below instead.</p>
+    </div>
+    <div class="md-field">
+      <label for="md_text">Or paste boltz_input.md contents</label>
+      <textarea id="md_text" name="md_text" placeholder="Settings:&#10;Output folder: ./boltz_yamls&#10;..."></textarea>
+    </div>
+    <button type="submit" class="md-btn">Run preflight</button>
+  </form>
+</div>
+
+{% if checks %}
+<div class="md-card">
+  {% if readiness == "PASS" %}
+    <div class="md-readiness-banner md-readiness-pass">✓ Campaign looks ready.</div>
+  {% elif readiness == "WARN" %}
+    <div class="md-readiness-banner md-readiness-warn">⚠ Campaign has warnings worth reviewing.</div>
+  {% else %}
+    <div class="md-readiness-banner md-readiness-fail">✗ Campaign has problems to fix first.</div>
+  {% endif %}
+
+  <table class="md-check-table">
+    <thead><tr><th>Check</th><th>Status</th><th>Detail</th></tr></thead>
+    <tbody>
+    {% for c in checks %}
+      <tr class="{{ 'md-check-na' if c.name in not_applicable }}">
+        <td>{{ c.name }}</td>
+        <td class="md-check-{{ c.status|lower }}">{{ c.status }}</td>
+        <td>
+          {{ c.message }}
+          {% if c.name in not_applicable %}
+            <div class="md-na-note">{{ not_applicable_note }}</div>
+          {% endif %}
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+{% endblock %}

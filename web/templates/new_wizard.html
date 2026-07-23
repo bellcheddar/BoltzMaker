@@ -1,0 +1,128 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="md-card">
+  <h2>New campaign wizard</h2>
+  <p>Builds a <code>boltz_input.md</code> from plain fields &mdash; matches exactly what
+     <code>BoltzMaker.py new</code>'s terminal wizard asks for. Newer fields (Apo
+     structure, Family type, Group, Role) aren't covered here yet &mdash; hand-edit the
+     file afterward, or see the project's
+     <a href="https://github.com/bellcheddar/BoltzMaker" target="_blank" rel="noopener noreferrer">GitHub</a>
+     for the full grammar.</p>
+
+  {% if error %}
+  <div class="md-alert md-alert-error"><pre>{{ error }}</pre></div>
+  {% endif %}
+
+  {% if result_text %}
+  <div class="md-alert md-alert-success">
+    Your <code>boltz_input.md</code> is valid and ready.
+    <a id="wizard-download" class="md-btn" href="#" download="boltz_input.md" style="margin-left:10px;">Download</a>
+    <a class="md-btn md-btn-secondary" href="/preflight" style="margin-left:6px;">Next: run preflight &rarr;</a>
+  </div>
+  <div class="md-card">
+    <textarea readonly style="min-height:300px;">{{ result_text }}</textarea>
+  </div>
+  <script id="wizard-result-text" type="text/plain">{{ result_text }}</script>
+  <script>
+    (function () {
+      var raw = document.getElementById('wizard-result-text').textContent;
+      var link = document.getElementById('wizard-download');
+      link.href = 'data:text/plain;charset=utf-8,' + encodeURIComponent(raw);
+    })();
+  </script>
+  {% endif %}
+</div>
+
+<form method="post" id="wizard-form">
+  <div class="md-card">
+    <h2>Settings</h2>
+    <div class="md-field">
+      <label><input type="checkbox" name="predict_affinity"> Predict binding affinity too (slower, adds Kd/pIC50 estimates)</label>
+    </div>
+  </div>
+
+  <div class="md-card">
+    <h2>Partners <span class="md-hint">(optional &mdash; co-folded chains your proteins can reference below)</span></h2>
+    <div id="partner-rows"></div>
+    <button type="button" class="md-add-row-btn" id="add-partner">+ Add partner</button>
+  </div>
+
+  <div class="md-card">
+    <h2>Proteins <span class="md-hint">(at least one required)</span></h2>
+    <div id="protein-rows"></div>
+    <button type="button" class="md-add-row-btn" id="add-protein">+ Add protein</button>
+  </div>
+
+  <div class="md-card">
+    <h2>Constraints <span class="md-hint">(optional &mdash; reference a protein short name from above)</span></h2>
+    <div id="constraint-rows"></div>
+    <button type="button" class="md-add-row-btn" id="add-constraint">+ Add constraint</button>
+  </div>
+
+  <div class="md-card">
+    <h2>Ligands <span class="md-hint">(at least one required)</span></h2>
+    <div id="ligand-rows"></div>
+    <button type="button" class="md-add-row-btn" id="add-ligand">+ Add ligand</button>
+  </div>
+
+  <button type="submit" class="md-btn">Build boltz_input.md</button>
+</form>
+
+<!-- templates for JS-cloned rows -->
+<template id="tpl-partner">
+  <div class="md-repeat-block">
+    <button type="button" class="md-remove-row" title="Remove">&times;</button>
+    <div class="md-field"><label>Short name (max 5 letters)</label><input type="text" name="partner_name[]" maxlength="5"></div>
+    <div class="md-field"><label>Sequence</label><textarea name="partner_sequence[]"></textarea></div>
+  </div>
+</template>
+
+<template id="tpl-protein">
+  <div class="md-repeat-block">
+    <button type="button" class="md-remove-row" title="Remove">&times;</button>
+    <div class="md-field"><label>Short name (max 5 letters)</label><input type="text" name="protein_name[]" maxlength="5"></div>
+    <div class="md-field"><label>Sequence</label><textarea name="protein_sequence[]"></textarea></div>
+    <div class="md-field">
+      <label>Co-folded partners (comma-separated short names, optional)</label>
+      <input type="text" name="protein_partners[]" placeholder="e.g. GNAS, GNB1">
+    </div>
+  </div>
+</template>
+
+<template id="tpl-constraint">
+  <div class="md-repeat-block">
+    <button type="button" class="md-remove-row" title="Remove">&times;</button>
+    <div class="md-field"><label>Protein (owner)</label><input type="text" name="constraint_owner[]" maxlength="5"></div>
+    <div class="md-field">
+      <label>Kind</label>
+      <select name="constraint_kind[]">
+        <option value="pocket">Pocket contact</option>
+        <option value="covalent">Covalent bond</option>
+        <option value="distance">Distance constraint</option>
+      </select>
+    </div>
+    <div class="md-field"><label>Owner residue number</label><input type="text" name="constraint_residue1[]"></div>
+    <div class="md-field"><label>Owner atom name (covalent bond only, e.g. SG)</label><input type="text" name="constraint_atom1[]"></div>
+    <div class="md-field"><label>Other chain name (covalent bond / distance constraint only)</label><input type="text" name="constraint_other[]"></div>
+    <div class="md-field"><label>Other residue number (covalent bond / distance constraint only)</label><input type="text" name="constraint_residue2[]"></div>
+    <div class="md-field"><label>Other atom name (covalent bond only)</label><input type="text" name="constraint_atom2[]"></div>
+    <div class="md-field"><label>Max distance in Angstrom (distance constraint only, default 6.0)</label><input type="text" name="constraint_distance[]"></div>
+  </div>
+</template>
+
+<template id="tpl-ligand">
+  <div class="md-repeat-block">
+    <button type="button" class="md-remove-row" title="Remove">&times;</button>
+    <div class="md-field"><label>Short name (max 5 letters)</label><input type="text" name="ligand_name[]" maxlength="5"></div>
+    <div class="md-field">
+      <div class="md-radio-row">
+        <label><input type="radio" name="ligand_kind[]" value="smiles" checked> SMILES</label>
+        <label><input type="radio" name="ligand_kind[]" value="ccd"> CCD code</label>
+      </div>
+    </div>
+    <div class="md-field"><label>Value</label><input type="text" name="ligand_value[]" placeholder="SMILES string or CCD code"></div>
+  </div>
+</template>
+
+<script src="{{ url_for('static', filename='js/wizard.js') }}"></script>
+{% endblock %}

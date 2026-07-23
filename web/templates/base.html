@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}{{ SITE_TITLE }}{% endblock %}</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='css/brand.css') }}">
+{% block extra_head %}{% endblock %}
+</head>
+<body>
+<header class="md-header">
+  <div class="md-header-inner">
+    <div class="md-header-brand">
+      <a href="https://marcdeller.com" target="_blank" rel="noopener noreferrer">
+        <span class="md-logo-dot"></span>
+        <span>Marc C. Deller, D.Phil.</span>
+      </a>
+    </div>
+    <div class="md-header-title"><h1>{{ SITE_TITLE }}</h1></div>
+    <nav class="md-header-nav">
+      <a href="/" class="{{ 'active' if active == 'index' }}">Home</a>
+      <a href="/new" class="{{ 'active' if active == 'new' }}">Wizard</a>
+      <a href="/generate" class="{{ 'active' if active == 'generate' }}">Generate</a>
+      <a href="/preflight" class="{{ 'active' if active == 'preflight' }}">Preflight</a>
+      <a href="/analyze" class="{{ 'active' if active == 'analyze' }}">Analyze</a>
+      <a href="https://github.com/bellcheddar/BoltzMaker" target="_blank" rel="noopener noreferrer">GitHub</a>
+    </nav>
+  </div>
+</header>
+<main class="md-main">
+  {% block content %}{% endblock %}
+</main>
+<footer class="md-footer">
+  Built with BoltzMaker by
+  <a href="https://marcdeller.com" target="_blank" rel="noopener noreferrer">Marc C. Deller, D.Phil.</a>
+  &middot; <a href="mailto:marc@marcdeller.com">marc@marcdeller.com</a>
+</footer>
+</body>
+</html>

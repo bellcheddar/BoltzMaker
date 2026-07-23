@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block content %}
+<p class="md-scope-note">
+  This site hosts the parts of <a href="https://github.com/bellcheddar/BoltzMaker" target="_blank" rel="noopener noreferrer">BoltzMaker</a>
+  that don't need GPU compute. Real Boltz-2 structure prediction (<code>run</code>) isn't
+  hosted here &mdash; run that yourself (your own Mac/GPU machine), then come back to
+  <a href="/analyze">Analyze</a> the results.
+</p>
+
+<div class="md-tool-grid">
+  <a class="md-tool-card" href="/new">
+    <h3>New campaign wizard</h3>
+    <p>Answer plain questions about your proteins, partners, and ligands &mdash; get a
+       ready-to-run <code>boltz_input.md</code> back.</p>
+  </a>
+  <a class="md-tool-card" href="/generate">
+    <h3>Generate</h3>
+    <p>Turn a <code>boltz_input.md</code> into the per-target YAML files Boltz-2 needs.</p>
+  </a>
+  <a class="md-tool-card" href="/preflight">
+    <h3>Preflight</h3>
+    <p>Validate your campaign &mdash; SMILES, chain ids, ligand chemistry &mdash; before you
+       spend hours of GPU time on it.</p>
+  </a>
+  <a class="md-tool-card" href="/analyze">
+    <h3>Analyze</h3>
+    <p>Upload an already-computed campaign folder, get back a CSV/XLSX summary and an
+       interactive dashboard.</p>
+  </a>
+</div>
+{% endblock %}

@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="md-card">
+  <h2>Analyze</h2>
+  <p>Upload a zip of your local campaign folder &mdash; <code>boltz_input.md</code> +
+     <code>boltz_yamls/</code> (including <code>.boltzmaker_manifest.json</code>) +
+     <code>boltz_output/</code> with the completed predictions &mdash; and get back a
+     summary CSV/XLSX and an interactive dashboard. Real GPU inference (<code>run</code>)
+     isn't run here; this expects predictions you've already computed elsewhere.</p>
+
+  {% if error %}
+  <div class="md-alert md-alert-error"><pre>{{ error }}</pre></div>
+  {% endif %}
+
+  <form method="post" enctype="multipart/form-data">
+    <div class="md-field">
+      <label for="campaign_zip">Campaign zip</label>
+      <input type="file" id="campaign_zip" name="campaign_zip" accept=".zip" required>
+      <p class="md-hint">Max 200MB. PLIP interaction analysis and compare-sse are skipped
+        in this hosted version.</p>
+    </div>
+    <div class="md-radio-row md-field">
+      <label><input type="radio" name="download_only" value="0" checked> View dashboard here</label>
+      <label><input type="radio" name="download_only" value="1"> Download results zip only</label>
+    </div>
+    <button type="submit" class="md-btn">Analyze</button>
+  </form>
+</div>
+
+{% if dashboard_html %}
+<div class="md-card">
+  <h2>Dashboard</h2>
+  <iframe srcdoc="{{ dashboard_html }}" style="width:100%; height:1400px; border:1px solid var(--md-border); border-radius:var(--md-radius);"></iframe>
+</div>
+{% endif %}
+{% endblock %}
