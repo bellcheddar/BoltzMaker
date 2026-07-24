@@ -127,9 +127,28 @@ echo "==> Requesting/deploying TLS certificate (certbot)"
 # `--nginx` plugin already reuses a still-valid certificate instead of
 # re-requesting one (avoiding Let's Encrypt rate limits), so this is safe and
 # correctly idempotent to run unconditionally.
-certbot --nginx -d "$SERVER_NAME" --non-interactive --agree-tos \
-  -m "${CERTBOT_EMAIL:-marc@marcdeller.com}" --redirect || \
-  echo "    certbot failed (DNS not pointed yet?). Re-run: certbot --nginx -d ${SERVER_NAME}"
+# Retried: certbot's own systemd renewal timer (certbot.timer, droplet-wide, covers
+# every vhost's cert) can grab certbot's lock at the same moment this runs -- hit
+# empirically ("Another instance of Certbot is already running") on this exact step.
+# A failure here is worse than usual since the vhost file was just unconditionally
+# re-templated to plain HTTP above, so leaving it un-retried means shipping a
+# provision.sh run that silently leaves this app's HTTPS broken.
+certbot_ok=0
+for attempt in 1 2 3; do
+  if certbot --nginx -d "$SERVER_NAME" --non-interactive --agree-tos \
+       -m "${CERTBOT_EMAIL:-marc@marcdeller.com}" --redirect; then
+    certbot_ok=1
+    break
+  fi
+  echo "    certbot attempt ${attempt}/3 failed, retrying in 10s..."
+  sleep 10
+done
+if [[ "$certbot_ok" -ne 1 ]]; then
+  echo "    certbot failed after 3 attempts (DNS not pointed yet? renewal-timer lock"
+  echo "    contention?). ${SERVER_NAME} has NO SSL config right now -- re-run:"
+  echo "    certbot --nginx -d ${SERVER_NAME}"
+  exit 1
+fi
 
 # Certbot's `listen 443 ssl;` lines don't enable HTTP/2 on nginx 1.24 -- add it
 # ourselves, idempotently. This is droplet-wide-shared-port-443-critical: nginx's
