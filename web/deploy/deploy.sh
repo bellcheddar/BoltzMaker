@@ -31,9 +31,9 @@ SSH_OPTS=()
 echo "==> Syncing the whole repo to ${DROPLET_SSH}:${DROPLET_PATH}"
 rsync -az --delete ${SSH_OPTS[@]+"${SSH_OPTS[@]}"} \
   --exclude '.venv/' --exclude 'web/.venv/' --exclude 'web/scratch/' \
-  --exclude '__pycache__/' --exclude '*.pyc' --exclude '.git/' --exclude 'web/.env' \
+  --exclude '__pycache__/' --exclude '*.pyc' --exclude '.git/' --exclude '.git' --exclude 'web/.env' \
   --exclude 'examples/*/boltz_output/' --exclude '.sse_cache/' --exclude '.plip_env/' \
-  --exclude 'dist/' \
+  --exclude 'dist/' --exclude '.DS_Store' \
   ./ "${DROPLET_SSH}:${DROPLET_PATH}/"
 
 echo "==> Installing web dependencies + restarting service on the droplet"
