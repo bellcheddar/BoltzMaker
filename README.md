@@ -2,11 +2,11 @@
 
 > **BoltzMaker: Boltz2 campaign-scale structure and affinity prediction, binding analysis, and run control, orchestrated end to end from a single spec file.**
 
-![python](https://img.shields.io/badge/python-3.12-3776AB?logo=python&logoColor=white) ![boltz](https://img.shields.io/badge/boltz-2-00897B) ![plip](https://img.shields.io/badge/PLIP-interactions-9b51e0) ![pymol](https://img.shields.io/badge/PyMOL-visualisation-ff6900) ![rdkit](https://img.shields.io/badge/RDKit-cheminformatics-00d084) ![plotly](https://img.shields.io/badge/Plotly-charts-3F4F75?logo=plotly&logoColor=white) ![3dmoljs](https://img.shields.io/badge/3Dmol.js-3D%20viewer-fcb900) ![pytest](https://img.shields.io/badge/pytest-tested-0A9EDC?logo=pytest&logoColor=white) ![licence](https://img.shields.io/badge/licence-MIT-467FF7) ![author](https://img.shields.io/badge/author-Marc%20C.%20Deller%2C%20D.Phil.-1C244B)
+[![live](https://img.shields.io/badge/live-boltzmaker.mdeller.com-00d084)](https://boltzmaker.mdeller.com) ![python](https://img.shields.io/badge/python-3.12-3776AB?logo=python&logoColor=white) ![boltz](https://img.shields.io/badge/boltz-2-00897B) ![plip](https://img.shields.io/badge/PLIP-interactions-9b51e0) ![pymol](https://img.shields.io/badge/PyMOL-visualisation-ff6900) ![rdkit](https://img.shields.io/badge/RDKit-cheminformatics-00d084) ![plotly](https://img.shields.io/badge/Plotly-charts-3F4F75?logo=plotly&logoColor=white) ![3dmoljs](https://img.shields.io/badge/3Dmol.js-3D%20viewer-fcb900) ![pytest](https://img.shields.io/badge/pytest-tested-0A9EDC?logo=pytest&logoColor=white) ![licence](https://img.shields.io/badge/licence-MIT-467FF7) ![author](https://img.shields.io/badge/author-Marc%20C.%20Deller%2C%20D.Phil.-1C244B)
 
 <table>
 <tr>
-<td>🌐 <b>Website</b></td><td><a href="https://marcdeller.com" target="_blank" rel="noopener noreferrer">marcdeller.com</a></td>
+<td>🌐 <b>Website</b></td><td><a href="https://boltzmaker.mdeller.com" target="_blank" rel="noopener noreferrer">boltzmaker.mdeller.com</a></td>
 <td>✉️ <b>Contact</b></td><td><a href="mailto:marc@marcdeller.com">marc@marcdeller.com</a></td>
 <td>🐙 <b>GitHub</b></td><td><a href="https://github.com/bellcheddar/BoltzMaker" target="_blank" rel="noopener noreferrer">bellcheddar/BoltzMaker</a></td>
 </tr>
@@ -19,6 +19,10 @@ spec, generate the per-target Boltz YAML files, preflight the environment and in
 `boltz predict` with a live progress bar (with resume support), and analyze the results into
 a CSV, an XLSX workbook, and an HTML dashboard -- optionally enriched with real
 protein-ligand interaction analysis via [cif2plip](https://github.com/bellcheddar/cif2plip).
+The non-GPU stages -- the `new` wizard, `generate`, `preflight`, and full `analyze`
+(including PLIP interaction detection and compare-sse) -- are also available with no local
+install at **[boltzmaker.mdeller.com](https://boltzmaker.mdeller.com)**; only the GPU
+`run` step still needs your own hardware (see **Web deployment** below).
 
 Why it matters: hand-running a Boltz-2 campaign means writing dozens of near-identical YAML
 files by hand, remembering the right CLI flags for the hardware you're on, and manually
@@ -661,6 +665,37 @@ nothing, since that's a real mistake worth stopping for.
 | `boltz` fails during `setup` with a `numpy` build error | You're likely on Python 3.13+. `boltz` pins `numpy<2.0`, which has no prebuilt wheel past cp312 -- `_find_boltz_python()` already looks for a `python3.12` specifically; install one (`brew install python@3.12`) if it can't find one. |
 | A target fails preflight with a chain-id-length error | Boltz truncates chain IDs to 5 characters internally (a fixed-width field in its own schema) and silently corrupts longer ones rather than erroring at parse time -- shorten the protein/partner/ligand name in `boltz_input.md`. |
 | The dashboard's charts (or the binding-site 3D view) don't render, or look unstyled | plotly.js and 3Dmol.js are both vendored and inlined (not CDN-loaded), so this shouldn't happen from a missing network connection -- Google Fonts is still loaded from a CDN for styling, though, so the page needs internet access at least once for the fonts to look right (falls back to a generic sans-serif otherwise; charts, 3D views, and data are unaffected). If they genuinely don't render, check that `vendor/plotly-2.35.2.min.js` and `vendor/3Dmol-2.5.5-min.js` exist next to `BoltzMaker.py` -- `analyze` prints a warning and falls back to the relevant CDN (which is known not to work in some HTML-preview contexts) if either is missing. |
+
+## 🌐 Web deployment
+
+**Live at [boltzmaker.mdeller.com](https://boltzmaker.mdeller.com).** A Flask frontend for the
+non-GPU stages of the pipeline -- upload a `boltz_input.md` (or build one with the wizard),
+run `generate`/`preflight` and download the results, or upload a completed campaign folder
+(from a `run` you did locally) for full `analyze`, PLIP interaction detection, and
+compare-sse, all in the browser. The GPU `run` step is deliberately never hosted: there's no
+GPU on the droplet, so that stage still runs on your own hardware and you bring the
+`boltz_output/` back for analysis.
+
+**Source and tested-CLI isolation.** The web app lives in `web/`, developed on a separate
+`web` git branch/worktree so the tested `BoltzMaker.py` on `main` is never touched by web-app
+work. `BoltzMaker.py` was never designed to be imported (it relaunches itself into a managed
+venv at module import time), so the Flask app only ever invokes it as a subprocess, with an
+explicit minimal environment and a per-command timeout, through a dedicated trimmed venv
+(`.venv/`, torch/boltz-free, ~500MB -- every torch/boltz reference in the script is a
+function-local lazy import) kept separate from the Flask-serving venv (`web/.venv/`).
+
+**Optional PLIP.** If the droplet's `.plip_env` (the same conda-forge PyMOL/OpenBabel
+environment `setup-plip` builds locally, ~1-1.5GB) is present, `analyze` runs full
+protein-ligand interaction detection and compare-sse automatically; if not, both degrade
+gracefully rather than erroring, exactly as they do locally.
+
+**Serving stack:** gunicorn (3 sync workers, 900s timeout to cover PLIP rendering and
+compare-sse's GPCRdb/KLIFS/PDBe lookups) behind nginx (Let's Encrypt TLS via certbot, HTTP/2,
+rate-limited upload endpoints, 200MB body cap), as a hardened systemd service (dedicated
+unprivileged user, memory/CPU caps). Every request gets its own scratch directory, deleted
+when the request finishes and swept by a five-minute cleanup timer as a backstop; uploaded
+zips are checked for zip-slip and zip-bomb payloads (path-traversal/absolute-path rejection,
+uncompressed-size and entry-count caps) before anything is extracted.
 
 ## 🧫 Testing
 
