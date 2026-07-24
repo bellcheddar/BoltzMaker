@@ -45,7 +45,7 @@ def analyze():
                 error="No boltz_input.md found at the top level of the zip.",
             )
 
-        result = run_boltzmaker("analyze", md_path, "--skip-interactions", "--skip-sse")
+        result = run_boltzmaker("analyze", md_path)
         if result.returncode != 0:
             return render_template(
                 "analyze.html", active="analyze",
@@ -62,17 +62,25 @@ def analyze():
 
         # Bundle dashboard + CSV/XLSX + boltz_cif/ into one download; also inline the
         # dashboard's own HTML so the user sees it immediately without a second request.
+        # boltz_dashboard.html already embeds PLIP interaction images and compare-sse
+        # charts as base64 data URIs (confirmed against BoltzMaker.py's own report
+        # writers), so the inline srcdoc view is fully self-contained on its own --
+        # boltz_plip/ and the boltz_sse_* files below are bundled into the zip purely
+        # for users who want the raw per-target data (PyMOL .pml scripts, full CSVs).
         zip_out = scratch / "boltz_analysis_results.zip"
         with zipfile.ZipFile(zip_out, "w", zipfile.ZIP_DEFLATED) as zf:
-            for name in ("boltz_summary.csv", "boltz_summary.xlsx", "boltz_dashboard.html"):
+            for name in ("boltz_summary.csv", "boltz_summary.xlsx", "boltz_dashboard.html",
+                         "boltz_sse_comparison.csv", "boltz_sse_comparison.html",
+                         "boltz_sse_family_status.json"):
                 f = extract_dir / name
                 if f.is_file():
                     zf.write(f, arcname=name)
-            cif_dir = extract_dir / "boltz_cif"
-            if cif_dir.is_dir():
-                for f in sorted(cif_dir.rglob("*")):
-                    if f.is_file():
-                        zf.write(f, arcname=f.relative_to(extract_dir))
+            for dirname in ("boltz_cif", "boltz_plip", "boltz_sse_comparison_sessions"):
+                d = extract_dir / dirname
+                if d.is_dir():
+                    for f in sorted(d.rglob("*")):
+                        if f.is_file():
+                            zf.write(f, arcname=f.relative_to(extract_dir))
 
         dashboard_html = dashboard.read_text(encoding="utf-8", errors="replace")
         zip_bytes = zip_out.read_bytes()

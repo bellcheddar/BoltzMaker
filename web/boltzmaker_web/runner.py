@@ -27,13 +27,16 @@ BOLTZMAKER_SCRIPT = REPO_ROOT / "BoltzMaker.py"
 VENV_PYTHON = REPO_ROOT / ".venv" / "bin" / "python3"
 
 # Per-command timeouts (seconds) -- analyze's cost scales with target count
-# (CIF copies + dashboard/plotly rendering across potentially dozens of
-# targets), the others are cheap/fast by comparison.
+# (CIF copies + dashboard/plotly rendering, PLIP/PyMOL interaction detection,
+# and compare-sse's GPCRdb/KLIFS/PDBe lookups -- all per target -- across
+# potentially dozens of targets), the others are cheap/fast by comparison.
+# 900s must stay in sync with gunicorn.conf.py's `timeout` and the
+# proxy_read_timeout/proxy_send_timeout in the nginx proxy snippet.
 _TIMEOUTS = {
     "format": 30,
     "generate": 60,
     "preflight": 90,
-    "analyze": 300,
+    "analyze": 900,
 }
 
 

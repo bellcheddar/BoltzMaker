@@ -9,8 +9,8 @@
 #   sudo SERVER_NAME=boltzmaker.mdeller.com bash /opt/boltzmaker/web/deploy/provision.sh
 #
 # Idempotent: safe to re-run. Installs system packages, a service user, TWO Python
-# venvs (see below), the systemd web service + scratch-cleanup timer, the nginx site,
-# and a Let's Encrypt certificate.
+# venvs plus the optional conda-forge PLIP environment (see below), the systemd web
+# service + scratch-cleanup timer, the nginx site, and a Let's Encrypt certificate.
 set -euo pipefail
 
 APP_DIR=/opt/boltzmaker
@@ -60,6 +60,16 @@ fi
 sudo -u "$APP_USER" "$APP_DIR/.venv/bin/pip" install --quiet --upgrade pip
 sudo -u "$APP_USER" "$APP_DIR/.venv/bin/pip" install --quiet \
   rich pandas openpyxl pyyaml rdkit matplotlib psutil scipy gemmi biopython plotly reportlab requests
+
+echo "==> Building the PLIP interaction-analysis environment (repo root .plip_env/ --"
+echo "    conda-forge python+gemmi+openbabel+pymol-open-source via micromamba, ~1-1.5GB,"
+echo "    used by 'analyze' for protein-ligand interaction detection. Optional -- analyze"
+echo "    gracefully skips interaction analysis if this env isn't present."
+if [[ ! -d "$APP_DIR/.plip_env/env" ]]; then
+  sudo -u "$APP_USER" "$APP_DIR/.venv/bin/python3" "$APP_DIR/BoltzMaker.py" setup-plip --yes
+else
+  echo "    reusing existing .plip_env"
+fi
 
 echo "==> Building the Flask-serving venv (web/.venv/ -- flask/gunicorn only, a"
 echo "    deliberately separate dependency set from BoltzMaker's own, see"

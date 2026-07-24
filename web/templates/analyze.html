@@ -6,7 +6,10 @@
      <code>boltz_yamls/</code> (including <code>.boltzmaker_manifest.json</code>) +
      <code>boltz_output/</code> with the completed predictions &mdash; and get back a
      summary CSV/XLSX and an interactive dashboard. Real GPU inference (<code>run</code>)
-     isn't run here; this expects predictions you've already computed elsewhere.</p>
+     isn't run here; this expects predictions you've already computed elsewhere. If any
+     family sets <code>Apo structure:</code>, also include that referenced file (e.g. its
+     <code>reference/</code> folder) so compare-sse has something to compare against &mdash;
+     otherwise it's skipped for that family, not an error.</p>
 
   {% if error %}
   <div class="md-alert md-alert-error"><pre>{{ error }}</pre></div>
@@ -16,8 +19,9 @@
     <div class="md-field">
       <label for="campaign_zip">Campaign zip</label>
       <input type="file" id="campaign_zip" name="campaign_zip" accept=".zip" required>
-      <p class="md-hint">Max 200MB. PLIP interaction analysis and compare-sse are skipped
-        in this hosted version.</p>
+      <p class="md-hint">Max 200MB. Runs full analysis including PLIP protein-ligand
+        interaction detection and compare-sse apo-vs-holo motif comparison &mdash; larger
+        campaigns can take several minutes.</p>
     </div>
     <div class="md-radio-row md-field">
       <label><input type="radio" name="download_only" value="0" checked> View dashboard here</label>
