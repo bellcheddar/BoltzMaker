@@ -116,14 +116,20 @@ sed -e "s|__SERVER_NAME__|${SERVER_NAME}|g" -e "s|__BIND_ADDR__|${BIND_ADDR}|g" 
 ln -sf /etc/nginx/sites-available/boltzmaker /etc/nginx/sites-enabled/boltzmaker
 nginx -t && systemctl reload nginx
 
-echo "==> Requesting TLS certificate (certbot)"
-if certbot certificates 2>/dev/null | grep -q "$SERVER_NAME"; then
-  echo "    Certificate for ${SERVER_NAME} already present; skipping."
-else
-  certbot --nginx -d "$SERVER_NAME" --non-interactive --agree-tos \
-    -m "${CERTBOT_EMAIL:-marc@marcdeller.com}" --redirect || \
-    echo "    certbot failed (DNS not pointed yet?). Re-run: certbot --nginx -d ${SERVER_NAME}"
-fi
+echo "==> Requesting/deploying TLS certificate (certbot)"
+# Always run certbot --nginx, never skip based on "certificate already exists" --
+# the nginx site file above is unconditionally re-templated from source on every
+# run (plain HTTP only, no SSL block), so a stale skip-if-cert-exists check here
+# would leave a freshly re-templated vhost with no SSL directives at all,
+# breaking HTTPS for this app (nginx then falls back to serving *some other*
+# vhost's cert on port 443 for this hostname -- a real production incident hit
+# by exactly this bug on the very first re-provision of this app). certbot's own
+# `--nginx` plugin already reuses a still-valid certificate instead of
+# re-requesting one (avoiding Let's Encrypt rate limits), so this is safe and
+# correctly idempotent to run unconditionally.
+certbot --nginx -d "$SERVER_NAME" --non-interactive --agree-tos \
+  -m "${CERTBOT_EMAIL:-marc@marcdeller.com}" --redirect || \
+  echo "    certbot failed (DNS not pointed yet?). Re-run: certbot --nginx -d ${SERVER_NAME}"
 
 # Certbot's `listen 443 ssl;` lines don't enable HTTP/2 on nginx 1.24 -- add it
 # ourselves, idempotently. This is droplet-wide-shared-port-443-critical: nginx's
