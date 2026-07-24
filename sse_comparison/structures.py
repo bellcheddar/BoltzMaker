@@ -186,8 +186,23 @@ def extract_secondary_structure(structure: "gemmi.Structure", chain: "gemmi.Chai
         single_chain_st = gemmi.Structure()
         single_chain_st.add_model(gemmi.Model("1"))
         single_chain_st[0].add_chain(chain)
+        # Legacy PDB's ATOM chain-ID field is a single character, but BoltzMaker's own
+        # chain names (Boltz preserves the family id verbatim, up to 5 chars per
+        # _wiz_name's rule) routinely exceed that -- write_pdb() below would raise
+        # "chain name too long for the PDB format" for any real multi-char family id.
+        # add_chain() above copies `chain` by value (confirmed empirically: renaming
+        # the copy doesn't touch the original), so renaming just this throwaway,
+        # DSSP-only temp structure is safe -- callers never see this placeholder name,
+        # only start/end residue numbers and SSE kind come back out.
+        single_chain_st[0][0].name = "A"
         single_chain_st.setup_entities()
         single_chain_st.write_pdb(str(tmp_pdb))
+        # gemmi.write_pdb() never emits a HEADER record for a bare programmatic
+        # Structure (no title/deposition metadata to write) -- confirmed empirically
+        # that mkdssp >=4 then mis-sniffs the headerless file as mmCIF and fails to
+        # parse it ("did not start with a valid PDB HEADER line"). A minimal synthetic
+        # HEADER line is enough to satisfy the sniff; its content is never read.
+        tmp_pdb.write_text("HEADER    BOLTZMAKER TEMP STRUCTURE\n" + tmp_pdb.read_text())
 
         parser = PDBParser(QUIET=True)
         bio_structure = parser.get_structure("x", str(tmp_pdb))

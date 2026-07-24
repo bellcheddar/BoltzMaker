@@ -424,9 +424,15 @@ def _download_micromamba(dest: Path) -> None:
     import tempfile
 
     arch = platform.machine()
-    plat = {"arm64": "osx-arm64", "x86_64": "osx-64"}.get(arch)
+    system = platform.system()
+    if system == "Darwin":
+        plat = {"arm64": "osx-arm64", "x86_64": "osx-64"}.get(arch)
+    elif system == "Linux":
+        plat = {"x86_64": "linux-64", "aarch64": "linux-aarch64"}.get(arch)
+    else:
+        plat = None
     if plat is None:
-        _err(f"no known micromamba build for platform {arch!r}.")
+        _err(f"no known micromamba build for platform {system}/{arch!r}.")
         _info(f"Install micromamba yourself (https://micro.mamba.pm) and place the binary at {dest}")
         sys.exit(1)
     url = f"https://micro.mamba.pm/api/micromamba/{plat}/latest"
