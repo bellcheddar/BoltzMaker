@@ -1,0 +1,11 @@
+# Runs boltzmaker-scratch-clean.service every 5 minutes.
+[Unit]
+Description=Periodic BoltzMaker web scratch cleanup
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=5min
+Persistent=false
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,14 @@
+# One-shot cleanup of stale per-request scratch dirs. Backstop for the case a
+# gunicorn worker got SIGKILL'd mid-request (skipping its own try/finally
+# shutil.rmtree cleanup in boltzmaker_web/app.py's new_scratch_dir callers) -- not a
+# substitute for that cleanup, just a safety net. Triggered by the paired .timer.
+[Unit]
+Description=Delete stale BoltzMaker web scratch dirs
+
+[Service]
+Type=oneshot
+User=boltzmaker
+# -mmin +15: only dirs older than 15 minutes -- generous headroom over the longest
+# real request (analyze's own 300s subprocess timeout plus upload time), so this
+# never races a genuinely in-flight request.
+ExecStart=/usr/bin/find /opt/boltzmaker/web/scratch -mindepth 1 -maxdepth 1 -mmin +15 -exec rm -rf {} +

@@ -1,0 +1,32 @@
+# systemd unit for the boltzmaker-web app (gunicorn behind nginx). Always on.
+# Installed to /etc/systemd/system/boltzmaker-web.service by provision.sh.
+[Unit]
+Description=BoltzMaker web app (gunicorn)
+After=network.target
+
+[Service]
+Type=simple
+User=boltzmaker
+Group=boltzmaker
+# web/, not the repo root -- wsgi.py lives here. runner.py resolves BoltzMaker.py/
+# .venv paths relative to its own __file__ up to the real repo root regardless.
+WorkingDirectory=/opt/boltzmaker/web
+EnvironmentFile=-/opt/boltzmaker/web/.env
+ExecStart=/opt/boltzmaker/web/.venv/bin/gunicorn --config /opt/boltzmaker/web/deploy/gunicorn.conf.py wsgi:app
+Restart=on-failure
+RestartSec=3
+# Hardening (same directives as AlphaFraud's own unit)
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+ReadWritePaths=/opt/boltzmaker
+# Resource backstop: rdkit/matplotlib/openpyxl can all spend real CPU/RAM on a
+# pathological-but-valid input even within uploads.py's own byte-size caps. If one
+# request runs away, it's contained in its own cgroup rather than starving
+# AlphaFraud/ChemSage's gunicorn processes sharing this 3.8GB droplet.
+MemoryMax=1G
+CPUQuota=150%
+
+[Install]
+WantedBy=multi-user.target
