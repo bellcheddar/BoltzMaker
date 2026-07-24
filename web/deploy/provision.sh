@@ -65,8 +65,17 @@ echo "==> Building the PLIP interaction-analysis environment (repo root .plip_en
 echo "    conda-forge python+gemmi+openbabel+pymol-open-source via micromamba, ~1-1.5GB,"
 echo "    used by 'analyze' for protein-ligand interaction detection. Optional -- analyze"
 echo "    gracefully skips interaction analysis if this env isn't present."
-if [[ ! -d "$APP_DIR/.plip_env/env" ]]; then
-  sudo -u "$APP_USER" "$APP_DIR/.venv/bin/python3" "$APP_DIR/BoltzMaker.py" setup-plip --yes
+# Built as root, NOT `sudo -u boltzmaker` like the two venvs above -- confirmed
+# empirically that micromamba's package extraction fails under Ubuntu 24.04's
+# apparmor_restrict_unprivileged_userns=1 hardening for an unprivileged user with no
+# AppArmor profile ("cannot set current path: Permission denied" on nearly every
+# package), but works fine as root. Loosening that sysctl would weaken every app on
+# this shared droplet against a real local-privesc surface, so build as root (same as
+# the apt-get install above) and hand ownership to boltzmaker afterward instead.
+if [[ ! -x "$APP_DIR/.plip_env/env/bin/python" ]]; then
+  rm -rf "$APP_DIR/.plip_env"
+  "$APP_DIR/.venv/bin/python3" "$APP_DIR/BoltzMaker.py" setup-plip --yes
+  chown -R "$APP_USER:$APP_USER" "$APP_DIR/.plip_env"
 else
   echo "    reusing existing .plip_env"
 fi
