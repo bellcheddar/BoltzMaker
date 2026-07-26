@@ -11,7 +11,7 @@ import os
 import tempfile
 from pathlib import Path
 
-from flask import Flask, render_template
+from flask import Flask, render_template, url_for
 
 from . import banner
 
@@ -55,6 +55,41 @@ def create_app() -> Flask:
     app.register_blueprint(generate_bp)
     app.register_blueprint(preflight_bp)
     app.register_blueprint(analyze_bp)
+
+    @app.context_processor
+    def _asset_helper():
+        """Cache-bust static files by appending their mtime as ?v=.
+
+        nginx serves /static/ as `public, max-age=31536000, immutable`, which
+        is a promise that the bytes at a URL never change. base.html was asking
+        for a bare /static/css/brand.css, so that promise was a lie: an edited
+        stylesheet kept the same URL and every returning visitor stayed on the
+        old one for a year, with no way to force it short of renaming the file.
+        The mtime in the query string makes the URL change when the file does,
+        which is what the immutable header requires to be safe.
+        """
+        def asset(filename: str) -> str:
+            try:
+                version = int(os.path.getmtime(os.path.join(app.static_folder, filename)))
+            except OSError:
+                version = 0
+            return url_for("static", filename=filename, v=version)
+        return {"asset": asset}
+
+    @app.after_request
+    def _no_html_caching(response):
+        """Make HTML always revalidate -- the other half of asset().
+
+        Versioning the assets only helps if the browser re-reads the page that
+        names them. Flask sends no Cache-Control on a rendered template, so
+        browsers fall back to heuristic freshness and hold the page, which
+        keeps requesting the previous asset URL -- and that one really is
+        cached for a year. no-cache means revalidate, not no-store: an
+        unchanged page still comes back as a 304.
+        """
+        if response.mimetype == "text/html":
+            response.headers.setdefault("Cache-Control", "no-cache")
+        return response
 
     @app.route("/")
     def index():
