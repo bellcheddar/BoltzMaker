@@ -1,0 +1,10 @@
+# Flask-serving dependencies ONLY -- deliberately separate from BoltzMaker's own
+# requirements.txt (installed into a SEPARATE trimmed venv at the repo root, see
+# runner.py's module docstring and the plan's "two venvs, not one" note). This app
+# never imports BoltzMaker.py's own dependencies (rdkit/gemmi/pandas/...) directly --
+# every BoltzMaker.py invocation is a subprocess through that other venv.
+
+flask>=3.0
+gunicorn>=21.2
+werkzeug>=3.0
+python-dotenv
