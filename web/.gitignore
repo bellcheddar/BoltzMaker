@@ -3,3 +3,11 @@ scratch/
 __pycache__/
 *.pyc
 .env
+
+# Analysis sessions (Fully Automated Mode) -- extracted uploads, per-visitor,
+# swept on a TTL. Same reasoning as scratch/ above: runtime state, never source.
+sessions/
+
+# Locally-built bundles and results files.
+*.command
+*.bmz

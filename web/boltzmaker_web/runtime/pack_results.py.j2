@@ -1,0 +1,188 @@
+#!/usr/bin/env python3
+"""Pack a finished campaign into one .bmz results file.
+
+Written into the bundle by {{ site_url }} and run on your machine after the
+campaign finishes. Reads what BoltzMaker's `analyze` produced and writes a
+single zip to upload back for exploration.
+
+Stdlib only, deliberately: this runs in the pixi environment right after a
+long campaign, and a packing step that fails on an import would be the worst
+possible moment to discover a missing dependency.
+
+**What is included, and what is not.** The .bmz carries structured data -- the
+summary CSVs, one structure per target, and the labelled PLIP interaction
+image per target. It does NOT carry boltz_dashboard.html or the PyMOL .pse
+sessions. Those are the two largest artefacts by a wide margin (measured on a
+real 15-target campaign: a 19.4MB dashboard and 50.6MB of sessions, against
+11MB for everything included here), they stay on this machine where they were
+written, and the web Analysis step renders its own views from the structured
+data rather than embedding the dashboard. Open ./boltz_dashboard.html directly
+for the offline report.
+"""
+
+from __future__ import annotations
+
+import csv
+import hashlib
+import json
+import platform
+import sys
+import zipfile
+from datetime import datetime, timezone
+from pathlib import Path
+
+BMZ_VERSION = {{ bmz_version }}
+
+CAMPAIGN_DIR = Path(__file__).resolve().parent
+MD_PATH = CAMPAIGN_DIR / "boltz_input.md"
+SUMMARY_CSV = CAMPAIGN_DIR / "boltz_summary.csv"
+OUT_PATH = CAMPAIGN_DIR / "{{ results_filename }}"
+
+# Stay under the web app's own 200MB upload ceiling with room to spare, rather
+# than writing a file that packs happily here and is refused on upload. When the
+# cap bites, structures are dropped before images: a missing pose viewer costs
+# one panel, whereas a missing summary row costs the target entirely.
+MAX_TOTAL_BYTES = 180 * 1024 * 1024
+
+BLUE, GREEN, AMBER, RED, RESET = (
+    "\033[38;2;30;115;190m", "\033[38;2;0;208;132m",
+    "\033[38;2;252;185;0m", "\033[38;2;216;27;140m", "\033[0m",
+)
+
+
+def info(msg): print(f"{BLUE}i{RESET} {msg}")
+def ok(msg): print(f"{GREEN}v{RESET} {msg}")
+def warn(msg): print(f"{AMBER}!{RESET} {msg}")
+def fail(msg): print(f"{RED}x{RESET} {msg}", file=sys.stderr)
+
+
+def sha256_of(path: Path) -> str:
+    h = hashlib.sha256()
+    with path.open("rb") as fh:
+        for chunk in iter(lambda: fh.read(1024 * 1024), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def main() -> int:
+    if not SUMMARY_CSV.is_file():
+        fail("boltz_summary.csv not found -- `analyze` did not produce a summary.")
+        info("Nothing to pack. Re-run this campaign, or run `pixi run analyze boltz_input.md`.")
+        return 1
+
+    with SUMMARY_CSV.open(newline="", encoding="utf-8") as fh:
+        rows = list(csv.DictReader(fh))
+    if not rows:
+        fail("boltz_summary.csv has a header but no rows -- no target completed.")
+        return 1
+
+    # (arcname, source path) pairs, plus a parallel record of what was left out
+    # and why. Nothing is dropped silently: every omission lands in the manifest
+    # and is printed, so a half-populated Analysis page is explainable from the
+    # file itself rather than a mystery.
+    members: list[tuple[str, Path]] = []
+    skipped: list[dict] = []
+
+    def add(arcname: str, path: Path, kind: str) -> None:
+        if not path.is_file():
+            skipped.append({"arcname": arcname, "kind": kind, "reason": "not found on disk"})
+            return
+        members.append((arcname, path))
+
+    add("boltz_input.md", MD_PATH, "spec")
+    add("config.json", CAMPAIGN_DIR / "config.json", "config")
+    for name in ("boltz_summary.csv", "boltz_interactions.csv",
+                 "boltz_sse_comparison.csv", "boltz_sse_family_status.json"):
+        path = CAMPAIGN_DIR / name
+        if path.is_file():
+            members.append((f"summary/{name}", path))
+
+    # One structure and one interaction image per target, named by target_id
+    # rather than by Boltz's own filenames. The web side then addresses a target
+    # by its id alone and never has to re-derive `{stem}_model_0.cif`.
+    for row in rows:
+        target = (row.get("target_id") or "").strip()
+        if not target:
+            continue
+        cif_name = (row.get("cif_file") or "").strip()
+        if cif_name:
+            add(f"structures/{target}.cif", CAMPAIGN_DIR / "boltz_cif" / cif_name, "structure")
+        png_rel = (row.get("plip_png_path") or "").strip()
+        if png_rel:
+            add(f"plip/{target}.png", CAMPAIGN_DIR / png_rel, "interaction image")
+
+    # Enforce the ceiling before writing anything, dropping structures first.
+    total = sum(p.stat().st_size for _, p in members)
+    if total > MAX_TOTAL_BYTES:
+        warn(f"payload is {total / 1024 / 1024:.0f}MB, over the {MAX_TOTAL_BYTES // 1024 // 1024}MB limit")
+        kept: list[tuple[str, Path]] = []
+        running = 0
+        # Largest structures go first: dropping two 20MB complexes beats dropping
+        # twenty small ones, and the smaller targets stay explorable.
+        order = sorted(
+            members,
+            key=lambda m: (m[0].startswith("structures/"), m[1].stat().st_size),
+        )
+        for arcname, path in order:
+            size = path.stat().st_size
+            if running + size > MAX_TOTAL_BYTES and arcname.startswith("structures/"):
+                skipped.append({
+                    "arcname": arcname, "kind": "structure",
+                    "reason": f"dropped to stay under the {MAX_TOTAL_BYTES // 1024 // 1024}MB size limit",
+                })
+                continue
+            kept.append((arcname, path))
+            running += size
+        members = kept
+        warn(f"{sum(1 for s in skipped if 'size limit' in s['reason'])} structures dropped; "
+             "they remain on this machine in boltz_cif/")
+
+    manifest = {
+        "bmz_version": BMZ_VERSION,
+        "campaign_name": {{ campaign_name | tojson }},
+        "created_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "prepared_utc": {{ created | tojson }},
+        "prepared_by": {{ site_url | tojson }},
+        # No version string exists in BoltzMaker.py to record, so the script is
+        # identified by its own content hash instead. It cannot drift from what
+        # actually ran, and it is checkable against any given checkout.
+        "boltzmaker_sha256": sha256_of(CAMPAIGN_DIR / "BoltzMaker.py")
+                             if (CAMPAIGN_DIR / "BoltzMaker.py").is_file() else None,
+        "platform": {"system": platform.system(), "machine": platform.machine(),
+                     "python": platform.python_version()},
+        "targets_in_summary": len(rows),
+        "targets_expected": {{ target_count }},
+        "structures_included": sum(1 for a, _ in members if a.startswith("structures/")),
+        "images_included": sum(1 for a, _ in members if a.startswith("plip/")),
+        "skipped": skipped,
+        "files": {},
+    }
+
+    info(f"packing {len(members)} files for {len(rows)} targets")
+    with zipfile.ZipFile(OUT_PATH, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as zf:
+        for arcname, path in members:
+            zf.write(path, arcname=arcname)
+            manifest["files"][arcname] = {
+                "bytes": path.stat().st_size,
+                "sha256": sha256_of(path),
+            }
+        # Written last so it can describe every other member, including hashes.
+        zf.writestr("manifest.json", json.dumps(manifest, indent=2))
+
+    size_mb = OUT_PATH.stat().st_size / 1024 / 1024
+    ok(f"wrote {OUT_PATH.name} ({size_mb:.1f}MB)")
+    if manifest["targets_in_summary"] < manifest["targets_expected"]:
+        warn(f"{manifest['targets_expected'] - manifest['targets_in_summary']} of "
+             f"{manifest['targets_expected']} targets are missing from the summary -- "
+             "the campaign did not fully complete.")
+    if skipped:
+        warn(f"{len(skipped)} items were not packed (all recorded in manifest.json):")
+        for item in skipped[:5]:
+            print(f"    - {item['arcname']}: {item['reason']}")
+        if len(skipped) > 5:
+            print(f"    ... and {len(skipped) - 5} more")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

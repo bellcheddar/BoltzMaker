@@ -2,7 +2,7 @@
 
 > **BoltzMaker: Boltz2 campaign-scale structure and affinity prediction, binding analysis, and run control, orchestrated end to end from a single spec file.**
 
-[![live](https://img.shields.io/badge/live-boltzmaker.mdeller.com-00d084?logo=icloud&logoColor=white)](https://boltzmaker.mdeller.com) ![python](https://img.shields.io/badge/python-3.12.3-3776AB?logo=python&logoColor=white) ![flask](https://img.shields.io/badge/flask-3.1.3-000000?logo=flask&logoColor=white) ![gunicorn](https://img.shields.io/badge/gunicorn-26.0.0-499848?logo=gunicorn&logoColor=white) ![nginx](https://img.shields.io/badge/nginx-1.24.0-009639?logo=nginx&logoColor=white) ![boltz](https://img.shields.io/badge/boltz-2-00897B) ![rdkit](https://img.shields.io/badge/RDKit-2026.03-00d084) ![gemmi](https://img.shields.io/badge/gemmi-0.6.5-8a3ffc) ![biopython](https://img.shields.io/badge/Biopython-1.84-1a6b8f) ![plip](https://img.shields.io/badge/PLIP-2025-9b51e0) ![pymol](https://img.shields.io/badge/PyMOL-3.1-ff6900) ![plotly](https://img.shields.io/badge/Plotly.js-2.35.2-3F4F75?logo=plotly&logoColor=white) ![3dmoljs](https://img.shields.io/badge/3Dmol.js-3D%20viewer-fcb900) ![pytest](https://img.shields.io/badge/pytest-41%20passing-0A9EDC?logo=pytest&logoColor=white) ![data](https://img.shields.io/badge/data-GPCRdb%20%C2%B7%20KLIFS%20%C2%B7%20PDBe-467FF7) ![licence](https://img.shields.io/badge/licence-MIT-467FF7) ![author](https://img.shields.io/badge/author-Marc%20C.%20Deller%2C%20D.Phil.-1C244B)
+[![live](https://img.shields.io/badge/live-boltzmaker.mdeller.com-00d084?logo=icloud&logoColor=white)](https://boltzmaker.mdeller.com) ![python](https://img.shields.io/badge/python-3.12.3-3776AB?logo=python&logoColor=white) ![flask](https://img.shields.io/badge/flask-3.1.3-000000?logo=flask&logoColor=white) ![gunicorn](https://img.shields.io/badge/gunicorn-26.0.0-499848?logo=gunicorn&logoColor=white) ![nginx](https://img.shields.io/badge/nginx-1.24.0-009639?logo=nginx&logoColor=white) ![boltz](https://img.shields.io/badge/boltz-2-00897B) ![rdkit](https://img.shields.io/badge/RDKit-2026.03-00d084) ![gemmi](https://img.shields.io/badge/gemmi-0.6.5-8a3ffc) ![biopython](https://img.shields.io/badge/Biopython-1.84-1a6b8f) ![plip](https://img.shields.io/badge/PLIP-2025-9b51e0) ![pymol](https://img.shields.io/badge/PyMOL-3.1-ff6900) ![plotly](https://img.shields.io/badge/Plotly.js-2.35.2-3F4F75?logo=plotly&logoColor=white) ![3dmoljs](https://img.shields.io/badge/3Dmol.js-3D%20viewer-fcb900) ![pytest](https://img.shields.io/badge/pytest-86%20passing-0A9EDC?logo=pytest&logoColor=white) ![data](https://img.shields.io/badge/data-GPCRdb%20%C2%B7%20KLIFS%20%C2%B7%20PDBe-467FF7) ![licence](https://img.shields.io/badge/licence-MIT-467FF7) ![author](https://img.shields.io/badge/author-Marc%20C.%20Deller%2C%20D.Phil.-1C244B)
 
 <table>
 <tr>
@@ -682,12 +682,31 @@ nothing, since that's a real mistake worth stopping for.
 ## 🌐 Web deployment
 
 **Live at [boltzmaker.mdeller.com](https://boltzmaker.mdeller.com).** A Flask frontend for the
-non-GPU stages of the pipeline -- upload a `boltz_input.md` (or build one with the wizard),
-run `generate`/`preflight` and download the results, or upload a completed campaign folder
-(from a `run` you did locally) for full `analyze`, PLIP interaction detection, and
-compare-sse, all in the browser. The GPU `run` step is deliberately never hosted: there's no
-GPU on the droplet, so that stage still runs on your own hardware and you bring the
-`boltz_output/` back for analysis.
+non-GPU stages of the pipeline. The GPU `run` step is deliberately never hosted: there's no
+GPU on the droplet, so that stage always runs on your own hardware.
+
+The site opens on a choice of two ways to work:
+
+**Fully Automated Mode** is two steps. In **Prepare**, you describe the campaign and choose
+the run settings, and the site hands back a single self-extracting bundle carrying the spec,
+BoltzMaker itself, the pinned `pixi.toml`/`pixi.lock` environment, and the scripts that tie
+them together. Run it (double-click on macOS, `bash <file>` anywhere) and it installs the
+environment, runs `all` end to end, and writes one `.bmz` results file. In **Analysis**, you
+upload that file and explore the campaign: a sortable, filterable table of every target, a
+confidence-versus-affinity triage plot, and a per-target 3Dmol.js pose viewer alongside the
+PLIP interactions that were detected.
+
+The bundle runs the whole pipeline including `analyze`, not just `run`. Once a machine has
+the pinned environment, analysis costs seconds more there, and doing it locally is what lets
+the droplet skip a ~1.5GB PLIP environment and a 900-second request for work the user's
+machine has already done. What comes back is small and already structured (measured on a real
+15-target campaign: 4.2MB, against a 19.4MB dashboard and 50.6MB of PyMOL sessions that
+deliberately stay on your own disk), so Analysis is a reader rather than a compute step.
+
+**Stepwise Mode** is the original four independent tools: upload a `boltz_input.md` (or build
+one with the wizard), run `generate`/`preflight` and download the results, or upload a
+completed campaign folder for full `analyze`, PLIP interaction detection, and compare-sse.
+Use it when you already have your own setup and want one piece of it.
 
 **Source and tested-CLI isolation.** The web app lives in `web/`. It was developed on a
 separate `web` branch/worktree so that web-app work could never disturb the tested
@@ -698,6 +717,16 @@ venv at module import time), so the Flask app only ever invokes it as a subproce
 explicit minimal environment and a per-command timeout, through a dedicated trimmed venv
 (`.venv/`, torch/boltz-free, ~500MB -- every torch/boltz reference in the script is a
 function-local lazy import) kept separate from the Flask-serving venv (`web/.venv/`).
+
+**The `.bmz` results file.** A zip carrying `manifest.json` (format version, campaign name,
+timestamps, a SHA-256 of the `BoltzMaker.py` that produced it, per-file checksums, and an
+explicit record of anything not packed), the summary CSVs, one structure per target, and one
+labelled PLIP image per target. Its layout is written by the bundle's generated
+`pack_results.py` and read by `web/boltzmaker_web/results.py`; both mirror one `BMZ_VERSION`,
+and a file declaring any other version is refused rather than parsed optimistically. Uploads
+are treated as hostile: extraction is bounded on entry count, declared size, actual written
+size, compression ratio and resolved path, with every check run over the whole member list
+before a single byte is written.
 
 **Optional PLIP.** If the droplet's `.plip_env` (the same conda-forge PyMOL/OpenBabel
 environment `setup-plip` builds locally, ~1-1.5GB) is present, `analyze` runs full
@@ -719,7 +748,7 @@ uncompressed-size and entry-count caps) before anything is extracted.
 .venv/bin/pytest tests/
 ```
 
-41 tests covering `compare-sse`'s annotators against real fixture data (a real apo EGFR
+86 tests. The `compare-sse` annotators are covered against real fixture data (a real apo EGFR
 kinase-domain structure vs the `egfr_covalent` example's real holo prediction; a real
 apo beta2-adrenergic-receptor structure vs `adrb2_gs_panel`'s real holo predictions),
 with GPCRdb/KLIFS/PDBe network calls swapped for an injectable fake client seeded with
@@ -727,6 +756,20 @@ real, previously-verified API responses -- fully offline and fast (~9s). Plus gr
 and CLI-resolution tests for the parser fields above, chain-resolution tests against real
 fusion-construct and kinase-domain-only apo structures, GPCRdb/KLIFS/Pfam annotator
 pipelines, and the dashboard's summary-stats and SSE-table column logic.
+
+The web app's own 45 tests cover Fully Automated Mode end to end. Rather than asserting
+against a hand-written `.bmz` fixture, they render the real `pack_results.py` out of a real
+bundle, run it over a synthetic campaign, and read the result back with the real reader --
+the packer and the reader are two halves of one contract living in different files and
+running on different machines, which is exactly the shape of thing that drifts silently.
+Also covered: the generated shell scripts are checked with `bash -n` (they only ever execute
+on someone else's machine), every run-setting flag is checked against `BoltzMaker.py all
+--help` so a typo cannot reach a user's overnight run, and the hostile-upload guards are
+exercised with real zip-slip, compression-bomb and malformed-manifest archives.
+
+Note that four `compare-sse` tests need example structure data that is gitignored
+(`examples/*/boltz_cif/`), so they fail in a fresh clone until you have run one of the
+example campaigns.
 
 ## 📚 Citation
 
@@ -746,6 +789,8 @@ pipelines, and the dashboard's summary-stats and SSE-table column logic.
 
 ## 📋 To do
 
+- [x] Split the hosted site into two modes: a **Fully Automated** two-step flow (configure a campaign, download one self-extracting bundle carrying the software, environment and scripts; run it locally; upload the single `.bmz` results file it writes) and the original **Stepwise** four-tool flow, chosen from a two-panel landing page
+- [x] Give the Analysis step real exploration rather than an embedded report: a sortable, filterable target table, a confidence-versus-affinity triage plot coloured by BoltzMaker's own flags, and a per-target 3Dmol.js pose viewer with the detected PLIP interactions beside it -- which also lands the cross-target selectivity/triage view below
 - [x] Host the non-GPU stages (`new` wizard, `generate`, `preflight`, full `analyze` including PLIP and compare-sse) as a Flask app at [boltzmaker.mdeller.com](https://boltzmaker.mdeller.com), so the pipeline can be tried with no local install -- the GPU `run` step stays on your own hardware by design
 - [x] Add `preflight --json` so the check results can be consumed by tooling rather than scraped from the rich table, with the banner suppressed alongside it (as `format` already did) to keep stdout parseable
 - [x] Resolve the right micromamba build from the running platform in `setup-plip`, so Linux (`linux-64`/`linux-aarch64`) works rather than silently fetching a macOS binary on an x86_64 Linux host
@@ -757,7 +802,7 @@ pipelines, and the dashboard's summary-stats and SSE-table column logic.
 - [ ] Detect the MPS `torch.linalg.svd` CPU-fallback at `preflight` and warn with an estimated runtime multiplier for large multi-chain complexes
 - [ ] Add a residue/chain-count-based runtime pre-estimator, plus a toggle to log which ops fall back to CPU on MPS
 - [ ] Checkpoint `run` at the per-sample level (not just per-target) so an interrupted multi-hour complex resumes without recomputing completed diffusion samples
-- [ ] Add a cross-target selectivity/triage view to the dashboard (confidence-vs-affinity quadrant flags for "high-confidence, high-affinity" hits)
+- [x] Add a cross-target selectivity/triage view (confidence-vs-affinity quadrant flags for "high-confidence, high-affinity" hits) -- delivered in Fully Automated Mode's Analysis explorer rather than in the offline dashboard; it plots BoltzMaker's own `flags` and draws only the absolute 0.5 confidence cutoff, deliberately not a horizontal affinity threshold, because the mismatch flags are within-campaign terciles rather than absolute cutoffs
 - [x] Bundle Plotly.js locally instead of via CDN so the dashboard renders fully offline/air-gapped
 - [ ] Add a smoke-test suite: an end-to-end fixture run in CI plus unit tests for the `boltz_input.md` parser and JSON-metric flattening
 - [x] Add a ligand-preparation/validation step (canonicalization, stereocentre/protonation-state flagging, disconnected-fragment detection) so bad input chemistry is caught before hours of compute, not silently mispredicted

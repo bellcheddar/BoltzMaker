@@ -1,0 +1,331 @@
+"""Reading and validating .bmz results files.
+
+The .bmz is the contract between the two steps of Fully Automated Mode: the
+bundle's pack_results.py writes one on the user's machine, and this module
+reads it back. Its layout is fixed by runtime/pack_results.py.j2 and mirrored
+by BMZ_VERSION in bundle.py; when those disagree, this module is the one that
+has to say so plainly rather than guess.
+
+Everything here treats the file as hostile. It arrives over an upload form from
+an unauthenticated user, and a zip is the classic vehicle for path traversal
+and decompression bombs, so extraction is bounded on every axis: entry count,
+declared size, actual written size, compression ratio and resolved path. The
+checks run as a full pass over the member list *before* anything is written, so
+a hostile archive cannot get its safe-looking half extracted before the
+dangerous member is noticed.
+
+On the flags this module reads but never recomputes: BoltzMaker assigns
+HIGH_CONFIDENCE_POOR_AFFINITY and LOW_CONFIDENCE_STRONG_AFFINITY from
+within-campaign terciles, not absolute cutoffs (see apply_confidence_flags in
+BoltzMaker.py). Only LOW_CONFIDENCE has a real absolute threshold, 0.5. That
+distinction has to survive into the UI: a tercile flag says "relative to the
+other 14 targets you ran", which is a different claim from "weak", and the
+explorer must not redraw it as an absolute threshold line.
+"""
+
+from __future__ import annotations
+
+import csv
+import io
+import json
+import zipfile
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any
+
+# The layouts this module understands. A file declaring anything else is
+# refused rather than parsed optimistically.
+SUPPORTED_BMZ_VERSIONS = (1,)
+
+# --- extraction limits -----------------------------------------------------
+# A results file is a manifest, a handful of CSVs, one structure per target and
+# one image per target. Even a large campaign is a few hundred members, so
+# these caps are far above any real file and far below anything useful to an
+# attacker.
+MAX_ENTRIES = 4000
+MAX_TOTAL_UNCOMPRESSED = 600 * 1024 * 1024
+MAX_SINGLE_MEMBER = 128 * 1024 * 1024
+# Not reachable by real data: structures and CSVs are text and compress well,
+# but nowhere near this. A ratio this high is the signature of zero padding.
+MAX_COMPRESSION_RATIO = 500
+
+# The absolute threshold BoltzMaker uses for LOW_CONFIDENCE. Mirrored here so
+# the explorer can draw the one line that genuinely is a fixed cutoff.
+LOW_CONFIDENCE_THRESHOLD = 0.5
+
+FLAG_NOTES = {
+    "MISSING_OUTPUTS": "prediction did not complete -- re-run this target.",
+    "LOW_CONFIDENCE": "low structural confidence (below 0.5).",
+    "HIGH_CONFIDENCE_POOR_AFFINITY":
+        "high structural confidence but weak predicted affinity, relative to the rest of this "
+        "campaign -- verify the pocket and binding mode.",
+    "LOW_CONFIDENCE_STRONG_AFFINITY":
+        "strong predicted affinity but low structural confidence, relative to the rest of this "
+        "campaign -- verify the pose before trusting it.",
+    "LOW_POCKET_PLDDT": "low pLDDT near the specified pocket (approximate, complex-level proxy).",
+}
+
+
+class BmzError(ValueError):
+    """The upload is not a usable .bmz. Message is safe to show the user
+    directly and never carries raw exception internals."""
+
+
+def _reject_unsafe_members(infos: list[zipfile.ZipInfo], extract_root: Path) -> None:
+    if len(infos) > MAX_ENTRIES:
+        raise BmzError(f"Rejected: {len(infos)} entries, over the {MAX_ENTRIES} limit.")
+
+    total = 0
+    for info in infos:
+        name = info.filename
+        if name.startswith("/") or name.startswith("\\"):
+            raise BmzError(f"Rejected: absolute path in entry ({name!r}).")
+        if ".." in Path(name).parts:
+            raise BmzError(f"Rejected: path traversal ('..') in entry ({name!r}).")
+        if info.file_size > MAX_SINGLE_MEMBER:
+            raise BmzError(
+                f"Rejected: {name!r} declares {info.file_size // 1024 // 1024}MB, over the "
+                f"{MAX_SINGLE_MEMBER // 1024 // 1024}MB per-file limit."
+            )
+        if info.compress_size > 0:
+            ratio = info.file_size / info.compress_size
+            if ratio > MAX_COMPRESSION_RATIO:
+                raise BmzError(
+                    f"Rejected: {name!r} has a compression ratio of {ratio:.0f}:1, which real "
+                    "results data does not reach."
+                )
+        total += info.file_size
+
+    if total > MAX_TOTAL_UNCOMPRESSED:
+        raise BmzError(
+            f"Rejected: would decompress to {total // 1024 // 1024}MB, over the "
+            f"{MAX_TOTAL_UNCOMPRESSED // 1024 // 1024}MB limit."
+        )
+
+    # Separate resolve pass, run only after every cheap check has passed on every
+    # member, so nothing is written before the whole list is known to be safe.
+    root = extract_root.resolve()
+    for info in infos:
+        target = (root / info.filename).resolve()
+        if target != root and not str(target).startswith(str(root) + "/"):
+            raise BmzError(f"Rejected: entry {info.filename!r} resolves outside the extraction directory.")
+
+
+def extract(zip_path: Path, extract_root: Path) -> None:
+    """Validate and extract a .bmz. `extract_root` must already exist."""
+    try:
+        with zipfile.ZipFile(zip_path) as zf:
+            infos = [i for i in zf.infolist() if not i.is_dir()]
+            _reject_unsafe_members(infos, extract_root)
+
+            written = 0
+            for info in infos:
+                # Re-check against what is actually produced, not only what the
+                # header declared: the central directory is attacker-controlled
+                # and can understate a member's real size.
+                with zf.open(info) as src:
+                    dest = extract_root / info.filename
+                    dest.parent.mkdir(parents=True, exist_ok=True)
+                    with dest.open("wb") as out:
+                        while chunk := src.read(1024 * 1024):
+                            written += len(chunk)
+                            if written > MAX_TOTAL_UNCOMPRESSED:
+                                raise BmzError(
+                                    "Rejected: the archive writes more data than it declared."
+                                )
+                            out.write(chunk)
+    except zipfile.BadZipFile as exc:
+        raise BmzError("Rejected: not a valid zip file.") from exc
+
+
+def _num(raw: str):
+    """CSV cell -> float, or None. BoltzMaker leaves a cell empty for a metric
+    that does not apply to a target (no affinity prediction, a chain index the
+    complex does not have), and 'NA' where a value was expected and missing.
+    Both mean 'no number', and neither should become 0.0."""
+    if raw is None:
+        return None
+    raw = raw.strip()
+    if raw == "" or raw.upper() in ("NA", "NAN", "NONE"):
+        return None
+    try:
+        return float(raw)
+    except ValueError:
+        return None
+
+
+@dataclass
+class Target:
+    target_id: str
+    display_name: str
+    family_id: str
+    family_group: str
+    ligand_id: str
+    ligand_smiles: str
+    ligand_role: str
+    flags: list[str] = field(default_factory=list)
+    note: str = ""
+    confidence: float = None
+    ptm: float = None
+    iptm: float = None
+    complex_plddt: float = None
+    affinity: float = None
+    pic50: float = None
+    pic50_std: float = None
+    plip_status: str = ""
+    plip_counts: dict[str, int] = field(default_factory=dict)
+    has_structure: bool = False
+    has_image: bool = False
+
+    @property
+    def plip_total(self) -> int:
+        return sum(self.plip_counts.values())
+
+
+@dataclass
+class Results:
+    manifest: dict[str, Any]
+    targets: list[Target]
+    families: list[str]
+    campaign_name: str
+    created_utc: str
+    md_text: str = ""
+    sse_rows: list[dict] = field(default_factory=list)
+
+    @property
+    def incomplete(self) -> int:
+        """Targets the campaign was supposed to produce but did not."""
+        expected = self.manifest.get("targets_expected") or 0
+        return max(0, int(expected) - len(self.targets))
+
+    @property
+    def has_affinity(self) -> bool:
+        return any(t.pic50 is not None for t in self.targets)
+
+
+_PLIP_COLUMNS = {
+    "plip_hydrophobic_count": "hydrophobic",
+    "plip_hydrogen_bonds_count": "hydrogen bonds",
+    "plip_salt_bridges_count": "salt bridges",
+    "plip_pi_stacks_count": "pi stacks",
+    "plip_halogen_bonds_count": "halogen bonds",
+}
+
+
+def load(root: Path) -> Results:
+    """Read an extracted .bmz directory into structured records."""
+    manifest_path = root / "manifest.json"
+    if not manifest_path.is_file():
+        raise BmzError(
+            "No manifest.json in the upload -- this does not look like a .bmz results file. "
+            "Upload the file the bundle wrote, not the campaign folder itself."
+        )
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise BmzError("Rejected: manifest.json is not valid JSON.") from exc
+    if not isinstance(manifest, dict):
+        # json.loads("3") is a perfectly valid int, and .get() on it raises
+        # AttributeError rather than anything a caller would recognise.
+        raise BmzError("Rejected: manifest.json is not a JSON object.")
+
+    version = manifest.get("bmz_version")
+    if version not in SUPPORTED_BMZ_VERSIONS:
+        raise BmzError(
+            f"This results file declares format version {version!r}, and this site understands "
+            f"{', '.join(str(v) for v in SUPPORTED_BMZ_VERSIONS)}. It was probably written by a "
+            "different version of the bundle -- prepare a fresh one and re-run."
+        )
+
+    summary = root / "summary" / "boltz_summary.csv"
+    if not summary.is_file():
+        raise BmzError("Rejected: the results file has a manifest but no summary/boltz_summary.csv.")
+
+    with summary.open(newline="", encoding="utf-8", errors="replace") as fh:
+        rows = list(csv.DictReader(fh))
+    if not rows:
+        raise BmzError("The summary in this results file has no rows -- no target completed.")
+
+    targets: list[Target] = []
+    for row in rows:
+        target_id = (row.get("target_id") or "").strip()
+        if not target_id:
+            continue
+        flags = [f for f in (row.get("flags") or "").split(";") if f]
+        counts = {}
+        for column, label in _PLIP_COLUMNS.items():
+            value = _num(row.get(column))
+            if value:
+                counts[label] = int(value)
+        targets.append(Target(
+            target_id=target_id,
+            display_name=(row.get("display_name") or target_id).strip(),
+            family_id=(row.get("family_id") or "").strip(),
+            family_group=(row.get("family_group") or "").strip(),
+            ligand_id=(row.get("ligand_id") or "").strip(),
+            ligand_smiles=(row.get("ligand_smiles") or "").strip(),
+            ligand_role=(row.get("ligand_role") or "").strip(),
+            flags=flags,
+            note=(row.get("notes") or "").strip(),
+            confidence=_num(row.get("confidence_score")),
+            ptm=_num(row.get("ptm")),
+            iptm=_num(row.get("iptm")),
+            complex_plddt=_num(row.get("complex_plddt")),
+            affinity=_num(row.get("affinity_pred_value")),
+            # The ensemble mean is the headline number when affinity ran more
+            # than one sample; plain pIC50 is the single-sample case.
+            pic50=_num(row.get("pIC50_ensemble_mean")) or _num(row.get("pIC50")),
+            pic50_std=_num(row.get("pIC50_ensemble_std")),
+            plip_status=(row.get("plip_status") or "").strip(),
+            plip_counts=counts,
+            has_structure=(root / "structures" / f"{target_id}.cif").is_file(),
+            has_image=(root / "plip" / f"{target_id}.png").is_file(),
+        ))
+
+    if not targets:
+        raise BmzError("The summary has rows but none carry a target_id -- the file looks corrupt.")
+
+    sse_rows: list[dict] = []
+    sse_csv = root / "summary" / "boltz_sse_comparison.csv"
+    if sse_csv.is_file():
+        with sse_csv.open(newline="", encoding="utf-8", errors="replace") as fh:
+            sse_rows = list(csv.DictReader(fh))
+
+    md_path = root / "boltz_input.md"
+    families = sorted({t.family_id for t in targets if t.family_id})
+
+    return Results(
+        manifest=manifest,
+        targets=targets,
+        families=families,
+        campaign_name=str(manifest.get("campaign_name") or "campaign"),
+        created_utc=str(manifest.get("created_utc") or ""),
+        md_text=md_path.read_text(encoding="utf-8", errors="replace") if md_path.is_file() else "",
+        sse_rows=sse_rows,
+    )
+
+
+def to_json(results: Results) -> str:
+    """The payload the explorer's JavaScript reads. Serialised once, server-side,
+    rather than re-fetched per view."""
+    return json.dumps({
+        "campaign": results.campaign_name,
+        "created": results.created_utc,
+        "low_confidence_threshold": LOW_CONFIDENCE_THRESHOLD,
+        "flag_notes": FLAG_NOTES,
+        "families": results.families,
+        "has_affinity": results.has_affinity,
+        "targets": [
+            {
+                "id": t.target_id, "name": t.display_name, "family": t.family_id,
+                "group": t.family_group, "ligand": t.ligand_id, "smiles": t.ligand_smiles,
+                "role": t.ligand_role, "flags": t.flags, "note": t.note,
+                "confidence": t.confidence, "ptm": t.ptm, "iptm": t.iptm,
+                "plddt": t.complex_plddt, "affinity": t.affinity,
+                "pic50": t.pic50, "pic50_std": t.pic50_std,
+                "plip_status": t.plip_status, "plip": t.plip_counts, "plip_total": t.plip_total,
+                "structure": t.has_structure, "image": t.has_image,
+            }
+            for t in results.targets
+        ],
+    })

@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% block content %}
+<h2 class="md-page-title">Step 2 &middot; Analysis</h2>
+<p class="md-scope-note">
+  Upload the single <code>.bmz</code> file your bundle wrote when it finished. It carries the
+  summary, one structure per target and the protein-ligand interactions that were detected.
+</p>
+
+{% if error %}
+<div class="md-alert md-alert-error"><pre>{{ error }}</pre></div>
+{% endif %}
+
+<div class="md-card">
+  <h2>Results file</h2>
+  <form method="post" enctype="multipart/form-data">
+    <div class="md-field">
+      <label for="results_file">Your .bmz file</label>
+      <input type="file" id="results_file" name="results_file" accept=".bmz,.zip" required>
+      <p class="md-hint">Written next to the bundle on your own machine, named after your
+        campaign. Max 200MB. Nothing is recomputed here &mdash; the analysis already ran where
+        the prediction did, so this is quick.</p>
+    </div>
+    <button type="submit" class="md-btn">Explore results</button>
+  </form>
+</div>
+
+<div class="md-card">
+  <h2>Haven't run one yet?</h2>
+  <p style="font-size:13px;color:var(--md-text-muted);margin:0">
+    Start at <a href="/auto/prepare">Step 1, Prepare</a> to configure a campaign and get your
+    bundle. If you already have a finished campaign folder from working by hand, Stepwise
+    Mode's <a href="/analyze">Analyze</a> tool takes that instead.
+  </p>
+</div>
+{% endblock %}

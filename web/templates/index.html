@@ -1,31 +1,37 @@
 {% extends "base.html" %}
 {% block content %}
 <p class="md-scope-note">
-  This site hosts the parts of <a href="https://github.com/bellcheddar/BoltzMaker" target="_blank" rel="noopener noreferrer">BoltzMaker</a>
-  that don't need GPU compute. Real Boltz-2 structure prediction (<code>run</code>) isn't
-  hosted here &mdash; run that yourself (your own Mac/GPU machine), then come back to
-  <a href="/analyze">Analyze</a> the results.
+  <a href="https://github.com/bellcheddar/BoltzMaker" target="_blank" rel="noopener noreferrer">BoltzMaker</a>
+  drives a Boltz-2 campaign end to end from a single spec file. Real structure prediction needs a
+  GPU, so it is never run on this server &mdash; that one step always happens on your own machine.
+  Pick how you want to work.
 </p>
 
-<div class="md-tool-grid">
-  <a class="md-tool-card" href="/new">
-    <h3>New campaign wizard</h3>
-    <p>Answer plain questions about your proteins, partners, and ligands &mdash; get a
-       ready-to-run <code>boltz_input.md</code> back.</p>
+<div class="md-mode-grid">
+  <a class="md-mode-card" href="/auto">
+    <span class="md-mode-badge">Two steps</span>
+    <h3>Fully Automated Mode</h3>
+    <p class="md-mode-lead">Configure once, run one command at home, explore the results here.</p>
+    <ol class="md-mode-steps">
+      <li><b>Prepare.</b> Answer questions about your proteins, partners and ligands, then download a
+          single bundle carrying the software, the pinned environment and the scripts.</li>
+      <li><b>Analysis.</b> Run the bundle on your own machine, upload the one results file it writes,
+          and explore your campaign interactively.</li>
+    </ol>
+    <p class="md-mode-foot">Best if you want the whole pipeline handled for you.</p>
   </a>
-  <a class="md-tool-card" href="/generate">
-    <h3>Generate</h3>
-    <p>Turn a <code>boltz_input.md</code> into the per-target YAML files Boltz-2 needs.</p>
-  </a>
-  <a class="md-tool-card" href="/preflight">
-    <h3>Preflight</h3>
-    <p>Validate your campaign &mdash; SMILES, chain ids, ligand chemistry &mdash; before you
-       spend hours of GPU time on it.</p>
-  </a>
-  <a class="md-tool-card" href="/analyze">
-    <h3>Analyze</h3>
-    <p>Upload an already-computed campaign folder, get back a CSV/XLSX summary and an
-       interactive dashboard.</p>
+
+  <a class="md-mode-card" href="/stepwise">
+    <span class="md-mode-badge">Four tools</span>
+    <h3>Stepwise Mode</h3>
+    <p class="md-mode-lead">Drive each stage yourself, one at a time.</p>
+    <ol class="md-mode-steps">
+      <li><b>Wizard.</b> Build a <code>boltz_input.md</code> by answering plain questions.</li>
+      <li><b>Generate.</b> Turn that spec into the per-target YAML files Boltz-2 needs.</li>
+      <li><b>Preflight.</b> Validate chemistry, chain ids and inputs before spending GPU time.</li>
+      <li><b>Analyze.</b> Upload a finished campaign folder for a summary and dashboard.</li>
+    </ol>
+    <p class="md-mode-foot">Best if you already have your own setup and want one piece of it.</p>
   </a>
 </div>
 {% endblock %}

@@ -7,3 +7,12 @@
 # directly instead of intercepting HTTP calls.
 
 pytest
+
+# Flask is here, and deliberately NOT in requirements.txt: the web app runs from its
+# own separate venv (web/.venv, see web/requirements.txt and runner.py's docstring on
+# why the two are kept apart), and nothing in BoltzMaker.py's runtime imports it. The
+# test suite is the one place that needs both halves at once -- tests/test_web_auto.py
+# imports the Flask app directly while tests/test_sse_comparison.py needs pandas and
+# gemmi from the runtime venv -- so `pytest tests/` is run from the root .venv with
+# this file installed on top.
+flask>=3.0

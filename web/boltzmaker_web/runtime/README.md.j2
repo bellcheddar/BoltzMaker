@@ -1,0 +1,54 @@
+# {{ campaign_name }}
+
+A BoltzMaker campaign, prepared at [{{ site_url }}]({{ site_url }}) on {{ created }}.
+
+{{ target_count }} target{{ 's' if target_count != 1 else '' }} to predict.
+
+## Run it
+
+```sh
+./run_campaign.sh
+```
+
+That is the whole thing. It installs a pinned environment (via
+[pixi](https://pixi.sh), downloading it first if you do not have it), generates the
+target YAMLs, preflights them, runs Boltz-2, analyses the results, and writes
+`{{ results_filename }}` next to itself.
+
+Then upload that one file at **{{ site_url }}/auto/analysis** to explore it.
+
+Safe to re-run at any point. Targets that already have a complete prediction are
+skipped, so an interrupted campaign picks up where it stopped rather than starting over.
+
+## What is in here
+
+| File | What it is |
+|---|---|
+| `boltz_input.md` | Your campaign spec: proteins, partners, ligands, constraints. Editable. |
+| `config.json` | The run settings you chose, machine-readable. Provenance only, not read at run time. |
+| `run_campaign.sh` | The script above. Every setting is written out literally so you can read exactly what will run. |
+| `pack_results.py` | Packs the finished campaign into `{{ results_filename }}`. |
+| `BoltzMaker.py` | The pipeline itself. |
+| `pixi.toml`, `pixi.lock` | The pinned environment: Boltz-2, RDKit, and the PLIP/OpenBabel/PyMOL analysis stack, locked for both macOS (Apple Silicon) and Linux (x86-64). |
+
+## What it needs from your machine
+
+- **A GPU, realistically.** CUDA on Linux or Apple Silicon's MPS. It will run on CPU, but
+  slowly enough that it is only really useful for proving a campaign is valid.
+- **Disk.** Several GB for the environment, plus Boltz-2's model weights.
+- **The model weights are not in this bundle.** They are large and versioned by Boltz
+  itself, so they download on first use and are cached in your home directory. A second
+  campaign skips that step.
+
+## If something goes wrong
+
+The script stops on the first error and tells you which stage failed. A few common ones:
+
+| Symptom | What it usually means |
+|---|---|
+| `pixi: command not found` after install | pixi went onto your PATH for future shells only. Run `source ~/.zshrc` or open a new terminal, then re-run. |
+| Killed during prediction, no error | Out of memory. Lower **Parallel diffusion samples** or **Max MSA sequences**, or run fewer targets at once with **Only run the first N targets**. |
+| A preflight check fails | The campaign spec has a real problem: an unparseable SMILES, a chain id over 5 characters, a missing referenced file. Fix `boltz_input.md` and re-run. |
+| Some targets missing from the results | Those targets failed after their retries. The results file still carries everything that succeeded, and records the shortfall in its manifest. |
+
+Full documentation: <https://github.com/bellcheddar/BoltzMaker>

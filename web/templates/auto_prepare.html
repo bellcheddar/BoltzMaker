@@ -1,0 +1,71 @@
+{% extends "base.html" %}
+{% block content %}
+<h2 class="md-page-title">Step 1 &middot; Prepare</h2>
+<p class="md-scope-note">
+  Describe the campaign and choose how hard to push your hardware. You get back one
+  self-extracting file carrying the spec, a pinned environment and the scripts that run it.
+  Nothing is predicted here &mdash; that happens on your machine, where the GPU is.
+</p>
+
+{% if error %}
+<div class="md-alert md-alert-error"><pre>{{ error }}</pre></div>
+{% endif %}
+
+<form method="post" id="wizard-form">
+  <div class="md-card">
+    <h2>Campaign</h2>
+    <div class="md-field">
+      <label for="campaign_name">Name</label>
+      <input type="text" id="campaign_name" name="campaign_name" maxlength="60"
+             value="{{ form.campaign_name if form else '' }}" placeholder="e.g. 5HT2 Gq panel">
+      <p class="md-hint">Names the bundle, the folder it unpacks into, and the results file.
+        Anything outside letters, numbers, dots, dashes and underscores is replaced.</p>
+    </div>
+  </div>
+
+  {% include "_wizard_fields.html" %}
+
+  {#  Rendered from options.RUN_OPTIONS rather than written out here, so a new knob
+      is one entry in that registry and appears in the form, the validator, the
+      generated run script and config.json at once.  #}
+  {% for key, title, opts in option_groups %}
+  <div class="md-card">
+    <h2>{{ title }}</h2>
+    {% for opt in opts %}
+    <div class="md-field">
+      {% if opt.kind == 'bool' %}
+        <label>
+          <input type="checkbox" name="{{ opt.name }}" value="1"
+                 {% if (form[opt.name] if form else defaults[opt.name]) %}checked{% endif %}>
+          {{ opt.label }}
+        </label>
+      {% elif opt.kind == 'choice' %}
+        <label for="{{ opt.name }}">{{ opt.label }}</label>
+        <select id="{{ opt.name }}" name="{{ opt.name }}">
+          {% for choice in opt.choices %}
+          <option value="{{ choice }}"
+            {% if (form[opt.name] if form else defaults[opt.name]) == choice %}selected{% endif %}>{{ choice }}</option>
+          {% endfor %}
+        </select>
+      {% else %}
+        <label for="{{ opt.name }}">{{ opt.label }}</label>
+        <input type="text" inputmode="decimal" id="{{ opt.name }}" name="{{ opt.name }}"
+               value="{{ form[opt.name] if form else (defaults[opt.name] if defaults[opt.name] is not none else '') }}"
+               placeholder="{{ "Boltz default" if opt.default is none else opt.default }}">
+      {% endif %}
+      <p class="md-hint">{{ opt.hint }}</p>
+    </div>
+    {% endfor %}
+  </div>
+  {% endfor %}
+
+  <div class="md-card">
+    <h2>Build the bundle</h2>
+    <p style="font-size:13px;color:var(--md-text-muted);margin-top:0">
+      The spec is validated and the target list generated before the bundle is written, so a
+      problem with the campaign surfaces here rather than an hour into a run at your end.
+    </p>
+    <button type="submit" class="md-btn">Download my bundle</button>
+  </div>
+</form>
+{% endblock %}

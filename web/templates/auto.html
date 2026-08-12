@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% block content %}
+<h2 class="md-page-title">Fully Automated Mode</h2>
+<p class="md-scope-note">
+  Two steps. You configure the campaign here, run one command on a machine with a GPU,
+  and bring back a single file to explore. Everything between those points &mdash; writing the
+  spec, generating the YAMLs, preflighting, predicting, and analysing &mdash; is handled for you.
+</p>
+
+<div class="md-mode-grid">
+  <a class="md-mode-card" href="/auto/prepare">
+    <span class="md-mode-badge">Step 1</span>
+    <h3>Prepare</h3>
+    <p class="md-mode-lead">Configure a run and download the bundle.</p>
+    <p class="md-mode-steps" style="list-style:none;padding:0">
+      Describe your proteins, partners and ligands, choose how hard to push the hardware, and get
+      back one self-extracting file. It carries the campaign spec, a pinned environment
+      specification covering Boltz-2 and the whole analysis stack, and the scripts that run them.
+      Nothing else to install and no versions to match.
+    </p>
+    <p class="md-mode-foot">Ends with a file on your machine.</p>
+  </a>
+
+  <a class="md-mode-card" href="/auto/analysis">
+    <span class="md-mode-badge">Step 2</span>
+    <h3>Analysis</h3>
+    <p class="md-mode-lead">Upload the results file and explore.</p>
+    <p class="md-mode-steps" style="list-style:none;padding:0">
+      The bundle writes exactly one results file when it finishes. Upload it and get a sortable
+      table of every target, a confidence-versus-affinity triage plot, and per-target pose viewers
+      with the protein-ligand interactions that were detected.
+    </p>
+    <p class="md-mode-foot">Starts from the file the bundle wrote.</p>
+  </a>
+</div>
+
+<div class="md-card">
+  <h2>What happens on your machine</h2>
+  <p style="font-size:13px;color:var(--md-text-muted)">
+    The bundle is a single self-extracting file. Double-click it (or run it from a terminal) and it
+    installs a pinned environment via <a href="https://pixi.sh" target="_blank" rel="noopener noreferrer">pixi</a>,
+    then runs the campaign end to end and writes one <code>.bmz</code> results file next to itself.
+    The Boltz-2 model weights are downloaded on first use rather than shipped in the bundle &mdash;
+    they are large, versioned by Boltz itself, and cached in your home directory afterwards, so a
+    second campaign skips that step.
+  </p>
+</div>
+{% endblock %}

@@ -17,12 +17,28 @@
       </a>
     </div>
     <div class="md-header-title"><h1>{{ SITE_TITLE }}</h1></div>
+    {#  The nav shows only the chrome of the mode you are actually in. A single flat
+        list of every route across both modes was the alternative, and it undoes the
+        point of the landing page: the whole reason the two modes are separated is
+        that a Fully Automated user should never have to think about `generate` or
+        `preflight` as separate steps. `nav_mode` is derived from the request path in
+        app.py's context processor, so no view has to remember to pass it.  #}
     <nav class="md-header-nav">
       <a href="/" class="{{ 'active' if active == 'index' }}">Home</a>
-      <a href="/new" class="{{ 'active' if active == 'new' }}">Wizard</a>
-      <a href="/generate" class="{{ 'active' if active == 'generate' }}">Generate</a>
-      <a href="/preflight" class="{{ 'active' if active == 'preflight' }}">Preflight</a>
-      <a href="/analyze" class="{{ 'active' if active == 'analyze' }}">Analyze</a>
+      {% if nav_mode == 'auto' %}
+        <a href="/auto" class="{{ 'active' if active == 'auto' }}">Overview</a>
+        <a href="/auto/prepare" class="{{ 'active' if active == 'prepare' }}">1. Prepare</a>
+        <a href="/auto/analysis" class="{{ 'active' if active == 'analysis' }}">2. Analysis</a>
+      {% elif nav_mode == 'stepwise' %}
+        <a href="/stepwise" class="{{ 'active' if active == 'stepwise' }}">Stepwise</a>
+        <a href="/new" class="{{ 'active' if active == 'new' }}">Wizard</a>
+        <a href="/generate" class="{{ 'active' if active == 'generate' }}">Generate</a>
+        <a href="/preflight" class="{{ 'active' if active == 'preflight' }}">Preflight</a>
+        <a href="/analyze" class="{{ 'active' if active == 'analyze' }}">Analyze</a>
+      {% else %}
+        <a href="/auto">Fully Automated</a>
+        <a href="/stepwise">Stepwise</a>
+      {% endif %}
       <a href="https://github.com/bellcheddar/BoltzMaker" target="_blank" rel="noopener noreferrer">GitHub</a>
     </nav>
   </div>
@@ -35,5 +51,6 @@
   <a href="https://marcdeller.com" target="_blank" rel="noopener noreferrer">Marc C. Deller, D.Phil.</a>
   &middot; <a href="mailto:marc@marcdeller.com">marc@marcdeller.com</a>
 </footer>
+{% block scripts %}{% endblock %}
 </body>
 </html>

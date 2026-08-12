@@ -11,7 +11,7 @@ import os
 import tempfile
 from pathlib import Path
 
-from flask import Flask, render_template, url_for
+from flask import Flask, abort, render_template, request, send_from_directory, url_for
 
 from . import banner
 
@@ -25,7 +25,12 @@ MAX_CONTENT_LENGTH = 200 * 1024 * 1024
 # Defaults to a local ./scratch/ for dev; overridden via BOLTZMAKER_SCRATCH_ROOT in
 # production (set in deploy/boltzmaker-web.service's EnvironmentFile).
 WEB_ROOT = Path(__file__).resolve().parent.parent  # web/boltzmaker_web/app.py -> web/
+REPO_ROOT = WEB_ROOT.parent
+
+# Allowlisted rather than open: see the /vendor route below.
+VENDORED_ASSETS = ("plotly-2.35.2.min.js", "3Dmol-2.5.5-min.js")
 DEFAULT_SCRATCH_ROOT = WEB_ROOT / "scratch"
+DEFAULT_SESSION_ROOT = WEB_ROOT / "sessions"
 
 
 def create_app() -> Flask:
@@ -44,13 +49,24 @@ def create_app() -> Flask:
     scratch_root.mkdir(parents=True, exist_ok=True)
     app.config["SCRATCH_ROOT"] = scratch_root
 
+    # Analysis sessions live beside scratch, never inside it. The systemd cleaner
+    # (deploy/boltzmaker-scratch-clean.service) deletes anything in scratch/ older
+    # than 15 minutes, which is right for a per-request temp dir and quite wrong
+    # for a session someone is still reading -- putting sessions under scratch/
+    # would silently expire the explorer mid-use.
+    sessions_root = Path(os.environ.get("BOLTZMAKER_SESSION_ROOT", str(DEFAULT_SESSION_ROOT)))
+    sessions_root.mkdir(parents=True, exist_ok=True)
+    app.config["SESSION_ROOT"] = sessions_root
+
     app.jinja_env.globals["SITE_TITLE"] = banner.SITE_TITLE
 
+    from .views_auto import bp as auto_bp
     from .views_new import bp as new_bp
     from .views_generate import bp as generate_bp
     from .views_preflight import bp as preflight_bp
     from .views_analyze import bp as analyze_bp
 
+    app.register_blueprint(auto_bp)
     app.register_blueprint(new_bp)
     app.register_blueprint(generate_bp)
     app.register_blueprint(preflight_bp)
@@ -91,9 +107,51 @@ def create_app() -> Flask:
             response.headers.setdefault("Cache-Control", "no-cache")
         return response
 
+    @app.context_processor
+    def _nav_mode():
+        """Which mode's nav to render, derived from the request path.
+
+        Deriving it here rather than passing `mode=` from every render_template
+        call is deliberate: the four stepwise views render their template from
+        several branches each (GET, validation error, success), and a mode
+        argument missed on any one of those branches would silently drop the
+        user out of their mode's chrome on exactly the error paths where
+        orientation matters most.
+        """
+        path = request.path
+        if path.startswith("/auto"):
+            return {"nav_mode": "auto"}
+        if path in ("/stepwise", "/new", "/generate", "/preflight", "/analyze"):
+            return {"nav_mode": "stepwise"}
+        return {"nav_mode": None}
+
     @app.route("/")
     def index():
         return render_template("index.html", active="index")
+
+    @app.route("/stepwise")
+    def stepwise():
+        return render_template("stepwise.html", active="stepwise")
+
+    @app.route("/vendor/<path:filename>")
+    def vendor(filename):
+        """Serve the repo's vendored Plotly and 3Dmol builds.
+
+        They already exist at the repo root for BoltzMaker's own offline
+        dashboard, so they are served from there rather than copied into
+        static/ -- 5MB of duplicated third-party JS in the tree, kept in sync
+        by hand, is a worse problem than one extra route. The explorer is the
+        only consumer, and the allowlist keeps this from becoming a general
+        read primitive over the repo.
+        """
+        if filename not in VENDORED_ASSETS:
+            abort(404)
+        path = REPO_ROOT / "vendor" / filename
+        if not path.is_file():
+            abort(404)
+        # Version-pinned filenames that never change, so a long immutable cache
+        # is safe and the 4.5MB Plotly build is fetched once per visitor.
+        return send_from_directory(path.parent, path.name, max_age=31536000)
 
     @app.route("/healthz")
     def healthz():
@@ -108,6 +166,12 @@ def create_app() -> Flask:
         ), 413
 
     return app
+
+
+def session_root(app: Flask) -> Path:
+    """Where Analysis sessions live. See create_app on why this is not under
+    the scratch root."""
+    return Path(app.config["SESSION_ROOT"])
 
 
 def new_scratch_dir(app: Flask) -> Path:

@@ -4,6 +4,10 @@ from pathlib import Path
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+# The Flask app is a package under web/, not at the repo root, so it needs its own
+# entry. Done here rather than via `pip install -e` because an editable install
+# silently does nothing on this machine (site.py skips hidden .pth files).
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "web"))
 
 FIXTURES = Path(__file__).parent / "fixtures"
 SSE_FIXTURES = FIXTURES / "sse"

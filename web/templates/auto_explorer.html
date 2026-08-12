@@ -1,0 +1,109 @@
+{% extends "base.html" %}
+{% block title %}{{ results.campaign_name }} &middot; {{ SITE_TITLE }}{% endblock %}
+{% block content %}
+
+<div class="md-card">
+  <h2 style="display:flex;align-items:baseline;gap:10px;flex-wrap:wrap">
+    {{ results.campaign_name }}
+    <span class="md-hint" style="font-weight:400">
+      {{ results.targets | length }} target{{ 's' if results.targets | length != 1 }}
+      &middot; run {{ results.created_utc[:10] }}
+    </span>
+  </h2>
+
+  {% if results.incomplete %}
+  <div class="md-alert md-alert-error" style="margin-bottom:12px">
+    {{ results.incomplete }} of {{ results.manifest.targets_expected }} target{{ 's' if results.manifest.targets_expected != 1 }}
+    did not make it into the summary &mdash; the campaign did not fully complete. What is below
+    is everything that did.
+  </div>
+  {% endif %}
+
+  <div class="md-stat-row">
+    <div class="md-stat"><span class="md-stat-value" id="stat-shown">{{ results.targets | length }}</span><span class="md-stat-label">shown</span></div>
+    <div class="md-stat"><span class="md-stat-value">{{ results.families | length }}</span><span class="md-stat-label">families</span></div>
+    <div class="md-stat"><span class="md-stat-value" id="stat-flagged">0</span><span class="md-stat-label">flagged</span></div>
+    <div class="md-stat"><span class="md-stat-value" id="stat-structures">0</span><span class="md-stat-label">structures</span></div>
+  </div>
+
+  <p style="margin:14px 0 0">
+    <a class="md-btn md-btn-secondary" href="{{ url_for('auto.summary_csv', token=token) }}">Download summary CSV</a>
+    <a class="md-btn md-btn-secondary" href="/auto/prepare" style="margin-left:6px">Prepare another campaign</a>
+  </p>
+  <p class="md-hint" style="margin-top:10px">
+    This session expires after two hours. The full report your bundle also wrote is on your own
+    machine as <code>boltz_dashboard.html</code>, next to the campaign folder.
+  </p>
+</div>
+
+{% if results.has_affinity %}
+<div class="md-card">
+  <h2>Confidence against predicted affinity</h2>
+  <p class="md-hint" style="margin-top:0">
+    Each point is a target. The vertical line at {{ low_confidence }} is BoltzMaker's own
+    absolute low-confidence cutoff. The mismatch flags are <b>not</b> absolute: BoltzMaker
+    assigns them by splitting <i>this campaign</i> into terciles, so they mean "relative to the
+    other targets you ran here", and there is deliberately no horizontal threshold line to
+    imply otherwise. Click a point to open that target below.
+  </p>
+  <div id="quadrant" style="width:100%;height:440px"></div>
+</div>
+{% endif %}
+
+<div class="md-card">
+  <h2>Targets</h2>
+  <div class="md-filter-row">
+    <input type="search" id="filter-text" placeholder="Filter by target, ligand or family...">
+    <select id="filter-family">
+      <option value="">All families</option>
+      {% for family in results.families %}<option value="{{ family }}">{{ family }}</option>{% endfor %}
+    </select>
+    <label class="md-inline-check"><input type="checkbox" id="filter-flagged"> Flagged only</label>
+  </div>
+  <div class="md-table-scroll">
+    <table class="md-data-table" id="target-table">
+      <thead>
+        <tr>
+          <th data-sort="name">Target</th>
+          <th data-sort="family">Family</th>
+          <th data-sort="ligand">Ligand</th>
+          <th data-sort="confidence" class="num">Confidence</th>
+          <th data-sort="pic50" class="num">pIC50</th>
+          <th data-sort="plip_total" class="num">Interactions</th>
+          <th data-sort="flags">Flags</th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+  </div>
+  <p class="md-hint" id="empty-note" style="display:none">No target matches that filter.</p>
+</div>
+
+<div class="md-card" id="detail-card" style="display:none">
+  <h2 id="detail-title">Target</h2>
+  <div class="md-detail-grid">
+    <div>
+      <h3 class="md-sub">Predicted pose</h3>
+      <div id="viewer" class="md-viewer"></div>
+      <div class="md-viewer-controls">
+        <button type="button" class="md-btn md-btn-secondary" data-style="cartoon">Cartoon</button>
+        <button type="button" class="md-btn md-btn-secondary" data-style="surface">Surface</button>
+        <button type="button" class="md-btn md-btn-secondary" data-style="spin">Spin</button>
+      </div>
+      <p class="md-hint" id="viewer-note"></p>
+    </div>
+    <div>
+      <h3 class="md-sub">Detected interactions</h3>
+      <div id="detail-plip"></div>
+      <h3 class="md-sub">Metrics</h3>
+      <table class="md-check-table" id="detail-metrics"></table>
+    </div>
+  </div>
+</div>
+
+<script id="results-payload" type="application/json">{{ payload | safe }}</script>
+<script src="{{ url_for('vendor', filename='plotly-2.35.2.min.js') }}"></script>
+<script src="{{ url_for('vendor', filename='3Dmol-2.5.5-min.js') }}"></script>
+<script src="{{ asset('js/explorer.js') }}"></script>
+<script>BoltzExplorer.init({{ token | tojson }});</script>
+{% endblock %}
