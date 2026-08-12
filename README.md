@@ -2,7 +2,7 @@
 
 > **BoltzMaker: Boltz2 campaign-scale structure and affinity prediction, binding analysis, and run control, orchestrated end to end from a single spec file.**
 
-[![live](https://img.shields.io/badge/live-boltzmaker.mdeller.com-00d084)](https://boltzmaker.mdeller.com) ![python](https://img.shields.io/badge/python-3.12-3776AB?logo=python&logoColor=white) ![boltz](https://img.shields.io/badge/boltz-2-00897B) ![plip](https://img.shields.io/badge/PLIP-interactions-9b51e0) ![pymol](https://img.shields.io/badge/PyMOL-visualisation-ff6900) ![rdkit](https://img.shields.io/badge/RDKit-cheminformatics-00d084) ![plotly](https://img.shields.io/badge/Plotly-charts-3F4F75?logo=plotly&logoColor=white) ![3dmoljs](https://img.shields.io/badge/3Dmol.js-3D%20viewer-fcb900) ![pytest](https://img.shields.io/badge/pytest-tested-0A9EDC?logo=pytest&logoColor=white) ![licence](https://img.shields.io/badge/licence-MIT-467FF7) ![author](https://img.shields.io/badge/author-Marc%20C.%20Deller%2C%20D.Phil.-1C244B)
+[![live](https://img.shields.io/badge/live-boltzmaker.mdeller.com-00d084?logo=icloud&logoColor=white)](https://boltzmaker.mdeller.com) ![python](https://img.shields.io/badge/python-3.12.3-3776AB?logo=python&logoColor=white) ![flask](https://img.shields.io/badge/flask-3.1.3-000000?logo=flask&logoColor=white) ![gunicorn](https://img.shields.io/badge/gunicorn-26.0.0-499848?logo=gunicorn&logoColor=white) ![nginx](https://img.shields.io/badge/nginx-1.24.0-009639?logo=nginx&logoColor=white) ![boltz](https://img.shields.io/badge/boltz-2-00897B) ![rdkit](https://img.shields.io/badge/RDKit-2026.03-00d084) ![gemmi](https://img.shields.io/badge/gemmi-0.6.5-8a3ffc) ![biopython](https://img.shields.io/badge/Biopython-1.84-1a6b8f) ![plip](https://img.shields.io/badge/PLIP-2025-9b51e0) ![pymol](https://img.shields.io/badge/PyMOL-3.1-ff6900) ![plotly](https://img.shields.io/badge/Plotly.js-2.35.2-3F4F75?logo=plotly&logoColor=white) ![3dmoljs](https://img.shields.io/badge/3Dmol.js-3D%20viewer-fcb900) ![pytest](https://img.shields.io/badge/pytest-41%20passing-0A9EDC?logo=pytest&logoColor=white) ![data](https://img.shields.io/badge/data-GPCRdb%20%C2%B7%20KLIFS%20%C2%B7%20PDBe-467FF7) ![licence](https://img.shields.io/badge/licence-MIT-467FF7) ![author](https://img.shields.io/badge/author-Marc%20C.%20Deller%2C%20D.Phil.-1C244B)
 
 <table>
 <tr>
@@ -188,7 +188,9 @@ python3 BoltzMaker.py setup-plip
 ```
 
 Entirely optional and separate from the venv above. Builds a `.plip_env` (via a
-self-downloaded [micromamba](https://micro.mamba.pm), ~1-1.5GB, mostly PyMOL's own Qt/
+self-downloaded [micromamba](https://micro.mamba.pm) -- macOS `osx-arm64`/`osx-64` and
+Linux `linux-64`/`linux-aarch64` are all resolved from the running platform, so this
+works on a Linux server as well as a Mac, ~1-1.5GB, mostly PyMOL's own Qt/
 Cairo/HDF5 dependencies) and vendors a pinned commit of
 [cif2plip](https://github.com/bellcheddar/cif2plip), which converts a Boltz ModelCIF into
 a strict PDB and runs [PLIP](https://github.com/pharmai/plip) on it for real
@@ -212,6 +214,16 @@ already have (`brew install dssp` on macOS, or `conda install -c salilab dssp`).
 needed for one specific `compare-sse` metric (secondary-structure-element boundary
 shift, used when a structure has no deposited HELIX/SHEET records -- true for every
 Boltz-predicted structure). Every other `compare-sse` metric works without it.
+
+Two things worth knowing about how that fallback feeds DSSP, both of which used to break
+it. The chain is written to a temporary legacy-PDB file first, whose chain-ID field is a
+single character -- but BoltzMaker's own chain names are the family id verbatim (up to 5
+characters), so any real multi-character family id raised "chain name too long for the PDB
+format". The temporary copy is now renamed to `A` before writing; it is a throwaway DSSP
+input, and only residue numbers and SSE kind are read back out, so nothing you see is
+affected. Separately, `gemmi` emits no `HEADER` record for a structure built purely in
+memory, and `mkdssp` >= 4 then mis-sniffs the headerless file as mmCIF and refuses to parse
+it, so a minimal synthetic `HEADER` line is prepended. Its content is never read.
 
 ### Alternative: `pixi` (one unified environment, macOS + Linux/CUDA)
 
@@ -416,6 +428,7 @@ trace.
 | `--strict` | off | Promote preflight WARN to FAIL |
 | `--skip-interactions` | off | Skip cif2plip interaction analysis during `analyze`, even if `setup-plip` has been run |
 | `--skip-sse` | off | Skip compare-sse apo-vs-holo analysis during `analyze`, even if a family has `Apo structure:` set |
+| `--json` | off | `preflight` only: emit the check results as a JSON array on stdout instead of the rich table, for scripting and tooling (this is what the hosted web app consumes). The banner is suppressed alongside it, exactly as it is for `format`, so stdout stays parseable |
 
 **Memory-control options** (see below for why these matter on Mac/unified-memory hardware):
 
@@ -676,9 +689,11 @@ compare-sse, all in the browser. The GPU `run` step is deliberately never hosted
 GPU on the droplet, so that stage still runs on your own hardware and you bring the
 `boltz_output/` back for analysis.
 
-**Source and tested-CLI isolation.** The web app lives in `web/`, developed on a separate
-`web` git branch/worktree so the tested `BoltzMaker.py` on `main` is never touched by web-app
-work. `BoltzMaker.py` was never designed to be imported (it relaunches itself into a managed
+**Source and tested-CLI isolation.** The web app lives in `web/`. It was developed on a
+separate `web` branch/worktree so that web-app work could never disturb the tested
+`BoltzMaker.py`, and has since been merged into `main` -- the isolation that matters is
+now the process boundary described next, not a branch boundary. `BoltzMaker.py` was never
+designed to be imported (it relaunches itself into a managed
 venv at module import time), so the Flask app only ever invokes it as a subprocess, with an
 explicit minimal environment and a per-command timeout, through a dedicated trimmed venv
 (`.venv/`, torch/boltz-free, ~500MB -- every torch/boltz reference in the script is a
@@ -704,12 +719,14 @@ uncompressed-size and entry-count caps) before anything is extracted.
 .venv/bin/pytest tests/
 ```
 
-27 tests covering `compare-sse`'s annotators against real fixture data (a real apo EGFR
+41 tests covering `compare-sse`'s annotators against real fixture data (a real apo EGFR
 kinase-domain structure vs the `egfr_covalent` example's real holo prediction; a real
 apo beta2-adrenergic-receptor structure vs `adrb2_gs_panel`'s real holo predictions),
 with GPCRdb/KLIFS/PDBe network calls swapped for an injectable fake client seeded with
-real, previously-verified API responses -- fully offline and fast (~2s). Plus grammar
-and CLI-resolution tests for the parser fields above.
+real, previously-verified API responses -- fully offline and fast (~9s). Plus grammar
+and CLI-resolution tests for the parser fields above, chain-resolution tests against real
+fusion-construct and kinase-domain-only apo structures, GPCRdb/KLIFS/Pfam annotator
+pipelines, and the dashboard's summary-stats and SSE-table column logic.
 
 ## 📚 Citation
 
@@ -729,6 +746,10 @@ and CLI-resolution tests for the parser fields above.
 
 ## 📋 To do
 
+- [x] Host the non-GPU stages (`new` wizard, `generate`, `preflight`, full `analyze` including PLIP and compare-sse) as a Flask app at [boltzmaker.mdeller.com](https://boltzmaker.mdeller.com), so the pipeline can be tried with no local install -- the GPU `run` step stays on your own hardware by design
+- [x] Add `preflight --json` so the check results can be consumed by tooling rather than scraped from the rich table, with the banner suppressed alongside it (as `format` already did) to keep stdout parseable
+- [x] Resolve the right micromamba build from the running platform in `setup-plip`, so Linux (`linux-64`/`linux-aarch64`) works rather than silently fetching a macOS binary on an x86_64 Linux host
+- [x] Fix compare-sse's DSSP fallback for real campaigns: multi-character family ids no longer overflow the legacy-PDB chain-ID field, and the temporary structure now carries the `HEADER` line `mkdssp` >= 4 needs to recognise it as PDB at all
 - [ ] Share pip cache between the two environments (`PIP_CACHE_DIR`) so `setup-plip` doesn't re-download wheels the main venv already fetched
 - [x] Pin exact dependency versions and add a cached/offline install mode for reproducible installs -- via `pixi.toml`/`pixi.lock` and `install.sh` (see **Alternative: pixi** above and `docs/tier_b_offline_install.md`), not by pinning `setup`/`setup-plip`'s own unpinned `requirements.txt`-driven installs, which remain as they were
 - [ ] Add `BoltzMaker.py doctor` -- a post-install check that imports boltz/rdkit/plip/openbabel/pymol in-process and reports exactly which env/feature is broken
