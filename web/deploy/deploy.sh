@@ -46,11 +46,6 @@ if [[ ! -x .venv/bin/python3 || ! -x web/.venv/bin/python3 ]]; then
   echo "One or both venvs missing -- run web/deploy/provision.sh as root first."; exit 0
 fi
 sudo -u boltzmaker env PIP_NO_CACHE_DIR=1 ./web/.venv/bin/pip install --quiet -r web/requirements.txt
-# The app creates these itself on boot, but as the unprivileged service user -- and
-# a deploy that restarts the service before the directory exists would have it
-# created at whatever ownership the restart happens to run under. Making them here,
-# explicitly, keeps that out of the race.
-sudo -u boltzmaker mkdir -p "${DROPLET_PATH}/web/scratch" "${DROPLET_PATH}/web/sessions"
 # rsync (run as root) leaves new files root-owned; chown them to boltzmaker, but PRUNE
 # both venvs, scratch/ and sessions/ so a re-deploy never touches an in-flight
 # request's temp dir, an open analysis session, or forces a venv rebuild.
@@ -60,6 +55,13 @@ sudo find "${DROPLET_PATH}" \
   -path "${DROPLET_PATH}/web/scratch" -prune -o \
   -path "${DROPLET_PATH}/web/sessions" -prune -o \
   -exec chown boltzmaker:boltzmaker {} +
+# AFTER the chown, never before. These are created as the service user, which can
+# only write into web/ once the chown above has run -- doing it first fails with a
+# bare "Permission denied", and because this whole remote block runs under `set -e`
+# that abort takes the chown and the service restart down with it. The symptom is
+# the nastiest kind: rsync has already succeeded, so the deploy looks like it worked
+# while the service quietly keeps serving the previous build.
+sudo -u boltzmaker mkdir -p "${DROPLET_PATH}/web/scratch" "${DROPLET_PATH}/web/sessions"
 sudo systemctl restart boltzmaker-web.service
 sudo systemctl --no-pager --lines=2 status boltzmaker-web.service || true
 REMOTE
