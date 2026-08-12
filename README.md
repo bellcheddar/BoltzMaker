@@ -63,11 +63,46 @@ See [CHANGELOG.md](CHANGELOG.md) for what's changed recently, and
 
 ## 📥 Installation
 
-Two ways to install, depending on whether the computer running BoltzMaker has internet
-access. Most people want **Path 1**. (Looking for more detail/troubleshooting on either
-path? See **One-time setup** and `docs/tier_b_offline_install.md` further down.)
+Three ways to run BoltzMaker. **Path 1 installs nothing at all** and is the fastest way to
+see what the pipeline does; Paths 2 and 3 install it properly on your own machine, and differ
+only in whether that machine has internet access. (Looking for more detail or troubleshooting
+on either install path? See **One-time setup** and `docs/tier_b_offline_install.md` further
+down.)
 
-### Path 1: This computer has internet access
+| | What it is | Best when |
+|---|---|---|
+| **Path 1: Web app** | Use it in the browser at [boltzmaker.mdeller.com](https://boltzmaker.mdeller.com). Nothing to install. | You want to try it, build a campaign spec, or analyse results you already have. |
+| **Path 2: Normal install** | Full local install on a machine with internet access. | You are running real campaigns on your own GPU. |
+| **Path 3: Offline install** | A single self-extracting installer built elsewhere and carried across. | The machine is airgapped or behind a firewall. |
+
+### Path 1: Web app (no install)
+
+Everything except the GPU prediction step runs at
+**[boltzmaker.mdeller.com](https://boltzmaker.mdeller.com)**. Real structure prediction needs a
+GPU, which the server does not have, so that one step always happens on your own hardware.
+The site opens on a choice of two ways to work.
+
+**Fully Automated Mode** is two steps and is the one to pick if you just want a campaign run
+end to end:
+
+1. **Prepare.** Describe your proteins, partners and ligands in the form, choose how hard to
+   push your hardware, and download a single self-extracting bundle. It carries the campaign
+   spec, BoltzMaker itself, a pinned environment covering Boltz-2 and the whole analysis
+   stack, and the scripts that run them.
+2. **Analysis.** Run that bundle on a machine with a GPU (double-click it on macOS, or
+   `bash <file>` anywhere) and it installs the environment, runs the whole pipeline, and
+   writes one `.bmz` results file. Upload that file back to the site to explore your campaign:
+   a sortable table of every target, a confidence-versus-affinity triage plot, and per-target
+   3D pose viewers with the protein-ligand interactions that were detected.
+
+**Stepwise Mode** exposes the same non-GPU stages as four separate tools: the campaign
+**Wizard**, **Generate**, **Preflight**, and **Analyze**. Pick this when you already have your
+own setup and want one piece of it, rather than the whole pipeline.
+
+Full detail on both, including every option and what the `.bmz` file contains, is in
+**Web deployment** below.
+
+### Path 2: This computer has internet access
 
 **1.** Open the **Terminal** app (Applications -> Utilities -> Terminal, or search for
 "Terminal" with Spotlight), then make a folder for BoltzMaker and go into it:
@@ -106,13 +141,13 @@ pixi run preflight examples/t4_lysozyme/boltz_input.md
 If you see a table of green PASS results, you're ready to go -- see **Commands**
 below for what to run next.
 
-### Path 2: This computer has no internet access
+### Path 3: This computer has no internet access
 
 Use this for a lab machine, server, or any computer that's offline or behind a
 firewall. You'll need a second computer that *does* have internet access to prepare a
 single installer file first.
 
-**1.** On the computer **with** internet access, follow **Path 1** above, then build
+**1.** On the computer **with** internet access, follow **Path 2** above, then build
 the offline installer file:
 
 ```sh
@@ -685,28 +720,140 @@ nothing, since that's a real mistake worth stopping for.
 non-GPU stages of the pipeline. The GPU `run` step is deliberately never hosted: there's no
 GPU on the droplet, so that stage always runs on your own hardware.
 
-The site opens on a choice of two ways to work:
+The site opens on a choice of two ways to work: **Fully Automated Mode**, which hands the
+whole pipeline to you as one downloadable bundle, and **Stepwise Mode**, which exposes the
+same non-GPU stages as four separate tools.
 
-**Fully Automated Mode** is two steps. In **Prepare**, you describe the campaign and choose
-the run settings, and the site hands back a single self-extracting bundle carrying the spec,
-BoltzMaker itself, the pinned `pixi.toml`/`pixi.lock` environment, and the scripts that tie
-them together. Run it (double-click on macOS, `bash <file>` anywhere) and it installs the
-environment, runs `all` end to end, and writes one `.bmz` results file. In **Analysis**, you
-upload that file and explore the campaign: a sortable, filterable table of every target, a
-confidence-versus-affinity triage plot, and a per-target 3Dmol.js pose viewer alongside the
-PLIP interactions that were detected.
+### Fully Automated Mode
+
+#### Step 1: Prepare
+
+Describe the campaign in the form: a **name**, whether to **predict binding affinity**, then
+your **partners** (optional co-folded chains), **proteins**, **constraints** (pocket contact,
+covalent bond, or distance), and **ligands** (SMILES or CCD code). These are the same fields
+`BoltzMaker.py new` asks for in the terminal, and the same 5-character shared-namespace rule
+applies to every short name.
+
+Then choose the run settings. Every one maps to a real `BoltzMaker.py` flag, and each is
+written literally into the generated script so you can read exactly what will run:
+
+**Prediction settings**
+
+| Setting | Flag | Default | What it does |
+|---|---|---|---|
+| Accelerator | `--accelerator` | auto | auto picks your GPU (CUDA or Apple MPS) when there is one. cpu works but is slow enough that it is really only for checking a campaign runs at all. |
+| Data-loading workers | `--workers` | 2 | Matches Boltz's own default of 2. Lower it to 0 if you hit memory pressure on a Mac. |
+| Parallel diffusion samples | `--max-parallel-samples` | 1 | How many diffusion samples Boltz holds in memory at once. 1 is the safe default on unified-memory hardware; raising it multiplies peak memory. |
+| MPS high-watermark ratio | `--mps-watermark` | 1.0 | Apple Silicon only (PYTORCH_MPS_HIGH_WATERMARK_RATIO). Caps how much unified memory PyTorch will claim before it errors instead of swap-thrashing. Ignored elsewhere. |
+| Recycling steps | `--recycling-steps` | Boltz default | Leave blank for Boltz's own default. More steps is slower and usually only marginally better. |
+| Sampling steps | `--sampling-steps` | Boltz default | Leave blank for Boltz's own default. |
+| Structure samples per target | `--diffusion-samples` | Boltz default | Leave blank for one sample per target. Each extra sample costs roughly its own share of diffusion time, and analysis only ever reads the first one (model_0) -- so raise it to inspect pose variability yourself, not to improve the report. |
+| Affinity diffusion samples | `--diffusion-samples-affinity` | Boltz default | Leave blank for Boltz's own default. Only matters for targets with affinity prediction switched on. |
+| Affinity sampling steps | `--sampling-steps-affinity` | Boltz default | Leave blank for Boltz's own default. |
+| Max MSA sequences | `--max-msa-seqs` | Boltz default | Leave blank for Boltz's own default. Lowering it is one of the few levers that meaningfully cuts memory on very large complexes. |
+| Auto-retries per target | `--max-retries` | 2 | A target that fails (typically an out-of-memory kill) is retried in isolation, one target at a time. 0 disables retrying. |
+| Preflight size-warning threshold | `--memory-warn-tokens` | 1000 | Preflight warns when a target's combined residue/atom count exceeds this. It is a warning, not a limit. |
+
+**Scope and safety**
+
+| Setting | Flag | Default | What it does |
+|---|---|---|---|
+| Only run the first N targets | `--limit` | Boltz default | Leave blank to run the whole campaign. Setting it to 1 or 2 is the cheapest way to prove the pipeline works before committing hours of GPU time. |
+| Treat preflight warnings as failures | `--strict` | off | Stops the run before any GPU time is spent if preflight raises any warning at all. |
+
+**Analysis**
+
+| Setting | Flag | Default | What it does |
+|---|---|---|---|
+| Skip PLIP interaction analysis | `--skip-interactions` | off | Leave off. PLIP is what produces the per-target interaction fingerprints the Analysis step shows; skipping it saves minutes but empties that panel. |
+| Skip apo-vs-holo compare-sse | `--skip-sse` | off | Only does anything for families with an 'Apo structure:' set. Skipping it drops the secondary-structure comparison from the results. |
+
+Submitting validates the spec (`format`, then `generate`, so a broken campaign fails here
+rather than an hour into a run on your machine) and downloads
+`boltzmaker_<campaign>.command`, typically around 200KB. It contains:
+
+| File | What it is |
+|---|---|
+| `boltz_input.md` | Your campaign spec, tidied to the house style. Editable. |
+| `config.json` | The run settings, machine-readable. Provenance; not read at run time. |
+| `run_campaign.sh` | Installs the environment, runs the campaign, packs the results. |
+| `pack_results.py` | Writes the `.bmz`. |
+| `BoltzMaker.py` | The pipeline itself. |
+| `pixi.toml`, `pixi.lock` | The pinned environment, locked for macOS (Apple Silicon) and Linux (x86-64). |
+
+To run it, double-click on macOS or `bash boltzmaker_<campaign>.command` anywhere. It unpacks
+into a folder beside itself and starts immediately: it installs [pixi](https://pixi.sh) if you
+do not have it, solves the environment, then runs `generate` -> `preflight` -> `run` ->
+`analyze` and writes one `.bmz` file. **Boltz-2's model weights are not in the bundle** --
+they are large and versioned by Boltz itself, so they download on first use and are cached in
+your home directory, meaning a second campaign skips that step.
+
+It is safe to re-run at any point. `run` is idempotent, so an interrupted campaign resumes
+rather than starting over, and the script refuses to overwrite an existing unpacked folder.
+If the campaign fails part-way it still packs what completed, and records the shortfall in the
+results file rather than hiding it.
 
 The bundle runs the whole pipeline including `analyze`, not just `run`. Once a machine has
 the pinned environment, analysis costs seconds more there, and doing it locally is what lets
-the droplet skip a ~1.5GB PLIP environment and a 900-second request for work the user's
-machine has already done. What comes back is small and already structured (measured on a real
-15-target campaign: 4.2MB, against a 19.4MB dashboard and 50.6MB of PyMOL sessions that
-deliberately stay on your own disk), so Analysis is a reader rather than a compute step.
+the droplet skip a ~1.5GB PLIP environment and a 900-second request for work your machine has
+already done. What comes back is small and already structured (measured on a real 15-target
+campaign: 4.2MB, against a 19.4MB dashboard and 50.6MB of PyMOL sessions that deliberately
+stay on your own disk), so Analysis is a reader rather than a compute step.
 
-**Stepwise Mode** is the original four independent tools: upload a `boltz_input.md` (or build
-one with the wizard), run `generate`/`preflight` and download the results, or upload a
-completed campaign folder for full `analyze`, PLIP interaction detection, and compare-sse.
-Use it when you already have your own setup and want one piece of it.
+#### Step 2: Analysis
+
+Upload the `.bmz` and the campaign opens as an interactive report. Nothing is recomputed, so
+it is quick regardless of campaign size.
+
+| Panel | What you get |
+|---|---|
+| **Header** | Campaign name, target count, family count, how many targets are flagged, how many carry a structure. An explicit warning if targets are missing from the summary because the campaign did not fully complete. |
+| **Confidence against predicted affinity** | Every target as a point, coloured by BoltzMaker's own flags. Click a point to open that target. |
+| **Targets** | Sortable, filterable table: target, family, ligand, confidence, pIC50, interaction count and flags. Filter by free text, by family, or to flagged targets only. Click any row to open it. |
+| **Target detail** | An interactive 3D pose viewer (cartoon, surface or spin, with the ligand always drawn as sticks), the detected protein-ligand interactions with PLIP's own labelled diagram, and the full metric set including pTM, ipTM, complex pLDDT, predicted affinity and pIC50 with its ensemble spread. |
+
+Two things worth knowing about the plot. The dashed vertical line at **0.5** is BoltzMaker's
+genuine absolute low-confidence cutoff. The mismatch flags (`HIGH_CONFIDENCE_POOR_AFFINITY`,
+`LOW_CONFIDENCE_STRONG_AFFINITY`) are **not** absolute: BoltzMaker assigns them by splitting
+*that campaign* into terciles, so they mean "relative to the other targets you ran", and there
+is deliberately no horizontal affinity threshold line, because drawing one would imply a fixed
+cutoff the numbers do not support.
+
+An open target is deep-linkable -- the URL carries it, so a link to one target can be shared
+or reloaded. Sessions last **two hours**, after which the upload is deleted and you would
+upload the file again. The **Download summary CSV** button gives you the full summary table
+including every column not shown in the browser. The complete offline report your bundle also
+wrote (`boltz_dashboard.html`, with its ligand grids and compare-sse charts) stays on your own
+machine next to the campaign folder.
+
+### Stepwise Mode
+
+The same non-GPU stages as four independent tools. Each takes an upload and hands back a
+download, and none of them depends on the others, so you can use just the one you need.
+
+| Tool | You give it | You get back |
+|---|---|---|
+| **Wizard** | Answers to the same plain questions as `BoltzMaker.py new` | A validated, tidied `boltz_input.md` |
+| **Generate** | A `boltz_input.md` (paste or upload) | `boltz_yamls.zip`: the per-target YAMLs plus the manifest |
+| **Preflight** | A `boltz_input.md` | The full check table: SMILES and ligand chemistry, chain-id lengths, duplicate targets, size heuristics. The GPU and model-weight checks report on the server, not your machine, so read those on your own hardware instead. |
+| **Analyze** | A zip of a completed campaign folder (`boltz_input.md` + `boltz_yamls/` + `boltz_output/`, plus any `Apo structure:` files) | The summary CSV/XLSX, the interactive dashboard rendered in the page, and a zip of everything including the CIFs, PLIP output and compare-sse results |
+
+Use Stepwise when you already have your own setup and want one piece of it; use Fully
+Automated when you want the whole pipeline handled.
+
+### Limits, and what to do when something goes wrong
+
+| Situation | What is happening |
+|---|---|
+| Upload rejected as too large | Uploads are capped at **200MB**. The packer aims below that (it stops at 180MB, dropping the largest structures first and recording each one in the manifest), so hitting this usually means an unusually large campaign. Analyse it locally with `boltz_dashboard.html` instead. |
+| "This results file declares format version N" | The `.bmz` was written by a different version of the bundle than the site understands. Prepare a fresh bundle and re-pack; the file itself is not damaged. |
+| "No manifest.json in the upload" | A campaign folder was uploaded instead of the `.bmz`. Either upload the `.bmz` the bundle wrote, or use Stepwise Mode's **Analyze**, which is the tool that takes a campaign folder. |
+| Some targets have no pose viewer | Those structures were dropped to stay under the size limit, or the target failed. `manifest.json` inside the `.bmz` records which, and why. They are still in `boltz_cif/` on your own machine. |
+| The 3D viewer says WebGL is unavailable | The browser has WebGL disabled or unsupported. Everything else on the page is unaffected. |
+| The interactions panel is empty | PLIP either did not run for that target, or found nothing. If you switched **Skip PLIP interaction analysis** on when preparing, that is the cause. |
+| A session link stops working | Sessions expire after two hours. Upload the file again; nothing is lost, since the `.bmz` is on your own disk. |
+
+### How it is built and served
 
 **Source and tested-CLI isolation.** The web app lives in `web/`. It was developed on a
 separate `web` branch/worktree so that web-app work could never disturb the tested
