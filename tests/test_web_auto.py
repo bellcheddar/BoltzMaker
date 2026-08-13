@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import io
 import json
+import re
 import shutil
 import subprocess
 import sys
@@ -376,6 +377,44 @@ def test_nav_shows_only_the_current_mode(client):
     stepwise = _nav(client.get("/generate").data.decode())
     assert 'href="/preflight"' in stepwise
     assert 'href="/auto/prepare"' not in stepwise
+
+
+def test_no_template_references_a_static_asset_without_cache_busting():
+    """nginx serves /static/ as `public, max-age=31536000, immutable`, which is a
+    promise that the bytes at a URL never change. Any tag using a bare
+    url_for('static', ...) therefore pins returning visitors to that file for a
+    year, however many times it is edited.
+
+    This is not hypothetical. wizard.js was the one tag the asset() helper never
+    reached, and when it grew the BoltzWizard API every returning visitor kept the
+    old copy -- so form_state.js found no BoltzWizard and quietly did nothing,
+    which presented as a Save page button that did not respond while the rest of
+    the form worked perfectly.
+    """
+    offenders = []
+    for template in (Path(__file__).resolve().parent.parent / "web" / "templates").glob("*.html"):
+        # Strip {# ... #} comments first, including multi-line ones: the comment
+        # explaining this very rule quotes the pattern it forbids, and a scan that
+        # cannot tell prose from an expression fails on its own documentation.
+        source = re.sub(r"\{#.*?#\}", "", template.read_text(), flags=re.S)
+        for number, line in enumerate(source.splitlines(), 1):
+            if re.search(r"\{\{[^}]*url_for\(\s*['\"]static['\"]", line):
+                offenders.append(f"{template.name}:{number}: {line.strip()}")
+    assert not offenders, (
+        "use asset('...') instead of a bare url_for('static', ...):\n" + "\n".join(offenders)
+    )
+
+
+def test_every_script_and_stylesheet_is_versioned(client):
+    """The rendered page, not just the source: catches an asset that slipped
+    through in a way the template scan cannot see."""
+    for path in ("/auto/prepare", "/auto/analysis", "/new", "/"):
+        html = client.get(path).data.decode()
+        unversioned = [
+            url for url in re.findall(r'(?:src|href)="(/static/[^"]+)"', html)
+            if "?v=" not in url
+        ]
+        assert not unversioned, f"{path} serves un-versioned static assets: {unversioned}"
 
 
 def test_vendor_route_is_an_allowlist_not_a_file_server(client):

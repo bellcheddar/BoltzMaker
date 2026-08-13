@@ -103,4 +103,10 @@
   </div>
 </template>
 
-<script src="{{ url_for('static', filename='js/wizard.js') }}"></script>
+{#  asset(), never a bare url_for('static'): nginx serves /static/ as
+    `public, max-age=31536000, immutable`, which is a promise that the bytes at a
+    URL never change. This one tag was missed when the helper was introduced, so
+    when wizard.js grew the BoltzWizard API, every returning visitor kept the old
+    copy for a year -- and form_state.js, which needs that API, silently did
+    nothing. The Save page button looked dead while the rest of the form worked.  #}
+<script src="{{ asset('js/wizard.js') }}"></script>

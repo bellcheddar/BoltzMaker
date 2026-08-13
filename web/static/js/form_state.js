@@ -206,8 +206,18 @@ var BoltzFormState = (function () {
 
   function init() {
     form = document.getElementById("wizard-form");
-    if (!form || typeof BoltzWizard === "undefined") return;
+    if (!form) return;
     statusEl = document.getElementById("state-status");
+    if (typeof BoltzWizard === "undefined" || !BoltzWizard.GROUPS) {
+      // This used to be a silent early return, and it cost a real debugging
+      // session: a stale cached wizard.js meant no BoltzWizard, so save/upload
+      // quietly did nothing while the rest of the form worked normally. A dead
+      // button with no explanation is the worst possible symptom -- say so.
+      status("Page saving is unavailable: a stale copy of the page scripts is cached. "
+             + "Reload with a hard refresh (Cmd-Shift-R) to fix it.", "bad");
+      if (window.console) window.console.warn("BoltzWizard missing -- stale wizard.js?");
+      return;
+    }
 
     if (restore()) status("Restored what you last entered on this browser.", "ok");
 
