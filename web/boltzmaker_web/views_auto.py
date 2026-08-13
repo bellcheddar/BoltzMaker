@@ -33,11 +33,11 @@ import time
 from pathlib import Path
 
 from flask import (
-    Blueprint, Response, current_app, render_template, request, send_file, url_for,
+    Blueprint, Response, abort, current_app, render_template, request, send_file, url_for,
 )
 
-from . import bundle, options, results as bmz
-from .app import new_scratch_dir, session_root
+from . import bundle, options, results as bmz, runs as runs_archive
+from .app import new_scratch_dir, runs_root, session_root
 from .runner import BoltzMakerTimeout, extract_error_message, run_boltzmaker
 from .views_new import _parse_form
 from .wizard import WizardValidationError, assemble_boltz_input_md
@@ -169,17 +169,37 @@ def prepare():
     finally:
         shutil.rmtree(scratch, ignore_errors=True)
 
+    # The key exists only when the user asked for privacy, and only inside their
+    # own files. Nothing about a private run is written here, so there is nothing
+    # to consult later and nothing to leak -- which is precisely why the marker
+    # travels in the bundle rather than in a table on this server.
+    run_key = runs_archive.new_private_key()
+    private = bool(cfg.get("keep_private"))
+
     config_json = json.dumps({
         "campaign_name": campaign_name,
         "prepared_by": bundle.SITE_URL,
         "run_settings": cfg,
         "cli_args": options.to_cli_args(cfg),
+        "run_key": run_key,
+        "private": private,
     }, indent=2, sort_keys=True)
 
     try:
-        built = bundle.build(campaign_name, final_md, cfg, target_count, config_json)
+        built = bundle.build(campaign_name, final_md, cfg, target_count, config_json,
+                             run_key=run_key, private=private)
     except bundle.BundleError as exc:
         return _render_prepare(defaults=cfg, error=str(exc), form=request.form)
+
+    if not private:
+        try:
+            archive = runs_archive.Archive(runs_root(current_app))
+            archive.record_bundle(run_key, campaign_name,
+                                  target_count, built.filename, built.content)
+        except OSError:
+            # A full disk must not cost the user their bundle -- they came here for
+            # the download, and the archive is a convenience on top of it.
+            current_app.logger.exception("could not archive the bundle")
 
     return Response(
         built.content,
@@ -247,6 +267,21 @@ def analysis():
         extracted.mkdir()
         bmz.extract(raw, extracted)
         loaded = bmz.load(extracted)
+
+        if loaded.private:
+            # Recognised as private from the file itself. Nothing is archived, and
+            # the upload is removed as soon as it has been read -- the explorer
+            # serves from the extracted copy, which the session sweep removes.
+            raw.unlink(missing_ok=True)
+        else:
+            try:
+                archive = runs_archive.Archive(runs_root(current_app))
+                archive.record_results(
+                    loaded.run_key or token, loaded.campaign_name, raw, len(loaded.targets),
+                )
+            except OSError:
+                current_app.logger.exception("could not archive the results file")
+            raw.unlink(missing_ok=True)
     except bmz.BmzError as exc:
         shutil.rmtree(session, ignore_errors=True)
         return render_template("auto_analysis.html", active="analysis", error=str(exc))
@@ -333,3 +368,77 @@ def summary_csv(token: str):
         return Response("not found", status=404, mimetype="text/plain")
     return send_file(path, mimetype="text/csv", as_attachment=True,
                      download_name="boltz_summary.csv")
+
+
+# ===========================================================================
+#  Runs -- what was kept
+# ===========================================================================
+
+runs_bp = Blueprint("runs", __name__, url_prefix="/runs")
+
+
+@runs_bp.route("/", strict_slashes=False)
+def index():
+    archive = runs_archive.Archive(runs_root(current_app))
+    entries = [run for run in archive.list() if run.has_bundle or run.has_results]
+    return render_template(
+        "runs.html", active="runs", runs=entries,
+        total_bytes=archive.total_bytes(),
+        max_bytes=runs_archive.MAX_TOTAL_BYTES,
+        max_runs=runs_archive.MAX_RUNS,
+    )
+
+
+def _archived_file(key: str, kind: str, download_name: str, mimetype: str):
+    if not _TOKEN_RE.match(key or "") and not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", key or ""):
+        abort(400)
+    archive = runs_archive.Archive(runs_root(current_app))
+    run = archive.get(key)
+    if run is None:
+        abort(404)
+    path = archive.path_for(run, kind)
+    if path is None:
+        abort(404)
+    return send_file(path, mimetype=mimetype, as_attachment=True,
+                     download_name=download_name)
+
+
+@runs_bp.route("/<key>/bundle")
+def bundle_file(key: str):
+    archive = runs_archive.Archive(runs_root(current_app))
+    run = archive.get(key)
+    name = f"boltzmaker_{bundle.slugify(run.campaign)}.command" if run else "bundle.command"
+    return _archived_file(key, "bundle", name, "application/x-sh")
+
+
+@runs_bp.route("/<key>/results")
+def results_file(key: str):
+    archive = runs_archive.Archive(runs_root(current_app))
+    run = archive.get(key)
+    name = f"{bundle.slugify(run.campaign)}.bmz" if run else "results.bmz"
+    return _archived_file(key, "results", name, "application/zip")
+
+
+@runs_bp.route("/<key>/explore")
+def explore(key: str):
+    """Open an archived results file in the explorer without re-uploading it."""
+    archive = runs_archive.Archive(runs_root(current_app))
+    run = archive.get(key)
+    if run is None:
+        abort(404)
+    stored = archive.path_for(run, "results")
+    if stored is None:
+        abort(404)
+
+    root = session_root(current_app)
+    _sweep_sessions(root)
+    token = secrets.token_urlsafe(24)
+    session = root / token
+    (session / "campaign").mkdir(parents=True)
+    try:
+        bmz.extract(stored, session / "campaign")
+        loaded = bmz.load(session / "campaign")
+    except bmz.BmzError as exc:
+        shutil.rmtree(session, ignore_errors=True)
+        return render_template("auto_analysis.html", active="analysis", error=str(exc)), 400
+    return _render_explorer(token, loaded)

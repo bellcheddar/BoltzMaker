@@ -1,0 +1,73 @@
+{% extends "base.html" %}
+{% block content %}
+<h2 class="md-page-title">Runs</h2>
+<p class="md-scope-note">
+  Every campaign prepared here that was <b>not</b> marked <b>Keep private</b>, with the bundle
+  that was downloaded and the results file that came back. Runs marked private never reach this
+  page: nothing about them is written to the server, so there is nothing here to list.
+</p>
+
+{% if not runs %}
+<div class="md-card">
+  <p class="md-runs-empty">
+    Nothing archived yet. Prepare a campaign from
+    <a href="/auto/prepare">Step&nbsp;1</a> with <b>Keep private</b> left unticked and it will
+    appear here.
+  </p>
+</div>
+{% else %}
+<div class="md-card">
+  <div class="md-table-scroll">
+    <table class="md-data-table">
+      <thead>
+        <tr>
+          <th>Campaign</th><th>Prepared</th><th class="num">Targets</th>
+          <th>Bundle</th><th>Results</th><th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for run in runs %}
+        <tr>
+          <td>
+            {{ run.campaign }}<br>
+            <span class="md-run-key">{{ run.key[:12] }}</span>
+          </td>
+          <td>{{ run.created[:10] }}<br><span class="md-run-key">{{ run.created[11:19] }}</span></td>
+          <td class="num">{{ run.targets or '&mdash;' | safe }}</td>
+          <td>
+            {% if run.has_bundle %}
+              <a href="{{ url_for('runs.bundle_file', key=run.key) }}">download</a>
+              <span class="md-run-key">{{ (run.bundle_bytes / 1024 / 1024) | round(1) }} MB</span>
+            {% else %}&mdash;{% endif %}
+          </td>
+          <td>
+            {% if run.has_results %}
+              <a href="{{ url_for('runs.results_file', key=run.key) }}">download</a>
+              <span class="md-run-key">{{ (run.results_bytes / 1024 / 1024) | round(1) }} MB</span>
+            {% else %}
+              <span class="md-run-key">not uploaded yet</span>
+            {% endif %}
+          </td>
+          <td class="md-run-links">
+            {% if run.has_results %}
+              <a href="{{ url_for('runs.explore', key=run.key) }}">explore &rarr;</a>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <div class="md-capacity">
+    {{ runs | length }} of at most {{ max_runs }} runs kept &middot;
+    {{ (total_bytes / 1024 / 1024) | round(0) | int }} MB of
+    {{ (max_bytes / 1024 / 1024 / 1024) | round(0) | int }} GB used.
+    The archive is capped: when it fills, the oldest runs are removed to make room.
+    <div class="md-capacity-bar">
+      <div class="md-capacity-fill" style="width: {{ [(total_bytes / max_bytes * 100), 100] | min | round(1) }}%"></div>
+    </div>
+  </div>
+</div>
+{% endif %}
+{% endblock %}

@@ -154,6 +154,18 @@ RUN_OPTIONS: tuple[Option, ...] = (
              "secondary-structure comparison from the results.",
         group="analysis",
     ),
+    # flag="" means this never reaches BoltzMaker.py. It is a property of how this
+    # site handles your files, not of the campaign, and the generated run script
+    # must not grow an argument the CLI would reject.
+    Option(
+        name="keep_private", flag="", kind="bool", default=False,
+        label="Keep private",
+        hint="Nothing about this run is kept on the server: the bundle is not archived, and the "
+             "results file you upload later is recognised as private and not archived either. "
+             "Leave it off and the run is listed under Runs, where you can download the bundle "
+             "and results again later.",
+        group="analysis",
+    ),
 )
 
 OPTIONS_BY_NAME = {o.name: o for o in RUN_OPTIONS}
@@ -220,6 +232,8 @@ def to_cli_args(cfg: dict[str, Any]) -> list[str]:
     """
     args: list[str] = []
     for opt in RUN_OPTIONS:
+        if not opt.flag:      # web-only settings never reach the CLI
+            continue
         value = cfg.get(opt.name, opt.default)
         if value is None:
             continue
@@ -243,6 +257,8 @@ def to_cli_lines(cfg: dict[str, Any]) -> list[str]:
     """
     lines: list[str] = []
     for opt in RUN_OPTIONS:
+        if not opt.flag:      # web-only settings never reach the CLI
+            continue
         value = cfg.get(opt.name, opt.default)
         if value is None:
             continue

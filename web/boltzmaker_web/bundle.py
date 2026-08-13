@@ -125,7 +125,8 @@ def _environment() -> Environment:
     )
 
 
-def build_context(campaign_name: str, cfg: dict[str, Any], target_count: int) -> dict[str, Any]:
+def build_context(campaign_name: str, cfg: dict[str, Any], target_count: int,
+                  run_key: str = "", private: bool = False) -> dict[str, Any]:
     slug = slugify(campaign_name)
     return {
         "campaign_name": campaign_name,
@@ -138,6 +139,14 @@ def build_context(campaign_name: str, cfg: dict[str, Any], target_count: int) ->
         "results_filename": f"{slug}.bmz",
         "bundle_filename": f"boltzmaker_{slug}.command",
         "bmz_version": BMZ_VERSION,
+        # Two separate things, deliberately. `run_key` identifies the run and is
+        # always present: it is what lets the results file uploaded weeks later be
+        # matched to the bundle it came from, so the Runs table shows one row
+        # rather than two unrelated ones. `private` is the instruction, carried in
+        # the file itself so the site needs no record of its own to honour it --
+        # which is the point, since a private run must leave no record.
+        "run_key": run_key,
+        "private": bool(private),
     }
 
 
@@ -223,9 +232,9 @@ __BOLTZMAKER_PAYLOAD__
 
 
 def build(campaign_name: str, md_text: str, cfg: dict[str, Any], target_count: int,
-          config_json: str) -> Bundle:
+          config_json: str, run_key: str = "", private: bool = False) -> Bundle:
     """Render every runtime template and assemble the self-extracting bundle."""
-    context = build_context(campaign_name, cfg, target_count)
+    context = build_context(campaign_name, cfg, target_count, run_key, private)
     env = _environment()
 
     files: dict[str, bytes] = {
@@ -298,6 +307,8 @@ def build(campaign_name: str, md_text: str, cfg: dict[str, Any], target_count: i
             "target_count": target_count,
             "cli_args": context["cli_args"],
             "results_filename": context["results_filename"],
+            "run_key": run_key,
+            "private": bool(private),
             "members": sorted(files),
         },
     )

@@ -8,6 +8,10 @@ __pycache__/
 # swept on a TTL. Same reasoning as scratch/ above: runtime state, never source.
 sessions/
 
+# The Runs archive: bundles and results the user chose to keep. Runtime state,
+# capped in runs.py, never source.
+runs/
+
 # Locally-built bundles and results files.
 *.command
 *.bmz

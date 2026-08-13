@@ -34,7 +34,7 @@
     {% for opt in opts %}
     <div class="md-field">
       {% if opt.kind == 'bool' %}
-        <label>
+        <label{% if opt.name == 'keep_private' %} class="md-privacy-label"{% endif %}>
           <input type="checkbox" name="{{ opt.name }}" value="1"
                  {% if (form[opt.name] if form else defaults[opt.name]) %}checked{% endif %}>
           {{ opt.label }}

@@ -825,6 +825,19 @@ written literally into the generated script so you can read exactly what will ru
 | Skip PLIP interaction analysis | `--skip-interactions` | off | Leave off. PLIP is what produces the per-target interaction fingerprints the Analysis step shows; skipping it saves minutes but empties that panel. |
 | Skip apo-vs-holo compare-sse | `--skip-sse` | off | Only does anything for families with an 'Apo structure:' set. Skipping it drops the secondary-structure comparison from the results. |
 
+One of those settings is **Keep private**, which is about this site rather than the campaign:
+
+| Keep private | What happens |
+|---|---|
+| **off** (default) | The bundle is archived here, and so is the results file when you upload it. Both appear under **Runs**, where you can download either again or re-open the analysis without re-uploading. |
+| **on** | Nothing about the run is written to the server. The bundle is streamed to you and not kept; the results file you upload later carries a flag saying so, is read and then deleted, and never appears under Runs. |
+
+The flag travels **in your own files** -- the bundle records it, and the packer copies it into
+the results manifest -- so the site honours a private results file without consulting any
+record of its own. That is the point: a private run leaves nothing behind that could later be
+listed. Every bundle also carries a `run_key`, private or not, which is what lets a results
+file uploaded weeks later join the bundle it came from as one row rather than two.
+
 Submitting validates the spec (`format`, then `generate`, so a broken campaign fails here
 rather than an hour into a run on your machine) and downloads
 `boltzmaker_<campaign>.command`, typically around 200KB. It contains:
@@ -917,6 +930,18 @@ download, and none of them depends on the others, so you can use just the one yo
 Use Stepwise when you already have your own setup and want one piece of it; use Fully
 Automated when you want the whole pipeline handled.
 
+### Runs
+
+Everything not marked private, in one table: campaign, when it was prepared, target count,
+the bundle, and the results file once uploaded. Each row offers the bundle and the `.bmz`
+for download, and **explore**, which re-opens the analysis from the archived results without
+uploading anything again.
+
+The archive is **capped** -- 3GB and 200 runs -- and prunes oldest-first when it fills, with
+each removal recorded so a missing run is explainable rather than a mystery. The host this
+runs on has ~16GB free and also serves three other apps, so an uncapped archive would be a
+slow-motion disk-full outage.
+
 ### Limits, and what to do when something goes wrong
 
 | Situation | What is happening |
@@ -926,6 +951,8 @@ Automated when you want the whole pipeline handled.
 | "No manifest.json in the upload" | A campaign folder was uploaded instead of the `.bmz`. Either upload the `.bmz` the bundle wrote, or use Stepwise Mode's **Analyze**, which is the tool that takes a campaign folder. |
 | Some targets have no pose viewer | Those structures were dropped to stay under the size limit, or the target failed. `manifest.json` inside the `.bmz` records which, and why. They are still in `boltz_cif/` on your own machine. |
 | The 3D viewer says WebGL is unavailable | The browser has WebGL disabled or unsupported. Everything else on the page is unaffected. |
+| Preflight fails on `sse_comparison` or `result_packer` | The bundle is incomplete -- re-download it. Both are checked before any GPU time is spent precisely because `analyze` imports them only at the end, so a missing file used to surface after the prediction had already finished. |
+| Preflight warns on `vendor_assets` | Plotly or 3Dmol is missing from `vendor/`, so the dashboard will reach for a CDN and will not render offline. The run itself is unaffected. |
 | Preflight warns `boltz_cli` did not answer `--help` in time | A cold first import, not a broken install: `boltz --help` loads the whole torch stack, and a freshly solved environment byte-compiles it too. The bundle warms it before the campaign, and it is a warning that does not stop the run. |
 | The interactions panel is empty | PLIP either did not run for that target, or found nothing. If you switched **Skip PLIP interaction analysis** on when preparing, that is the cause. |
 | A session link stops working | Sessions expire after two hours. Upload the file again; nothing is lost, since the `.bmz` is on your own disk. |

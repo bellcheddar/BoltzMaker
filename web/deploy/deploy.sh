@@ -37,7 +37,7 @@ SSH_OPTS=()
 MAX_PAYLOAD_MB="${MAX_PAYLOAD_MB:-200}"
 echo "==> Checking what would be transferred"
 PAYLOAD_BYTES=$(rsync -az --delete --dry-run --stats ${SSH_OPTS[@]+"${SSH_OPTS[@]}"} \
-  --exclude '.venv/' --exclude 'web/.venv/' --exclude 'web/scratch/' --exclude 'web/sessions/' \
+  --exclude '.venv/' --exclude 'web/.venv/' --exclude 'web/scratch/' --exclude 'web/sessions/' --exclude 'web/runs/' \
   --exclude '__pycache__/' --exclude '*.pyc' --exclude '.git/' --exclude '.git' --exclude 'web/.env' \
   --exclude 'examples/*/boltz_output/' --exclude '.sse_cache/' --exclude '.plip_env/' \
   --exclude 'dist/' --exclude '.DS_Store' \
@@ -58,7 +58,7 @@ echo "    ${PAYLOAD_MB}MB to consider (limit ${MAX_PAYLOAD_MB}MB)"
 
 echo "==> Syncing the whole repo to ${DROPLET_SSH}:${DROPLET_PATH}"
 rsync -az --delete ${SSH_OPTS[@]+"${SSH_OPTS[@]}"} \
-  --exclude '.venv/' --exclude 'web/.venv/' --exclude 'web/scratch/' --exclude 'web/sessions/' \
+  --exclude '.venv/' --exclude 'web/.venv/' --exclude 'web/scratch/' --exclude 'web/sessions/' --exclude 'web/runs/' \
   --exclude '__pycache__/' --exclude '*.pyc' --exclude '.git/' --exclude '.git' --exclude 'web/.env' \
   --exclude 'examples/*/boltz_output/' --exclude '.sse_cache/' --exclude '.plip_env/' \
   --exclude 'dist/' --exclude '.DS_Store' \
@@ -85,6 +85,7 @@ sudo find "${DROPLET_PATH}" \
   -path "${DROPLET_PATH}/web/.venv" -prune -o \
   -path "${DROPLET_PATH}/web/scratch" -prune -o \
   -path "${DROPLET_PATH}/web/sessions" -prune -o \
+  -path "${DROPLET_PATH}/web/runs" -prune -o \
   -exec chown -h boltzmaker:boltzmaker {} +
 # AFTER the chown, never before. These are created as the service user, which can
 # only write into web/ once the chown above has run -- doing it first fails with a
@@ -92,7 +93,7 @@ sudo find "${DROPLET_PATH}" \
 # that abort takes the chown and the service restart down with it. The symptom is
 # the nastiest kind: rsync has already succeeded, so the deploy looks like it worked
 # while the service quietly keeps serving the previous build.
-sudo -u boltzmaker mkdir -p "${DROPLET_PATH}/web/scratch" "${DROPLET_PATH}/web/sessions"
+sudo -u boltzmaker mkdir -p "${DROPLET_PATH}/web/scratch" "${DROPLET_PATH}/web/sessions" "${DROPLET_PATH}/web/runs"
 sudo systemctl restart boltzmaker-web.service
 sudo systemctl --no-pager --lines=2 status boltzmaker-web.service || true
 REMOTE

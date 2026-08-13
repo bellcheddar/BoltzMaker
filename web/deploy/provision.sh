@@ -45,7 +45,7 @@ apt-get install -y -qq python3-venv python3-pip python3-dev build-essential \
 
 echo "==> Creating service user '${APP_USER}'"
 id -u "$APP_USER" &>/dev/null || useradd --system --home "$APP_DIR" --shell /usr/sbin/nologin "$APP_USER"
-mkdir -p "$WEB_DIR/scratch" "$WEB_DIR/sessions"
+mkdir -p "$WEB_DIR/scratch" "$WEB_DIR/sessions" "$WEB_DIR/runs"
 chown -R "$APP_USER:$APP_USER" "$APP_DIR"
 
 echo "==> Building BoltzMaker's own trimmed venv (repo root .venv/ -- NOT via"

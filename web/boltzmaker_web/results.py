@@ -199,6 +199,22 @@ class Results:
         return max(0, int(expected) - len(self.targets))
 
     @property
+    def private(self) -> bool:
+        """Whether this results file asked not to be kept.
+
+        A file with no flag at all is treated as NOT private: privacy is opt-in,
+        and results written before the option existed behave as they always did.
+        """
+        return bool(self.manifest.get("private"))
+
+    @property
+    def run_key(self) -> str:
+        """Ties this file to the bundle that produced it, so an upload weeks later
+        lands on the same Runs row rather than a second, unrelated one."""
+        key = self.manifest.get("run_key")
+        return str(key) if isinstance(key, (str, int)) else ""
+
+    @property
     def has_affinity(self) -> bool:
         return any(t.pic50 is not None for t in self.targets)
 

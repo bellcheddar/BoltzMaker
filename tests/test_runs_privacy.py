@@ -1,0 +1,199 @@
+"""Keep private, and the Runs archive.
+
+The privacy decision travels in the user's own files -- the bundle carries a
+`private` flag, pack_results copies it into the results manifest, and the site
+honours it without consulting any record of its own. That is the property worth
+testing: a private run must leave nothing behind, so there is nothing on the
+server that could later be listed, leaked or subpoenaed.
+"""
+
+from __future__ import annotations
+
+import io
+import json
+import pathlib
+import subprocess
+import sys
+import zipfile
+
+import pytest
+from werkzeug.datastructures import MultiDict
+
+from boltzmaker_web import bundle, options, runs as runs_archive
+from boltzmaker_web.app import create_app
+
+SEQUENCE = ("MNIFEMLRIDEGLRLKIYKDTEGYYTIGIGHLLTKSPSLNAAKSELDKAIGRNTNGVITKDEAEKLFNQ"
+            "DVDAAVRGILRNAKLKPVYDSLDAVRRAALINMVFQMGETGVAGFTNSLRMLQQKRWDEAAVNLAKSRW"
+            "YNQTPNRAKRVITTFRTGTWDAYKNL")
+
+
+@pytest.fixture
+def app(tmp_path, monkeypatch):
+    monkeypatch.setenv("BOLTZMAKER_RUNS_ROOT", str(tmp_path / "runs"))
+    monkeypatch.setenv("BOLTZMAKER_SESSION_ROOT", str(tmp_path / "sessions"))
+    monkeypatch.setenv("BOLTZMAKER_SCRATCH_ROOT", str(tmp_path / "scratch"))
+    application = create_app()
+    application.config.update(TESTING=True)
+    return application
+
+
+@pytest.fixture
+def client(app):
+    return app.test_client()
+
+
+@pytest.fixture
+def archive(app):
+    return runs_archive.Archive(pathlib.Path(app.config["RUNS_ROOT"]))
+
+
+def _prepare(client, name: str, private: bool):
+    form = MultiDict([
+        ("campaign_name", name),
+        ("protein_name[]", "T4L"), ("protein_sequence[]", SEQUENCE), ("protein_partners[]", ""),
+        ("ligand_name[]", "BNZ"), ("ligand_kind[]", "smiles"), ("ligand_value[]", "c1ccccc1"),
+    ])
+    if private:
+        form.add("keep_private", "1")
+    response = client.post("/auto/prepare", data=form)
+    assert response.status_code == 200, response.data[:300]
+    return response
+
+
+def _pack(response, tmp_path: pathlib.Path) -> pathlib.Path:
+    """Run the bundle's real packer over a minimal finished campaign."""
+    work = tmp_path / f"campaign{id(response)}"
+    work.mkdir()
+    members = bundle.unpack(response.data)
+    for name in ("pack_results.py", "boltz_input.md", "config.json"):
+        (work / name).write_bytes(members[name])
+    (work / "boltz_summary.csv").write_text(
+        "target_id,cif_file,confidence_score\nT4L_BNZ,T4L_BNZ_model_0.cif,0.9\n")
+    (work / "boltz_cif").mkdir()
+    (work / "boltz_cif" / "T4L_BNZ_model_0.cif").write_text("data_x\n_atom_site.group_PDB\nATOM\n")
+    proc = subprocess.run([sys.executable, "pack_results.py"], cwd=work,
+                          capture_output=True, text=True)
+    assert proc.returncode == 0, f"{proc.stdout}\n{proc.stderr}"
+    packed = list(work.glob("*.bmz"))
+    assert packed, proc.stdout
+    return packed[0]
+
+
+# ---- the flag travels in the files ---------------------------------------
+
+def test_every_bundle_carries_a_run_key_and_a_private_flag(client):
+    for private in (False, True):
+        response = _prepare(client, "Campaign", private)
+        config = json.loads(bundle.unpack(response.data)["config.json"])
+        assert config["run_key"], "a run key is always needed to link results to a bundle"
+        assert config["private"] is private
+
+
+def test_the_packer_writes_both_into_the_results_manifest(client, tmp_path):
+    """The generated packer is Python, not JSON. Rendering the flag with Jinja's
+    tojson produced the literal `false`, which is not a Python name -- every
+    bundle's packer died with NameError before this was caught."""
+    for private in (False, True):
+        packed = _pack(_prepare(client, "Campaign", private), tmp_path)
+        manifest = json.loads(zipfile.ZipFile(packed).read("manifest.json"))
+        assert manifest["private"] is private
+        assert manifest["run_key"]
+
+
+def test_keep_private_never_reaches_the_boltzmaker_cli():
+    """It is a property of how this site handles files, not of the campaign. A
+    stray --keep-private would make the generated run script fail at argparse."""
+    config = options.defaults()
+    config["keep_private"] = True
+    assert not any("private" in arg for arg in options.to_cli_args(config))
+    assert not any("private" in line for line in options.to_cli_lines(config))
+
+
+# ---- what is and is not kept ---------------------------------------------
+
+def test_a_private_bundle_is_not_archived(client, archive):
+    _prepare(client, "Public one", private=False)
+    _prepare(client, "Secret one", private=True)
+    kept = [run.campaign for run in archive.list() if run.has_bundle]
+    assert kept == ["Public one"]
+
+
+def test_private_results_are_not_archived(client, archive, tmp_path):
+    packed = _pack(_prepare(client, "Secret one", private=True), tmp_path)
+    response = client.post(
+        "/auto/analysis",
+        data={"results_file": (io.BytesIO(packed.read_bytes()), "r.bmz")},
+        content_type="multipart/form-data")
+    assert response.status_code == 200          # it still explores normally
+    assert not [run for run in archive.list() if run.has_results]
+
+
+def test_a_public_run_merges_onto_one_row(client, archive, tmp_path):
+    """The bundle and the results file that came from it are one run, not two.
+    This is why the key is always present and not only for private runs."""
+    response = _prepare(client, "Public one", private=False)
+    packed = _pack(response, tmp_path)
+    client.post("/auto/analysis",
+                data={"results_file": (io.BytesIO(packed.read_bytes()), "r.bmz")},
+                content_type="multipart/form-data")
+    rows = [run for run in archive.list() if run.has_bundle or run.has_results]
+    assert len(rows) == 1
+    assert rows[0].has_bundle and rows[0].has_results
+
+
+def test_the_runs_page_lists_public_runs_only(client, tmp_path):
+    _prepare(client, "Visible campaign", private=False)
+    _prepare(client, "Hidden campaign", private=True)
+    html = client.get("/runs").data.decode()
+    assert "Visible campaign" in html
+    assert "Hidden campaign" not in html
+
+
+def test_archived_files_can_be_downloaded_and_explored(client, archive, tmp_path):
+    response = _prepare(client, "Public one", private=False)
+    packed = _pack(response, tmp_path)
+    client.post("/auto/analysis",
+                data={"results_file": (io.BytesIO(packed.read_bytes()), "r.bmz")},
+                content_type="multipart/form-data")
+    key = [run for run in archive.list() if run.has_results][0].key
+
+    assert client.get(f"/runs/{key}/bundle").status_code == 200
+    assert client.get(f"/runs/{key}/results").status_code == 200
+    explored = client.get(f"/runs/{key}/explore")
+    assert explored.status_code == 200
+    assert "results-payload" in explored.data.decode()
+
+
+def test_unknown_or_hostile_keys_are_refused(client):
+    for key in ("nosuchkey", "../../etc/passwd", "a" * 200):
+        for kind in ("bundle", "results", "explore"):
+            assert client.get(f"/runs/{key}/{kind}").status_code in (400, 404)
+
+
+# ---- retention ------------------------------------------------------------
+
+def test_the_archive_is_capped_by_count(tmp_path, monkeypatch):
+    """Unbounded growth on a host with ~16GB free is a slow disk-full outage."""
+    monkeypatch.setattr(runs_archive, "MAX_RUNS", 3)
+    archive = runs_archive.Archive(tmp_path / "runs")
+    for index in range(6):
+        archive.record_bundle(f"key{index}", f"Campaign {index}", 1, "b.command", b"x" * 100)
+    kept = [run for run in archive.list() if run.has_bundle]
+    assert len(kept) == 3
+    assert len(list(archive.bundles.glob("*"))) == 3
+
+
+def test_the_archive_is_capped_by_size(tmp_path, monkeypatch):
+    monkeypatch.setattr(runs_archive, "MAX_TOTAL_BYTES", 250)
+    archive = runs_archive.Archive(tmp_path / "runs")
+    for index in range(4):
+        archive.record_bundle(f"key{index}", f"Campaign {index}", 1, "b.command", b"x" * 100)
+    assert archive.total_bytes() <= 250
+
+
+def test_a_torn_registry_line_does_not_break_the_page(tmp_path):
+    archive = runs_archive.Archive(tmp_path / "runs")
+    archive.record_bundle("good", "Fine campaign", 1, "b.command", b"x" * 10)
+    with archive.registry.open("a") as handle:
+        handle.write('{"key": "half-written"')      # a kill -9 mid-write
+    assert [run.campaign for run in archive.list() if run.has_bundle] == ["Fine campaign"]

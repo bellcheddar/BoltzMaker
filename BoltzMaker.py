@@ -571,6 +571,7 @@ _bootstrap_or_relaunch(sys.argv)
 # --------------------------------------------------------------------------
 
 import argparse
+import ast
 import base64
 import html
 import io
@@ -1451,6 +1452,65 @@ def check_boltz_cli() -> CheckResult:
         return CheckResult("boltz_cli", "FAIL", f"error invoking {boltz_path}: {e}")
 
 
+def check_sse_comparison() -> CheckResult:
+    """The compare-sse package must sit beside the script.
+
+    `analyze` imports sse_comparison late, only when it reaches compare-sse, so a
+    missing package is not noticed until the prediction has already finished. A
+    real bundled run spent 45 minutes predicting and then died on
+    "ModuleNotFoundError: No module named 'sse_comparison'". Checking it in
+    preflight costs nothing and moves that failure to before the GPU work.
+    """
+    package = SCRIPT_DIR / "sse_comparison"
+    if not (package / "__init__.py").is_file():
+        return CheckResult(
+            "sse_comparison", "FAIL",
+            f"{package} is missing -- `analyze` imports it after prediction finishes, so "
+            "the run would complete and then fail. Re-download the bundle, or re-clone.",
+        )
+    missing = [name for name in ("cli.py", "report.py", "alignment.py", "metrics.py")
+               if not (package / name).is_file()]
+    if missing:
+        return CheckResult("sse_comparison", "FAIL",
+                           f"sse_comparison is incomplete -- missing {', '.join(missing)}")
+    return CheckResult("sse_comparison", "PASS", "compare-sse package present")
+
+
+def check_vendor_assets() -> CheckResult:
+    """The dashboard embeds these; without them it silently reaches for a CDN."""
+    missing = [path.name for path in (PLOTLY_JS_PATH, THREEDMOL_JS_PATH) if not path.exists()]
+    if missing:
+        return CheckResult(
+            "vendor_assets", "WARN",
+            f"missing {', '.join(missing)} in vendor/ -- the dashboard will fall back to a "
+            "CDN, so it will need the network to render and will not work offline",
+        )
+    return CheckResult("vendor_assets", "PASS", "Plotly and 3Dmol bundled for an offline dashboard")
+
+
+def check_result_packer() -> CheckResult:
+    """Only meaningful inside a bundle: a plain checkout has no packer and wants none.
+
+    A bundle is identified by the runner script it was built with, not by the
+    packer itself -- otherwise a bundle whose packer went missing would look like
+    a plain checkout and the check would pass by disappearing.
+    """
+    packer = SCRIPT_DIR / "pack_results.py"
+    if not (SCRIPT_DIR / "run_campaign.sh").is_file():
+        return CheckResult("result_packer", "PASS", "not a bundle -- no results file to pack")
+    if not packer.is_file():
+        return CheckResult(
+            "result_packer", "FAIL",
+            "pack_results.py is missing from this bundle -- the campaign would run and "
+            "then have no way to write its .bmz. Re-download the bundle.",
+        )
+    try:
+        ast.parse(packer.read_text())
+    except (SyntaxError, OSError) as exc:
+        return CheckResult("result_packer", "FAIL", f"pack_results.py will not parse: {exc}")
+    return CheckResult("result_packer", "PASS", "results packer present and valid")
+
+
 def check_gpu() -> CheckResult:
     try:
         import torch
@@ -1746,6 +1806,9 @@ def run_preflight(manifest: list, output_dir: Path, campaign: Campaign, md_path:
                    memory_warn_tokens: int = 1000, json_output: bool = False) -> bool:
     results = [
         check_boltz_cli(),
+        check_sse_comparison(),
+        check_vendor_assets(),
+        check_result_packer(),
         check_gpu(),
         check_disk_space(output_dir, len(manifest)),
         check_all_materialized([md_path] + [output_dir / f"{t.stem}.yaml" for t in manifest]),

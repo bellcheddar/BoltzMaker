@@ -31,6 +31,7 @@ REPO_ROOT = WEB_ROOT.parent
 VENDORED_ASSETS = ("plotly-2.35.2.min.js", "3Dmol-2.5.5-min.js")
 DEFAULT_SCRATCH_ROOT = WEB_ROOT / "scratch"
 DEFAULT_SESSION_ROOT = WEB_ROOT / "sessions"
+DEFAULT_RUNS_ROOT = WEB_ROOT / "runs"
 
 
 def create_app() -> Flask:
@@ -58,15 +59,23 @@ def create_app() -> Flask:
     sessions_root.mkdir(parents=True, exist_ok=True)
     app.config["SESSION_ROOT"] = sessions_root
 
+    # The Runs archive: bundles and results the user did not mark private. Capped
+    # in runs.py -- see the note there about this host's free space.
+    runs_root = Path(os.environ.get("BOLTZMAKER_RUNS_ROOT", str(DEFAULT_RUNS_ROOT)))
+    runs_root.mkdir(parents=True, exist_ok=True)
+    app.config["RUNS_ROOT"] = runs_root
+
     app.jinja_env.globals["SITE_TITLE"] = banner.SITE_TITLE
 
     from .views_auto import bp as auto_bp
+    from .views_auto import runs_bp
     from .views_new import bp as new_bp
     from .views_generate import bp as generate_bp
     from .views_preflight import bp as preflight_bp
     from .views_analyze import bp as analyze_bp
 
     app.register_blueprint(auto_bp)
+    app.register_blueprint(runs_bp)
     app.register_blueprint(new_bp)
     app.register_blueprint(generate_bp)
     app.register_blueprint(preflight_bp)
@@ -119,7 +128,7 @@ def create_app() -> Flask:
         orientation matters most.
         """
         path = request.path
-        if path.startswith("/auto"):
+        if path.startswith("/auto") or path.startswith("/runs"):
             return {"nav_mode": "auto"}
         if path in ("/stepwise", "/new", "/generate", "/preflight", "/analyze"):
             return {"nav_mode": "stepwise"}
@@ -166,6 +175,10 @@ def create_app() -> Flask:
         ), 413
 
     return app
+
+
+def runs_root(app: Flask) -> Path:
+    return Path(app.config["RUNS_ROOT"])
 
 
 def session_root(app: Flask) -> Path:

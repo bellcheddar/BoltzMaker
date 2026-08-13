@@ -151,6 +151,14 @@ def main() -> int:
         "created_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "prepared_utc": {{ created | tojson }},
         "prepared_by": {{ site_url | tojson }},
+        # Both copied straight from the bundle. run_key ties this file back to the
+        # bundle that produced it; private is the instruction the receiving site
+        # honours without needing any record of its own.
+        "run_key": {{ run_key | tojson }},
+        # `| tojson` would render JSON's `false`, which is not Python -- and this
+        # file is Python. Strings survive tojson unchanged (a JSON string is a valid
+        # Python literal); booleans do not.
+        "private": {{ 'True' if private else 'False' }},
         # No version string exists in BoltzMaker.py to record, so the script is
         # identified by its own content hash instead. It cannot drift from what
         # actually ran, and it is checkable against any given checkout.
