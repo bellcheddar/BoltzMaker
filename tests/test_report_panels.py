@@ -150,12 +150,14 @@ def test_the_campaign_summary_comes_first():
 def test_this_pages_own_panels_are_placed_by_name():
     """Both sequences are one list, so reordering the page is a line moved in
     PANEL_ORDER rather than a template edit."""
-    slots = reports.ordered_slots(_panels("Campaign summary", "pIC50 vs confidence score"))
+    slots = reports.ordered_slots(_panels("Campaign summary", "pIC50 vs confidence score",
+                                          "Summary table"))
     kinds = [(s["kind"], s.get("which") or s["panel"].title) for s in slots]
     assert kinds == [
         ("report", "Campaign summary"),
-        ("own", "targets"),
         ("report", "pIC50 vs confidence score"),
+        ("report", "Summary table"),
+        ("own", "targets"),
         ("own", "detail"),
     ]
 
