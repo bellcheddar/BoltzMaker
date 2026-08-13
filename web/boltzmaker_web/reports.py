@@ -79,10 +79,10 @@ _DROP_TITLE_PATTERNS = (
 # the whole sequence is legible in one list.
 PANEL_ORDER = (
     "Campaign summary",
+    "pIC50 vs confidence score",    # clickable: a point opens the target detail
     "Summary table",
     "@targets",                     # the sortable, filterable target table
-    "pIC50 vs confidence score",    # clickable: a point opens its target below
-    "@detail",                      # predicted pose, detected interactions, metrics
+    "@detail",                      # sits directly under the table it is driven by
     "Ligand preparation",
     "Ligand structures",
     "Ranked predicted pIC50",

@@ -281,3 +281,16 @@ def test_an_image_only_panel_is_marked_as_a_plot():
         "<main><div class='md-card'><h2>Family x ligand selectivity</h2>"
         "<img src='data:image/png;base64,AAA'></div></main>")
     assert panels[0].kind == "plot"
+
+
+def test_the_detail_panel_follows_the_table_that_drives_it():
+    """Clicking a row opens the detail, so the detail belongs directly under the
+    rows rather than a panel away from them."""
+    order = list(reports.PANEL_ORDER)
+    assert order.index("@detail") == order.index("@targets") + 1
+
+
+def test_the_scatter_comes_before_the_tables_it_summarises():
+    order = list(reports.PANEL_ORDER)
+    assert order.index("pIC50 vs confidence score") < order.index("Summary table")
+    assert order.index("Campaign summary") < order.index("pIC50 vs confidence score")

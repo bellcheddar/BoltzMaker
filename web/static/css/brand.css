@@ -234,6 +234,21 @@ img, canvas { max-width: 100%; height: auto; }
 .md-report-panel .plotly-graph-div { width: 100% !important; }
 .md-report-panel > p:last-child { margin-bottom: 0; }
 
+/* The summary table's legend is a row of spans with nothing between them, so
+   "Likely binder (p >= 0.7) Uncertain (0.3-0.7) Likely non-binder" ran together as
+   one sentence. The report styles this in its own <style>, which is stripped. */
+.summary-legend {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px;
+  font-size: 12px; color: var(--md-text-muted); margin-top: 10px;
+}
+.summary-legend .legend-title { font-weight: 600; color: var(--md-text); }
+.summary-legend .legend-item { display: inline-flex; align-items: center; gap: 5px; }
+.summary-legend .legend-item + .legend-item::before {
+  content: "\00b7"; margin-right: 6px; color: var(--md-border);
+}
+.summary-legend svg { vertical-align: middle; }
+.summary-table-footer { font-size: 12px; color: var(--md-text-muted); }
+
 /* ---- ligand structures ---- */
 /* The report styles these classes in its own <style>, which is stripped along
    with every other style and script, so they arrive here with no styling at all:
