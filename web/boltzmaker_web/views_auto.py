@@ -36,7 +36,7 @@ from flask import (
     Blueprint, Response, abort, current_app, render_template, request, send_file, url_for,
 )
 
-from . import apo, bundle, options, results as bmz, runs as runs_archive
+from . import apo, bundle, options, reports as report_panels, results as bmz, runs as runs_archive
 from .app import new_scratch_dir, runs_root, session_root
 from .runner import BoltzMakerTimeout, extract_error_message, run_boltzmaker
 from .views_new import _parse_form
@@ -337,12 +337,63 @@ def analysis_session(token: str):
     return _render_explorer(token, loaded)
 
 
+def _report_panels(session: Path, loaded: bmz.Results) -> tuple:
+    """The generated reports' panels, lifted out to sit on this page.
+
+    Cached beside the extracted campaign: the dashboard is several megabytes and
+    the extraction runs over all of it, which is not work to repeat every time
+    someone reloads the page or comes back to the session link.
+    """
+    cache = session / "panels.json"
+    if cache.is_file():
+        try:
+            cached = json.loads(cache.read_text())
+            return cached["panels"], cached["charts"]
+        except (json.JSONDecodeError, KeyError, OSError):
+            pass          # regenerate rather than fail on a half-written cache
+
+    # The two reports overlap: the dashboard embeds the compare-sse charts that the
+    # compare-sse page also carries, under the SAME element ids. Rendered together
+    # that is two divs sharing an id, which is invalid and leaves the second one
+    # unreachable -- so only one of each pair would ever draw, silently. Panels are
+    # therefore taken once, first report wins, and a later panel is dropped if
+    # everything it would draw is already on the page.
+    panels, charts = [], []
+    seen_charts, seen_titles = set(), set()
+    for report in loaded.reports:
+        path = session / "campaign" / "reports" / report["name"]
+        if not path.is_file():
+            continue
+        extracted, specs = report_panels.extract(path.read_text(encoding="utf-8", errors="replace"))
+        spec_ids = {spec["id"] for spec in specs}
+        for panel in extracted:
+            panel_charts = set(re.findall(r'id="(chart-[^"]+)"', panel.html)) & spec_ids
+            if panel_charts and panel_charts <= seen_charts:
+                continue                      # every chart in it is already drawn
+            if not panel_charts and panel.title in seen_titles:
+                continue                      # a duplicated table or note
+            seen_charts |= panel_charts
+            seen_titles.add(panel.title)
+            panels.append({"title": panel.title, "html": panel.html, "wide": panel.wide})
+        charts.extend(spec for spec in specs if spec["id"] not in
+                      {existing["id"] for existing in charts})
+
+    try:
+        cache.write_text(json.dumps({"panels": panels, "charts": charts}))
+    except OSError:
+        pass
+    return panels, charts
+
+
 def _render_explorer(token: str, loaded: bmz.Results):
+    session = _session_dir(token)
+    panels, charts = _report_panels(session, loaded) if session else ([], [])
     return render_template(
         "auto_explorer.html", active="analysis",
         token=token, results=loaded,
         payload=bmz.to_json(loaded),
         low_confidence=bmz.LOW_CONFIDENCE_THRESHOLD,
+        report_panels=panels, report_charts=json.dumps(charts),
     )
 
 

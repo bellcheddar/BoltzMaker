@@ -101,39 +101,49 @@
   </div>
 </div>
 
-{% if results.reports %}
-{#  BoltzMaker's own reports, framed rather than reimplemented. The explorer above
-    is for triage -- sort, filter, click a target; these are everything else it
-    computed, byte for byte as it wrote them.  #}
-{% for report in results.reports %}
-<div class="md-card">
-  <h2 style="display:flex;align-items:baseline;gap:10px;flex-wrap:wrap">
-    {{ report.title }}
-    <span class="md-hint" style="font-weight:400">{{ (report.bytes / 1024 / 1024) | round(1) }} MB</span>
-  </h2>
-  <p class="md-hint" style="margin-top:0">{{ report.blurb }}</p>
-  <p style="margin:0 0 12px">
-    <a class="md-btn md-btn-secondary"
-       href="{{ url_for('auto.report', token=token, name=report.name) }}" target="_blank"
-       rel="noopener noreferrer">Open full screen</a>
-    <a class="md-btn md-btn-secondary" style="margin-left:6px"
-       href="{{ url_for('auto.report', token=token, name=report.name) }}"
-       download="{{ report.name }}">Download</a>
-  </p>
-  {#  sandbox WITHOUT allow-same-origin: the report's scripts run (Plotly needs
-      them) but the document sits in an opaque origin and cannot touch this one.  #}
-  <iframe src="{{ url_for('auto.report', token=token, name=report.name) }}"
-          sandbox="allow-scripts allow-popups allow-downloads"
-          loading="lazy" title="{{ report.title }}"
-          style="width:100%;height:900px;border:1px solid var(--md-border);border-radius:var(--md-radius);background:#fff"></iframe>
+{#  BoltzMaker's own panels, lifted out of its reports and rendered as siblings of
+    the ones above. Framed in an iframe first, which put a scrolling document
+    inside a card inside the page; flat means every panel can be reordered or
+    dropped on its own. Nothing from the upload executes: the markup is
+    sanitised to a tag allowlist and the charts are replayed from JSON below.  #}
+{% for panel in report_panels %}
+<div class="md-card{% if panel.wide %} md-card-wide{% endif %}">
+  <h2>{{ panel.title }}</h2>
+  <div class="md-report-panel">{{ panel.html | safe }}</div>
 </div>
 {% endfor %}
-{% else %}
+
+{% if not report_panels %}
 <div class="md-card">
   <h2>Full dashboard</h2>
+  {% if results.reports %}
+  {#  Reports are present but nothing could be read out of them -- a layout this
+      version does not recognise. Say that, rather than repeating the message for a
+      file that has no reports at all: the two have different fixes.  #}
+  <p class="md-hint" style="margin:0">This results file carries reports, but none of their
+    panels could be read -- they may have been written by a newer version of BoltzMaker than
+    this site understands. Download them below and open them directly; everything above is
+    unaffected.</p>
+  {% else %}
   <p class="md-hint" style="margin:0">This results file predates the reports being included, or
     the campaign did not write them. Everything above still works; the dashboard is on the
     machine that ran the campaign, as <code>boltz_dashboard.html</code>.</p>
+  {% endif %}
+</div>
+{% endif %}
+
+{% if results.reports %}
+<div class="md-card">
+  <h2>The reports as files</h2>
+  <p class="md-hint" style="margin-top:0">The same panels as BoltzMaker wrote them, if you want
+    the whole page in one file.</p>
+  <p style="margin:0">
+    {% for report in results.reports %}
+    <a class="md-btn md-btn-secondary" style="margin-right:6px"
+       href="{{ url_for('auto.report', token=token, name=report.name) }}"
+       download="{{ report.name }}">{{ report.title }} ({{ (report.bytes / 1024 / 1024) | round(1) }} MB)</a>
+    {% endfor %}
+  </p>
 </div>
 {% endif %}
 
@@ -141,5 +151,13 @@
 <script src="{{ url_for('vendor', filename='plotly-2.35.2.min.js') }}"></script>
 <script src="{{ url_for('vendor', filename='3Dmol-2.5.5-min.js') }}"></script>
 <script src="{{ asset('js/explorer.js') }}"></script>
-<script>BoltzExplorer.init({{ token | tojson }});</script>
+<script id="report-charts" type="application/json">{{ report_charts | safe }}</script>
+<script>
+  BoltzExplorer.init({{ token | tojson }});
+  // The report's charts, replayed from data. The originals arrived as script
+  // blocks in an uploaded file and are never run; these are the same numbers,
+  // JSON-parsed on the server and plotted by this page's own Plotly.
+  BoltzExplorer.plotReportCharts(
+    JSON.parse(document.getElementById("report-charts").textContent));
+</script>
 {% endblock %}

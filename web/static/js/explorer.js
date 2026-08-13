@@ -387,5 +387,29 @@ var BoltzExplorer = (function () {
     if (hash) select(hash, true);
   }
 
-  return { init: init };
+  function plotReportCharts(specs) {
+    if (!window.Plotly || !Array.isArray(specs)) return;
+    specs.forEach(function (spec) {
+      var host = document.getElementById(spec.id);
+      if (!host) return;      // its panel was dropped
+      try {
+        // Responsive is forced on: the reports were laid out for a full-width
+        // page and these panels are narrower.
+        var config = spec.config || {};
+        config.responsive = true;
+        config.displaylogo = false;
+        Plotly.newPlot(host, spec.data, spec.layout || {}, config);
+      } catch (err) {
+        host.innerHTML = '<p class="md-hint">This chart could not be drawn.</p>';
+      }
+    });
+    window.addEventListener("resize", function () {
+      specs.forEach(function (spec) {
+        var host = document.getElementById(spec.id);
+        if (host && host.data) Plotly.Plots.resize(host);
+      });
+    });
+  }
+
+  return { init: init, plotReportCharts: plotReportCharts };
 })();

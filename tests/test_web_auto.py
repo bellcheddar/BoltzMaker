@@ -362,46 +362,73 @@ def _bmz_with_reports(tmp_path, packed_bmz) -> pathlib_Path:
     import shutil
     out = tmp_path / "with_reports.bmz"
     shutil.copyfile(packed_bmz, out)
+    # Shaped like a real report -- <main> holding md-card blocks -- because that is
+    # what the extractor reads. A fixture that is merely "some HTML" would pass a
+    # test that the real thing fails.
     with zipfile.ZipFile(out, "a", zipfile.ZIP_DEFLATED) as zf:
         zf.writestr("reports/boltz_dashboard.html",
-                    "<html><body><h1>Campaign summary</h1></body></html>")
+                    "<html><body><main>"
+                    "<div class='md-card table-card'><h2>Campaign summary</h2>"
+                    "<table><tr><th>Field</th><td>Value</td></tr></table></div>"
+                    "</main></body></html>")
         zf.writestr("reports/boltz_sse_comparison.html",
-                    "<html><body><h1>Per-motif Ca RMSD</h1></body></html>")
+                    "<html><body><main>"
+                    "<div class='md-card'><h2>Per-motif Ca RMSD</h2><p>x</p></div>"
+                    "</main></body></html>")
     return out
 
 
-def test_the_explorer_frames_every_report_the_campaign_wrote(client, tmp_path, packed_bmz):
+def test_the_reports_panels_are_merged_into_the_page(client, tmp_path, packed_bmz):
     """The explorer's own panels cover two things: the target table and the
-    confidence-against-affinity plot. The dashboard has fifteen. Rather than
-    reimplement thirteen charts in the browser and let them drift from the
-    analysis code, the reports BoltzMaker generated travel in the .bmz and are
-    framed here."""
+    confidence-against-affinity plot. The dashboard has fifteen. They are lifted
+    out and rendered as siblings rather than reimplemented, so they cannot drift
+    from the analysis code, and rather than framed, so the page does not become a
+    scrolling document inside a card."""
     source = _bmz_with_reports(tmp_path, packed_bmz)
     response = client.post(
         "/auto/analysis",
         data={"results_file": (io.BytesIO(source.read_bytes()), "r.bmz")},
         content_type="multipart/form-data")
     html = response.data.decode()
-    assert "Full dashboard" in html
-    assert "Secondary structure (apo vs holo)" in html
+    assert "Campaign summary" in html, "the report's own panels should be on the page"
+    assert "<iframe" not in html, "a framed report is a scroll panel inside a panel"
 
 
-def test_reports_are_served_sandboxed(client, tmp_path, packed_bmz):
-    """This is HTML that arrived in an upload, served from our own origin. A
-    crafted .bmz could otherwise place arbitrary script on the site. The frame
-    withholds allow-same-origin and the response says so too, so the report's
-    scripts run -- Plotly needs them -- in an opaque origin."""
-    source = _bmz_with_reports(tmp_path, packed_bmz)
+def test_nothing_from_the_upload_executes_on_the_page(client, tmp_path, packed_bmz):
+    """The merged panels come from a file a user uploaded and are rendered by this
+    site, on its own origin. The sanitiser is what stands between a crafted .bmz
+    and script running on boltzmaker.mdeller.com."""
+    import shutil
+    source = tmp_path / "hostile.bmz"
+    shutil.copyfile(packed_bmz, source)
+    with zipfile.ZipFile(source, "a", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("reports/boltz_dashboard.html",
+                    "<main><div class='md-card'><h2>Campaign summary</h2>"
+                    "<script>window.STOLEN=1</script>"
+                    "<img src=x onerror='window.STOLEN=2'>"
+                    "<a href='javascript:window.STOLEN=3'>x</a>"
+                    "</div></main>")
+
     response = client.post(
         "/auto/analysis",
         data={"results_file": (io.BytesIO(source.read_bytes()), "r.bmz")},
         content_type="multipart/form-data")
     html = response.data.decode()
-    token = html.split('BoltzExplorer.init("')[1].split('"')[0]
+    assert "Campaign summary" in html          # the panel is still shown
+    assert "window.STOLEN" not in html
+    assert "onerror" not in html
+    assert "javascript:" not in html
 
-    frame = re.search(r'<iframe[^>]*src="[^"]*report/boltz_dashboard\.html"[^>]*>', html).group(0)
-    assert "allow-same-origin" not in frame, "the report must not share this origin"
-    assert "allow-scripts" in frame
+
+def test_the_report_files_are_still_downloadable_and_sandboxed(client, tmp_path, packed_bmz):
+    """The panels are merged, but the whole file is still offered for download --
+    and that route serves upload-derived HTML, so it keeps its sandbox headers."""
+    source = _bmz_with_reports(tmp_path, packed_bmz)
+    response = client.post(
+        "/auto/analysis",
+        data={"results_file": (io.BytesIO(source.read_bytes()), "r.bmz")},
+        content_type="multipart/form-data")
+    token = response.data.decode().split('BoltzExplorer.init("')[1].split('"')[0]
 
     served = client.get(f"/auto/analysis/{token}/report/boltz_dashboard.html")
     assert served.status_code == 200

@@ -168,6 +168,19 @@ img, canvas { max-width: 100%; height: auto; }
 
 .md-privacy-label { font-weight: 700; }
 
+/* ---- panels lifted from the generated reports ---- */
+.md-card-wide { grid-column: 1 / -1; }
+/* The reports are laid out for a full-width page; their tables are wider than
+   this column, so each scrolls in its own box rather than widening the page. */
+.md-report-panel { overflow-x: auto; }
+.md-report-panel table { border-collapse: collapse; font-size: 12.5px; width: 100%; }
+.md-report-panel th, .md-report-panel td {
+  border: 1px solid var(--md-border); padding: 5px 8px; text-align: left; vertical-align: top;
+}
+.md-report-panel th { background: var(--md-bg-alt); font-weight: 600; }
+.md-report-panel img { max-width: 100%; height: auto; display: block; margin: 0 auto; }
+.md-report-panel .plotly-graph-div { width: 100% !important; }
+
 /* ---- runs table ---- */
 .md-runs-empty { text-align: center; padding: 30px 20px; color: var(--md-text-muted); font-size: 14px; }
 .md-run-links a { margin-right: 10px; white-space: nowrap; }
