@@ -46,3 +46,11 @@ BoltzMaker.preview.html
 findings.html
 findings.preview.html
 elementor-widget-markdown.css
+
+# Unpacked campaign bundles. Running a bundle inside the repo (easy to do while
+# testing the web app) leaves a folder with its own multi-GB .pixi environment.
+# One of those was 2.3GB and got as far as being rsync'd to the droplet before
+# anyone noticed, so it is excluded here as well as in web/deploy/deploy.sh.
+*.command
+*.bmz
+.pixi/

@@ -28,12 +28,43 @@ fi
 SSH_OPTS=()
 [[ -n "$SSH_KEY" ]] && SSH_OPTS=(-e "ssh -i ${SSH_KEY/#\~/$HOME}")
 
+# Refuse to push an unexpectedly large payload. This rsyncs the whole repo by
+# design (see the header), which means anything left lying in the working tree
+# goes too. A bundle unpacked inside the repo while testing left a 2.3GB campaign
+# folder here, and the deploy cheerfully started copying it to a droplet with 16GB
+# free -- no error, just an rsync that ran for six minutes. The named excludes
+# above cover the known shapes; this catches the ones nobody has thought of yet.
+MAX_PAYLOAD_MB="${MAX_PAYLOAD_MB:-200}"
+echo "==> Checking what would be transferred"
+PAYLOAD_BYTES=$(rsync -az --delete --dry-run --stats ${SSH_OPTS[@]+"${SSH_OPTS[@]}"} \
+  --exclude '.venv/' --exclude 'web/.venv/' --exclude 'web/scratch/' --exclude 'web/sessions/' \
+  --exclude '__pycache__/' --exclude '*.pyc' --exclude '.git/' --exclude '.git' --exclude 'web/.env' \
+  --exclude 'examples/*/boltz_output/' --exclude '.sse_cache/' --exclude '.plip_env/' \
+  --exclude 'dist/' --exclude '.DS_Store' \
+  --exclude '.pixi/' --exclude '*.command' --exclude '*.bmz' \
+  --exclude 'boltz_output/' --exclude 'boltz_yamls/' --exclude 'boltz_cif/' \
+  --exclude 'boltz_plip/' --exclude 'boltz_dashboard*' --exclude 'boltz_sse_*' \
+  ./ "${DROPLET_SSH}:${DROPLET_PATH}/" 2>/dev/null \
+  | awk '/Total file size/ {gsub(/,/,"",$4); print $4; exit}')
+PAYLOAD_MB=$(( ${PAYLOAD_BYTES:-0} / 1024 / 1024 ))
+if [[ "$PAYLOAD_MB" -gt "$MAX_PAYLOAD_MB" ]]; then
+  echo "Refusing to deploy: the working tree is ${PAYLOAD_MB}MB, over the ${MAX_PAYLOAD_MB}MB limit."
+  echo "Something large is in the repo that probably should not be. The biggest paths:"
+  du -sh ./* ./.[a-z]* 2>/dev/null | sort -rh | head -8 | sed 's/^/    /'
+  echo "Remove it, add an exclude, or re-run with MAX_PAYLOAD_MB=<n> if it is genuinely wanted."
+  exit 1
+fi
+echo "    ${PAYLOAD_MB}MB to consider (limit ${MAX_PAYLOAD_MB}MB)"
+
 echo "==> Syncing the whole repo to ${DROPLET_SSH}:${DROPLET_PATH}"
 rsync -az --delete ${SSH_OPTS[@]+"${SSH_OPTS[@]}"} \
   --exclude '.venv/' --exclude 'web/.venv/' --exclude 'web/scratch/' --exclude 'web/sessions/' \
   --exclude '__pycache__/' --exclude '*.pyc' --exclude '.git/' --exclude '.git' --exclude 'web/.env' \
   --exclude 'examples/*/boltz_output/' --exclude '.sse_cache/' --exclude '.plip_env/' \
   --exclude 'dist/' --exclude '.DS_Store' \
+  --exclude '.pixi/' --exclude '*.command' --exclude '*.bmz' \
+  --exclude 'boltz_output/' --exclude 'boltz_yamls/' --exclude 'boltz_cif/' \
+  --exclude 'boltz_plip/' --exclude 'boltz_dashboard*' --exclude 'boltz_sse_*' \
   ./ "${DROPLET_SSH}:${DROPLET_PATH}/"
 
 echo "==> Installing web dependencies + restarting service on the droplet"
@@ -54,7 +85,7 @@ sudo find "${DROPLET_PATH}" \
   -path "${DROPLET_PATH}/web/.venv" -prune -o \
   -path "${DROPLET_PATH}/web/scratch" -prune -o \
   -path "${DROPLET_PATH}/web/sessions" -prune -o \
-  -exec chown boltzmaker:boltzmaker {} +
+  -exec chown -h boltzmaker:boltzmaker {} +
 # AFTER the chown, never before. These are created as the service user, which can
 # only write into web/ once the chown above has run -- doing it first fails with a
 # bare "Permission denied", and because this whole remote block runs under `set -e`
