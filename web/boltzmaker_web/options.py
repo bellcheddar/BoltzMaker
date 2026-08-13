@@ -150,8 +150,10 @@ RUN_OPTIONS: tuple[Option, ...] = (
     Option(
         name="skip_sse", flag="--skip-sse", kind="bool", default=False,
         label="Skip apo-vs-holo compare-sse",
-        hint="Only does anything for families with an 'Apo structure:' set. Skipping it drops the "
-             "secondary-structure comparison from the results.",
+        hint="Left off, every protein gets an apo reference so the comparison can run: an "
+             "experimental structure if you gave a PDB id above, otherwise an extra ligand-free "
+             "prediction of that protein. Those extra targets cost GPU time -- one more target "
+             "per protein. Tick this to skip the comparison and predict nothing extra.",
         group="analysis",
     ),
     # flag="" means this never reaches BoltzMaker.py. It is a property of how this

@@ -36,7 +36,7 @@ from flask import (
     Blueprint, Response, abort, current_app, render_template, request, send_file, url_for,
 )
 
-from . import bundle, options, results as bmz, runs as runs_archive
+from . import apo, bundle, options, results as bmz, runs as runs_archive
 from .app import new_scratch_dir, runs_root, session_root
 from .runner import BoltzMakerTimeout, extract_error_message, run_boltzmaker
 from .views_new import _parse_form
@@ -132,9 +132,37 @@ def prepare():
     except options.OptionError as exc:
         return _render_prepare(defaults=options.defaults(), error=str(exc), form=request.form)
 
+    # compare-sse only runs for families naming an apo structure, so unticking it is
+    # what turns the whole apo arrangement off -- no companion predictions, no
+    # references, nothing extra to compute.
+    compare_sse = not cfg.get("skip_sse")
+
     try:
         predict_affinity, proteins, partners, ligands = _parse_form()
-        md_text = assemble_boltz_input_md(predict_affinity, proteins, partners, ligands)
+    except WizardValidationError as exc:
+        return _render_prepare(defaults=cfg, error=str(exc), form=request.form)
+
+    # Fetch any named experimental apo structures now, while the person who typed
+    # the id is still here to correct it. Shipping them in the bundle also means the
+    # run never stops to ask the network for something checkable in advance.
+    extra_files: dict[str, bytes] = {}
+    apo_paths: dict[str, str] = {}
+    if compare_sse:
+        for protein in proteins:
+            if not protein.apo_pdb:
+                continue
+            try:
+                data = apo.fetch(protein.apo_pdb)
+            except apo.ApoFetchError as exc:
+                return _render_prepare(defaults=cfg, error=str(exc), form=request.form)
+            path = apo.reference_path(protein.apo_pdb)
+            extra_files[path] = data
+            apo_paths[protein.name] = path
+
+    try:
+        md_text = assemble_boltz_input_md(predict_affinity, proteins, partners, ligands,
+                                          compare_sse=compare_sse,
+                                          apo_reference_paths=apo_paths)
     except WizardValidationError as exc:
         return _render_prepare(defaults=cfg, error=str(exc), form=request.form)
 
@@ -187,7 +215,7 @@ def prepare():
 
     try:
         built = bundle.build(campaign_name, final_md, cfg, target_count, config_json,
-                             run_key=run_key, private=private)
+                             run_key=run_key, private=private, extra_files=extra_files)
     except bundle.BundleError as exc:
         return _render_prepare(defaults=cfg, error=str(exc), form=request.form)
 

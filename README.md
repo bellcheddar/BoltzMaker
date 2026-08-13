@@ -825,6 +825,26 @@ written literally into the generated script so you can read exactly what will ru
 | Skip PLIP interaction analysis | `--skip-interactions` | off | Leave off. PLIP is what produces the per-target interaction fingerprints the Analysis step shows; skipping it saves minutes but empties that panel. |
 | Skip apo-vs-holo compare-sse | `--skip-sse` | off | Only does anything for families with an 'Apo structure:' set. Skipping it drops the secondary-structure comparison from the results. |
 
+**The apo-vs-holo comparison now works out of the box.** compare-sse compares a holo
+prediction against an apo structure, and only runs for families that name one. Nothing on
+this form used to emit an `Apo structure:` line at all, so a campaign built here could never
+produce a secondary-structure comparison, and the skip option had nothing to skip.
+
+Each protein now gets an apo reference automatically:
+
+| Apo structure PDB id | What happens |
+|---|---|
+| left blank (default) | A ligand-free companion of that protein is predicted, as an extra target, and the holo families point at its CIF. This is the idiom the bundled 5HT2 example uses. |
+| a PDB id, e.g. `2RH1` | That experimental structure is fetched here, shipped inside the bundle, and used as the reference. No companion is predicted: measured beats predicted. |
+
+It is not free. Each companion is another target: one protein with one ligand doubles the
+campaign, while one protein with six ligands adds a seventh. Ticking **Skip apo-vs-holo
+compare-sse** turns the whole arrangement off and predicts nothing extra.
+
+A named PDB id is fetched while you are still looking at the form, so a wrong id is a message
+on the page rather than a missing comparison discovered hours later, and the run itself never
+stops to ask the network for something that could have been checked in advance.
+
 One of those settings is **Keep private**, which is about this site rather than the campaign:
 
 | Keep private | What happens |

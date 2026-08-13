@@ -73,12 +73,38 @@ class Constraint:
         raise WizardValidationError(f"Unknown constraint kind: {self.kind!r}")
 
 
+def apo_companion_name(base: str, used_names: set) -> str:
+    """A unique, <=5-character id for a protein's ligand-free companion.
+
+    Boltz chain ids are capped at 5 characters and share one namespace with every
+    protein, partner and ligand in the campaign, so this cannot simply be
+    f"{base}_apo". This repo's own 5HT2 example uses hand-picked ids of exactly
+    this shape (5HT2A -> H2AAP); this reproduces that convention automatically and
+    keeps trying until it finds a free one rather than silently colliding.
+    """
+    candidates = [(base[:3] + "AP")[:5], (base[:2] + "AP")[:5], "APO"]
+    candidates += [f"{base[:2]}AP{i}"[:5] for i in range(1, 10)]
+    candidates += [f"APO{i}"[:5] for i in range(1, 100)]
+    for candidate in candidates:
+        candidate = candidate.upper()
+        if candidate and candidate not in used_names:
+            return candidate
+    raise WizardValidationError(
+        f"could not find a free 5-character name for {base}'s apo companion.",
+        field="protein_name",
+    )
+
+
 @dataclass
 class ProteinInput:
     name: str
     sequence: str
     partner_names: list[str] = field(default_factory=list)  # names of Partners already validated/collected
     constraints: list[Constraint] = field(default_factory=list)
+    # A four-character PDB id for a real, experimental apo structure. When set, that
+    # structure is the comparison reference and no ligand-free prediction is made for
+    # this protein: measured beats predicted.
+    apo_pdb: str = ""
 
 
 @dataclass
@@ -99,6 +125,8 @@ def assemble_boltz_input_md(
     proteins: list[ProteinInput],
     partners: list[PartnerInput],
     ligands: list[LigandInput],
+    compare_sse: bool = True,
+    apo_reference_paths: dict = None,
 ) -> str:
     """Builds the exact same line-list structure cmd_new does, then
     "\\n".join(...) + "\\n" -- byte-for-byte the same assembly rule.
@@ -121,13 +149,54 @@ def assemble_boltz_input_md(
     protein_blocks: list[list[str]] = []
     statement_lines: list[str] = []
 
+    # compare-sse compares a holo prediction against an apo structure, and only runs
+    # for families that name one. Nothing here used to emit `Apo structure:` at all,
+    # so a campaign built on this site could never produce a secondary-structure
+    # comparison, and the "skip compare-sse" option had nothing to skip.
+    #
+    # The default is now a ligand-free companion prediction per protein, which is the
+    # idiom this repo's own 5HT2 example uses: an extra Protein block with
+    # `Ligands: none`, whose predicted CIF the holo families point at. A real
+    # experimental structure is better when one exists, so naming a PDB id replaces
+    # the companion rather than adding to it.
+    #
+    # It is not free: each companion is another target to predict. One protein with
+    # one ligand doubles; one protein with six ligands adds a seventh. The form says
+    # so, and unticking compare-sse turns it off.
+    apo_reference_paths = apo_reference_paths or {}
+    used_names = ({p.name for p in proteins} | {pt.name for pt in partners}
+                  | {lg.name for lg in ligands})
+    apo_companions: list[ProteinInput] = []
+    apo_reference: dict = {}
+
+    if compare_sse:
+        for p in proteins:
+            if p.apo_pdb:
+                if apo_reference_paths.get(p.name):
+                    apo_reference[p.name] = apo_reference_paths[p.name]
+                continue
+            companion = apo_companion_name(p.name, used_names)
+            used_names.add(companion)
+            apo_companions.append(ProteinInput(name=companion, sequence=p.sequence,
+                                               partner_names=list(p.partner_names)))
+            apo_reference[p.name] = f"boltz_cif/{companion}_model_0.cif"
+
     for p in proteins:
         block = [f"Protein: {p.name}", f"Sequence: {p.sequence.strip()}"]
         if p.partner_names:
             block.append(f"Partners: {', '.join(p.partner_names)}")
+        if apo_reference.get(p.name):
+            block.append(f"Apo structure: {apo_reference[p.name]}")
         protein_blocks.append(block)
         for c in p.constraints:
             statement_lines.append(c.to_sentence())
+
+    for companion in apo_companions:
+        block = [f"Protein: {companion.name}", f"Sequence: {companion.sequence.strip()}"]
+        if companion.partner_names:
+            block.append(f"Partners: {', '.join(companion.partner_names)}")
+        block.append("Ligands: none")      # the whole point: same system, no ligand
+        protein_blocks.append(block)
 
     partner_blocks = [[f"Partner: {pt.name}", f"Sequence: {pt.sequence.strip()}"] for pt in partners]
 

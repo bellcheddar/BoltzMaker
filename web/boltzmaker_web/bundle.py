@@ -238,12 +238,20 @@ __BOLTZMAKER_PAYLOAD__
 
 
 def build(campaign_name: str, md_text: str, cfg: dict[str, Any], target_count: int,
-          config_json: str, run_key: str = "", private: bool = False) -> Bundle:
-    """Render every runtime template and assemble the self-extracting bundle."""
+          config_json: str, run_key: str = "", private: bool = False,
+          extra_files: dict[str, bytes] = None) -> Bundle:
+    """Render every runtime template and assemble the self-extracting bundle.
+
+    `extra_files` carries campaign data that is neither a template nor part of the
+    repo -- today, an experimental apo structure fetched for compare-sse. It is
+    keyed by the path the spec refers to, so `Apo structure: reference/2rh1.pdb`
+    resolves inside the unpacked campaign exactly as written.
+    """
     context = build_context(campaign_name, cfg, target_count, run_key, private)
     env = _environment()
 
     files: dict[str, bytes] = {
+        **(extra_files or {}),
         "boltz_input.md": md_text.encode("utf-8"),
         "config.json": config_json.encode("utf-8"),
         "run_campaign.sh": env.get_template("run_campaign.sh.j2").render(**context).encode("utf-8"),

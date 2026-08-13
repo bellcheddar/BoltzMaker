@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import itertools
+import re
+
 import shutil
 
 from flask import Blueprint, Response, current_app, render_template, request
@@ -17,6 +20,29 @@ from .wizard import (
 )
 
 bp = Blueprint("new", __name__)
+
+
+PDB_ID_RE = re.compile(r"^[0-9][A-Za-z0-9]{3}$")
+
+
+def clean_pdb_id(raw: str) -> str:
+    """Normalise an optional PDB id, or raise.
+
+    A PDB id is four characters beginning with a digit. Validated here rather than
+    trusted, because it is interpolated into a download URL and then into a
+    filename inside the campaign the user runs -- neither of which should ever see
+    an unchecked string.
+    """
+    value = (raw or "").strip().upper()
+    if not value:
+        return ""
+    if not PDB_ID_RE.match(value):
+        raise WizardValidationError(
+            f"'{value}' is not a PDB id -- they are four characters starting with a "
+            "digit, like 2RH1. Leave it blank to have an apo structure predicted instead.",
+            field="protein_apo_pdb",
+        )
+    return value
 
 
 def _parse_form() -> tuple[bool, list[ProteinInput], list[PartnerInput], list[LigandInput]]:
@@ -44,8 +70,14 @@ def _parse_form() -> tuple[bool, list[ProteinInput], list[PartnerInput], list[Li
     protein_names_raw = request.form.getlist("protein_name[]")
     protein_sequences = request.form.getlist("protein_sequence[]")
     protein_partners_raw = request.form.getlist("protein_partners[]")  # comma-separated
+    protein_apo_raw = request.form.getlist("protein_apo_pdb[]")
     proteins: list[ProteinInput] = []
-    for raw_name, seq, partners_csv in zip(protein_names_raw, protein_sequences, protein_partners_raw):
+    # zip_longest, not zip: the apo field was added after this form shipped, and a
+    # cached page (or a saved page file from before it existed) posts one fewer array.
+    # Plain zip would silently drop the last protein rather than defaulting its apo.
+    for raw_name, seq, partners_csv, apo_raw in itertools.zip_longest(
+            protein_names_raw, protein_sequences, protein_partners_raw, protein_apo_raw,
+            fillvalue=""):
         if not raw_name.strip() and not seq.strip():
             continue
         name = validate_name(raw_name, used_names, field="protein_name")
@@ -59,7 +91,8 @@ def _parse_form() -> tuple[bool, list[ProteinInput], list[PartnerInput], list[Li
                     f"Protein '{name}' references partner '{pn}', which isn't defined above.",
                     field="protein_partners",
                 )
-        proteins.append(ProteinInput(name=name, sequence=seq, partner_names=chosen_partners))
+        proteins.append(ProteinInput(name=name, sequence=seq, partner_names=chosen_partners,
+                                     apo_pdb=clean_pdb_id(apo_raw)))
 
     protein_names_defined = {p.name for p in proteins}
     constraint_owners = request.form.getlist("constraint_owner[]")

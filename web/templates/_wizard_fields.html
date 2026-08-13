@@ -57,6 +57,17 @@
       <label>Co-folded partners (comma-separated short names, optional)</label>
       <input type="text" name="protein_partners[]" placeholder="e.g. GNAS, GNB1">
     </div>
+    {#  Per protein, not per campaign: a campaign can hold several proteins and each
+        needs its own apo reference. Left blank, a ligand-free companion is predicted
+        instead, so the apo-vs-holo comparison works without anyone hunting for a
+        structure.  #}
+    <div class="md-field">
+      <label>Apo structure PDB id (optional)</label>
+      <input type="text" name="protein_apo_pdb[]" maxlength="4" placeholder="e.g. 2RH1">
+      <p class="md-hint">An experimental ligand-free structure of this protein, for the
+        apo-vs-holo comparison. Leave blank and one is predicted instead, as an extra
+        ligand-free target. A real structure is the better reference when you have one.</p>
+    </div>
   </div>
 </template>
 
