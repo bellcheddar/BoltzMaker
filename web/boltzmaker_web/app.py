@@ -136,7 +136,14 @@ def create_app() -> Flask:
 
     @app.route("/")
     def index():
-        return render_template("index.html", active="index")
+        # The most recent handful only. The full table lives at /runs; this is a
+        # sign of life -- what the site has actually been used for lately.
+        from .runs import Archive
+        try:
+            recent = Archive(Path(app.config["RUNS_ROOT"])).list()[:5]
+        except OSError:
+            recent = []
+        return render_template("index.html", active="index", recent_runs=recent)
 
     @app.route("/stepwise")
     def stepwise():

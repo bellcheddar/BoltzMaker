@@ -34,4 +34,67 @@
     <p class="md-mode-foot">Best if you already have your own setup and want one piece of it.</p>
   </a>
 </div>
+
+{#  Full width beneath the two mode cards: what the tool is for on the left, what it
+    has actually been doing on the right.  #}
+<div class="md-card md-intro-card">
+  <div class="md-intro-grid">
+    <div>
+      <h2>What it does</h2>
+      <p class="md-intro-lead">One annotated spec file describes a campaign &mdash; proteins, the
+        chains they fold with, and the ligands to cross them against. BoltzMaker writes the
+        per-target inputs, checks the chemistry before any GPU time is spent, runs Boltz-2, and
+        turns the results into a summary, an interactive report and a set of structures.</p>
+
+      <h3 class="md-sub">Where a protein family is known</h3>
+      <p class="md-intro-lead">Predicting a complex tells you where the atoms went. What it does
+        not tell you is whether the receptor moved, and where. Given an apo structure to compare
+        against &mdash; an experimental one, or a ligand-free prediction it makes for you &mdash;
+        BoltzMaker measures that shift against the motifs the family is actually described by:</p>
+      <ul class="md-intro-list">
+        <li><b>GPCRs.</b> Residues are assigned GPCRdb generic (Ballesteros-Weinstein) numbering,
+          so the shift is reported per <b>TM1&ndash;TM7 and H8</b>, and per <b>ICL1&ndash;3 and
+          ECL1&ndash;3</b>, rather than as one number for the whole chain. TM6, TM7 and ECL2 are
+          marked as binding-site adjacent, which is where an agonist-driven change shows up.</li>
+        <li><b>Kinases.</b> KLIFS pocket numbering picks out the <b>catalytic lysine, the
+          &alpha;C glutamate, the gatekeeper, the hinge, the HRD catalytic loop and the DFG
+          motif</b>. It also reports whether <b>DFG</b> and <b>&alpha;C</b> changed between apo
+          and holo &mdash; a coarse C&alpha;&ndash;C&alpha; distance proxy for detecting a shift,
+          not a publication-grade dihedral classifier.</li>
+        <li><b>Anything else.</b> Pfam domains from PDBe's SIFTS residue mapping, so a protein
+          outside those two families still gets its shift reported per domain instead of per
+          chain.</li>
+      </ul>
+      <p class="md-intro-lead">Alongside that: real protein&ndash;ligand interaction fingerprints
+        from PLIP, binding affinity as pIC50 where you ask for it, and ligand chemistry checked
+        for undefined stereocentres, ambiguous protonation and stray salts before a campaign
+        starts rather than after.</p>
+    </div>
+
+    <div>
+      <h2>Latest runs</h2>
+      {% if recent_runs %}
+      <ul class="md-run-list">
+        {% for run in recent_runs %}
+        <li>
+          <div class="md-run-name">{{ run.campaign }}</div>
+          <div class="md-run-meta">
+            {{ run.created[:10] }}
+            {%- if run.targets %} &middot; {{ run.targets }} target{{ 's' if run.targets != 1 }}{% endif %}
+            {%- if run.has_results %} &middot; <a href="{{ url_for('runs.explore', key=run.key) }}">explore</a>
+            {%- elif run.has_bundle %} &middot; <span class="md-run-pending">not run yet</span>{% endif %}
+          </div>
+        </li>
+        {% endfor %}
+      </ul>
+      <p style="margin:14px 0 0"><a class="md-btn md-btn-secondary" href="/runs">All runs</a></p>
+      {% else %}
+      <p class="md-intro-lead">Nothing here yet. Campaigns prepared in Fully Automated Mode are
+        listed here unless they are marked <b>Keep private</b>, in which case nothing about them
+        is written to this server at all.</p>
+      <p style="margin:14px 0 0"><a class="md-btn md-btn-secondary" href="/auto/prepare">Prepare one</a></p>
+      {% endif %}
+    </div>
+  </div>
+</div>
 {% endblock %}

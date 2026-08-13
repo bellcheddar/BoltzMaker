@@ -197,3 +197,52 @@ def test_a_torn_registry_line_does_not_break_the_page(tmp_path):
     with archive.registry.open("a") as handle:
         handle.write('{"key": "half-written"')      # a kill -9 mid-write
     assert [run.campaign for run in archive.list() if run.has_bundle] == ["Fine campaign"]
+
+
+# ===========================================================================
+#  The front page
+# ===========================================================================
+
+def test_the_landing_page_offers_the_runs_tab(client):
+    html = client.get("/").data.decode()
+    assert 'href="/runs"' in html
+
+
+def test_the_landing_page_lists_the_latest_runs(client):
+    _prepare(client, "Campaign one", private=False)
+    _prepare(client, "Campaign two", private=False)
+    html = client.get("/").data.decode()
+    assert "Campaign one" in html and "Campaign two" in html
+    assert "Latest runs" in html
+
+
+def test_the_landing_page_shows_at_most_five(client):
+    """A sign of life, not the table. The full list is at /runs."""
+    for index in range(8):
+        _prepare(client, f"Campaign {index}", private=False)
+    html = client.get("/").data.decode()
+    listed = [f"Campaign {index}" for index in range(8) if f"Campaign {index}</div>" in html]
+    assert len(listed) == 5
+
+
+def test_a_private_run_is_not_named_on_the_landing_page(client):
+    """Same rule as the Runs tab: a private run leaves nothing on the server, so
+    there is nothing here to list either."""
+    _prepare(client, "Secret campaign", private=True)
+    _prepare(client, "Public campaign", private=False)
+    html = client.get("/").data.decode()
+    assert "Public campaign" in html
+    assert "Secret campaign" not in html
+
+
+def test_the_landing_page_says_what_it_is_for(client):
+    """The family-specific work is the part worth knowing about, and it is the
+    part a first-time reader would never guess from "runs Boltz-2"."""
+    html = client.get("/").data.decode()
+    for claim in ("GPCRdb", "KLIFS", "Pfam", "TM1", "DFG"):
+        assert claim in html, f"{claim} is not described on the landing page"
+
+
+def test_the_landing_page_survives_an_empty_archive(client):
+    html = client.get("/").data.decode()
+    assert "Nothing here yet" in html

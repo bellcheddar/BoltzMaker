@@ -972,7 +972,8 @@ Automated when you want the whole pipeline handled.
 
 ### Runs
 
-Everything not marked private, in one table: campaign, when it was prepared, target count,
+The landing page carries the five most recent, with a link straight into each one's analysis.
+The full table is at **/runs**: everything not marked private, in one place: campaign, when it was prepared, target count,
 the bundle, and the results file once uploaded. Each row offers the bundle and the `.bmz`
 for download, and **explore**, which re-opens the analysis from the archived results without
 uploading anything again.
