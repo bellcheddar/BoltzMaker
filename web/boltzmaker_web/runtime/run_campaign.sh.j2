@@ -38,6 +38,57 @@ info "campaign: {{ campaign_name }}"
 info "targets:  {{ target_count }}"
 info "prepared: {{ created }}"
 
+# ---------------------------------------------------------------------------
+# Progress for the long, silent steps
+# ---------------------------------------------------------------------------
+# pixi install, postinstall and the boltz warm-up all print little or nothing for
+# minutes at a time, and a terminal that has not moved in four minutes is
+# indistinguishable from one that has hung. This runs a command in the background
+# and ticks a spinner with the elapsed time next to it, then reports how long it
+# took. Output goes to a log so a failure is still inspectable -- the last lines
+# are printed if the command fails.
+# Four frames indexed by modulo. Deliberately not a bash string-length expansion:
+# this file is a Jinja template and that syntax opens a Jinja comment, so the
+# template fails to render at all.
+SPINNER_FRAMES=('|' '/' '-' '\\')
+run_step() {
+    local label="$1"; shift
+    local logfile="$SCRATCH_LOG_DIR/$(echo "$label" | tr -cd '[:alnum:]' | cut -c1-40).log"
+    local start=$SECONDS
+
+    "$@" >"$logfile" 2>&1 &
+    local pid=$!
+    local i=0
+    # Only animate on a real terminal: piped into a file or a CI log, a spinner is
+    # thousands of lines of noise.
+    if [ -t 1 ]; then
+        while kill -0 "$pid" 2>/dev/null; do
+            local elapsed=$((SECONDS - start))
+            printf "\r${BLUE}%s${RESET} %s  ${AMBER}%02d:%02d${RESET}   " \
+                   "${SPINNER_FRAMES[$((i++ % 4))]}" "$label" $((elapsed / 60)) $((elapsed % 60))
+            sleep 1
+        done
+        printf "\r\033[K"
+    else
+        info "$label ..."
+    fi
+
+    wait "$pid"
+    local status=$?
+    local elapsed=$((SECONDS - start))
+    if [ "$status" -eq 0 ]; then
+        ok "$(printf '%s (%dm %02ds)' "$label" $((elapsed / 60)) $((elapsed % 60)))"
+    else
+        fail "$(printf '%s failed after %dm %02ds (exit %d)' "$label" $((elapsed / 60)) $((elapsed % 60)) "$status")"
+        info "last 20 lines of $logfile:"
+        tail -20 "$logfile" | sed 's/^/    /'
+    fi
+    return $status
+}
+
+SCRATCH_LOG_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/logs"
+mkdir -p "$SCRATCH_LOG_DIR"
+
 case "$(uname -s)" in
     Darwin|Linux) ;;
     *) warn "unrecognised platform '$(uname -s)' -- BoltzMaker targets macOS (Apple Silicon) and Linux (x86-64/CUDA)." ;;
@@ -66,11 +117,11 @@ if ! command -v pixi >/dev/null 2>&1; then
 fi
 ok "pixi $(pixi --version 2>/dev/null || echo present)"
 
-info "solving and installing the environment (several GB on a first run, cached afterwards)"
-pixi install
+info "the first install pulls several GB (PyTorch, RDKit, OpenBabel, PyMOL) and is cached afterwards"
+run_step "solving and installing the environment" pixi install
 # plip/pdb-tools are installed separately rather than in the main solve -- see
 # the comment on the postinstall task in pixi.toml for why.
-pixi run postinstall
+run_step "installing plip and pdb-tools" pixi run postinstall
 
 # Warm the boltz CLI before the campaign starts. The first invocation in a freshly
 # solved environment imports and byte-compiles the whole torch stack against a cold
@@ -79,8 +130,9 @@ pixi run postinstall
 # first timed operation is not also the environment's first import, and the user sees
 # a labelled pause rather than an unexplained one. `|| true` because this is a warm-up,
 # not a test: preflight is the thing that reports on boltz, a few lines further down.
-info "warming the boltz CLI (first import compiles the torch stack -- slow once, fast after)"
-pixi run boltz --help >/dev/null 2>&1 || true
+# `|| true` because this is a warm-up, not a test: preflight is the thing that
+# reports on boltz, a few lines further down.
+run_step "warming the boltz CLI (compiles the torch stack, slow once)" pixi run boltz --help || true
 ok "environment ready"
 
 # ---------------------------------------------------------------------------

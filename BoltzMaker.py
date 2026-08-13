@@ -1842,6 +1842,51 @@ _PHASE_PATTERNS = [
 ]
 _DATALOADER_RE = re.compile(r"Predicting DataLoader 0:\s*\d+%\|.*?\|\s*(\d+)/(\d+)\s*\[([^\]]*)\]")
 
+def _historical_seconds_per_target(campaign_dir: Path, accelerator: str) -> tuple:
+    """Mean seconds per completed target from this campaign's own past runs.
+
+    Returns (seconds_per_target, number_of_runs_used), or (None, 0).
+
+    Boltz gives no usable signal inside a single target -- its progress bar counts
+    dataloader items, and one target is one item -- so there is nothing to
+    extrapolate from within a run until a target finishes. Past runs of the same
+    campaign on the same machine are the next best thing, and the run-history file
+    has been recording exactly what is needed (duration, targets completed,
+    accelerator) since long before anything read it back.
+
+    Only runs that completed at least one target are used: a run that failed in the
+    first minute would otherwise drag the mean toward zero. The accelerator is
+    matched because a CPU run is a different machine for these purposes.
+    """
+    history = campaign_dir / RUN_HISTORY_FILENAME
+    if not history.is_file():
+        return None, 0
+    per_target = []
+    try:
+        for line in history.read_text().splitlines():
+            if not line.strip():
+                continue
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            completed = record.get("targets_completed") or 0
+            duration = record.get("duration_seconds") or 0
+            if completed > 0 and duration > 0 and record.get("accelerator") == accelerator:
+                per_target.append(duration / completed)
+    except OSError:
+        return None, 0
+    if not per_target:
+        return None, 0
+    # Median, not mean: one swap-thrashing run that took ten times as long as the
+    # rest should not dominate the estimate for every run after it.
+    per_target.sort()
+    middle = len(per_target) // 2
+    median = (per_target[middle] if len(per_target) % 2
+              else (per_target[middle - 1] + per_target[middle]) / 2)
+    return median, len(per_target)
+
+
 MEMORY_THRASH_FRACTION = 0.90  # fraction of total system RAM considered "at risk of thrashing"
 MEMORY_THRASH_SECONDS = 60  # how long sustained high memory must persist before warning
 
@@ -2011,7 +2056,15 @@ def _run_boltz_batch(pending: list, total_pending: int, manifest_len: int, compl
         subprocess.Popen([caffeinate_bin, "-i", "-s", "-m", "-w", str(proc.pid)])
 
     latest_line = {"text": ""}
-    phase = {"name": "starting", "done": 0, "total": 0, "rate": ""}
+    # `since` and `updated` are ours, not Boltz's. Boltz's own tqdm line is the only
+    # fine-grained signal available, and for a single target its DataLoader has
+    # exactly one item -- so it renders 0/1 at the start, 1/1 at the end, and
+    # nothing in between. Displaying that captured string unchanged meant a bar
+    # that sat at 0/1 with a frozen "[00:00<?, ?it/s]" for the entire run, which
+    # reads as a hung program. These two let the display distinguish "no progress"
+    # from "no news", and keep a clock that is genuinely ours ticking either way.
+    phase = {"name": "starting", "done": 0, "total": 0, "rate": "",
+             "since": time.time(), "updated": 0.0}
 
     def _reader():
         for line in proc.stdout:
@@ -2020,10 +2073,12 @@ def _run_boltz_batch(pending: list, total_pending: int, manifest_len: int, compl
             latest_line["text"] = line.rstrip()
             for pattern, name in _PHASE_PATTERNS:
                 if pattern.search(line):
-                    phase.update(name=name, done=0, total=0, rate="")
+                    phase.update(name=name, done=0, total=0, rate="",
+                                 since=time.time(), updated=0.0)
             m = _DATALOADER_RE.search(line)
             if m:
                 phase["done"], phase["total"], phase["rate"] = int(m.group(1)), int(m.group(2)), m.group(3)
+                phase["updated"] = time.time()
 
     reader_thread = threading.Thread(target=_reader, daemon=True)
     reader_thread.start()
@@ -2069,29 +2124,75 @@ def _run_boltz_batch(pending: list, total_pending: int, manifest_len: int, compl
     mem_thread.start()
 
     total = len(pending)
+    # Seeded before the first target finishes, when there is nothing measured yet.
+    # TimeRemainingColumn used to sit here and showed "-:--:--" for the whole run,
+    # because a target count only moves when a target completes -- on a single-target
+    # campaign it never moves at all until the end.
+    history_per_target, history_runs = _historical_seconds_per_target(campaign_dir, accelerator)
+    if history_per_target:
+        eta_initial = (f"~{_format_duration(history_per_target * total)} left "
+                       f"(from {history_runs} past run{'s' if history_runs != 1 else ''})")
+    else:
+        eta_initial = "ETA unknown (no past runs to judge by)"
     try:
         with Progress(
             SpinnerColumn(spinner_name="dots", style=f"bold {_RICH_BLUE}"),
             TextColumn(f"[bold {_RICH_BLUE}]{{task.description}}[/bold {_RICH_BLUE}]"),
             BarColumn(complete_style=_RICH_GREEN, finished_style=_RICH_GREEN, pulse_style=_RICH_AMBER),
-            TextColumn("{task.completed}/{task.total}"), TimeElapsedColumn(), TimeRemainingColumn(),
+            TextColumn("{task.fields[count]}"), TimeElapsedColumn(),
+            TextColumn(f"[{_RICH_BLUE}]{{task.fields[eta]}}[/{_RICH_BLUE}]"),
             TextColumn(f"[{_RICH_AMBER}]mem: {{task.fields[mem]}}[/{_RICH_AMBER}]"),
         ) as progress:
-            outer = progress.add_task("targets", total=total, mem="")
-            inner = progress.add_task("phase: starting", total=1, mem="")
+            outer = progress.add_task("targets", total=total, mem="", eta=eta_initial,
+                                       count=f"0/{total}")
+            inner = progress.add_task("phase: starting", total=None, mem="", eta="", count="")
+            first_done_at = None
+            done_prev = 0
             while proc.poll() is None:
+                now = time.time()
                 done = sum(1 for t in pending if _target_complete(pred_dir, t.stem, t.needs_affinity))
+                if done > done_prev:
+                    # Timestamp of the first completion, so the in-run rate below
+                    # measures only whole targets and not the leading MSA/setup work.
+                    if first_done_at is None:
+                        first_done_at = now
+                    done_prev = done
+
+                # Prefer what this run has actually measured over anything historical:
+                # once a target has finished here, that is this machine, this campaign,
+                # this configuration, today.
+                if done > 0:
+                    measured = (now - run_start) / done
+                    eta_str = f"~{_format_duration(measured * (total - done))} left"
+                elif history_per_target:
+                    eta_str = (f"~{_format_duration(history_per_target * total)} left "
+                               f"(from {history_runs} past run{'s' if history_runs != 1 else ''})")
+                else:
+                    eta_str = "ETA unknown (no past runs to judge by)"
+
                 mem_str = f"{mem_state['rss_gb']:.1f}/{total_ram_gb:.0f}GB"
-                progress.update(outer, completed=done, mem=mem_str)
-                rate_suffix = f" [{phase['rate']}]" if phase["rate"] else ""
+                progress.update(outer, completed=done, mem=mem_str, eta=eta_str,
+                                count=f"{done}/{total}")
+
+                # Boltz's own rate string is only meaningful while it is still being
+                # refreshed. For a single target it is written once and never again, so
+                # showing it indefinitely presents a stale snapshot as live data.
+                fresh_rate = phase["rate"] and (now - phase["updated"]) < 60
+                in_phase = _format_duration(now - phase["since"])
+                suffix = f" [{phase['rate']}]" if fresh_rate else f" ({in_phase} in this phase)"
+                # total=None renders a pulsing bar. A determinate bar is only honest
+                # when Boltz is actually reporting items, which for one target it is not.
+                inner_total = phase["total"] if phase["total"] > 1 else None
                 progress.update(
-                    inner, completed=phase["done"], total=max(phase["total"], 1),
-                    description=f"phase: {phase['name']}{rate_suffix}", mem="",
+                    inner, completed=phase["done"], total=inner_total,
+                    description=f"phase: {phase['name']}{suffix}", mem="", eta="",
+                    count="" if inner_total is None else f"{phase['done']}/{inner_total}",
                 )
                 time.sleep(1)
             reader_thread.join(timeout=5)
             done = sum(1 for t in pending if _target_complete(pred_dir, t.stem, t.needs_affinity))
-            progress.update(outer, completed=done, mem=f"{mem_state['rss_gb']:.1f}/{total_ram_gb:.0f}GB")
+            progress.update(outer, completed=done, count=f"{done}/{total}",
+                            mem=f"{mem_state['rss_gb']:.1f}/{total_ram_gb:.0f}GB")
     except KeyboardInterrupt:
         print()
         _warn("interrupted -- terminating boltz predict...")

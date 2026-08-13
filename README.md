@@ -530,14 +530,37 @@ being killed, worth knowing about before running anything large. Mitigations bui
 If a target still fails after every automatic retry, that's a real finding (this
 hardware may not be viable for a complex that size), not something to force through.
 
-## ⚙️ Progress bar
+## ⚙️ Progress, and how long a run will take
 
-Two rows during `run`: the outer bar shows targets done/total, elapsed time, an ETA, and
-live memory usage. The inner row shows which **phase** Boltz is in (MSA generation /
-structure prediction / affinity prediction) and that phase's own progress, parsed from
-Boltz's own log output. Note: Boltz doesn't expose diffusion- or recycling-step-level
-progress anywhere in its output (verified against the installed package's source), so this
-is the finest granularity actually available, not a per-step diffusion counter.
+Two rows during `run`. The outer bar shows targets done/total, elapsed time, live memory
+across the whole Boltz process tree, and an ETA. The inner row shows which **phase** Boltz
+is in (MSA generation / structure prediction / affinity prediction), parsed from its log
+output.
+
+**Boltz exposes no diffusion- or recycling-step-level progress** anywhere in its output
+(verified against the installed package's source), so that is the finest granularity
+available -- and on a single-target campaign it is not fine at all: Boltz's own progress
+bar counts dataloader items, one target is one item, so it renders `0/1` at the start,
+`1/1` at the end, and nothing whatsoever in between. A run can therefore sit at `0/1` for
+an hour while working perfectly.
+
+Two things follow, and both are deliberate:
+
+- The inner bar **pulses** rather than showing a static empty bar, and carries our own
+  "N in this phase" clock. Boltz's `it/s` figure is shown only while it is actually being
+  refreshed; once it goes stale (60s without an update) it is replaced by that clock,
+  because a rate string written once at the start and displayed for an hour is a stale
+  snapshot presented as live data.
+- The ETA is **estimated, and says where the estimate came from**. Once a target completes,
+  it is measured from this run. Before that, it comes from the median seconds-per-target of
+  previous runs of the same campaign on the same accelerator, read from
+  `.boltzmaker_run_history.jsonl` (median, not mean, so one swap-thrashing run does not
+  set expectations for every run after it). With no history at all it says so rather than
+  inventing a number.
+
+Sizing a first run on new hardware is therefore genuinely unknown until one target lands.
+`--limit 1` is the cheapest way to find out: it runs a single target, which both gives you
+a real number and writes the history entry every later run estimates from.
 
 ## 📊 Outputs
 
@@ -810,6 +833,11 @@ It unpacks into a folder beside itself and starts immediately: it installs
 Bring that one file back to the site for Step 2. **Boltz-2's model weights are not in the bundle** --
 they are large and versioned by Boltz itself, so they download on first use and are cached in
 your home directory, meaning a second campaign skips that step.
+
+Each long step -- solving the environment, installing PLIP, warming the Boltz CLI -- shows a
+spinner with its elapsed time and reports how long it took, so a terminal that has not moved
+in four minutes is never ambiguous. If a step fails, the last twenty lines of its log are
+printed rather than left in a file you have to go and find.
 
 It is safe to re-run at any point. `run` is idempotent, so an interrupted campaign resumes
 rather than starting over, and the script refuses to overwrite an existing unpacked folder.
