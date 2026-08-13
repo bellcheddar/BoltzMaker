@@ -393,6 +393,50 @@ var BoltzExplorer = (function () {
       // Heatmaps label both axes.
       if (Array.isArray(trace.y) && trace.type === "heatmap") trace.y = trace.y.map(shorten);
       if (Array.isArray(trace.x) && trace.type === "heatmap") trace.x = trace.x.map(shorten);
+      // And the legend, which is the other place a target name appears. A legend
+      // sitting outside the plot pushes the right margin out on its own, past the
+      // reserve set above and regardless of automargin -- that is what made the
+      // apo-vs-holo shift chart, whose twelve entries are full target names, 552px
+      // wide where every other chart was 620.
+      if (typeof trace.name === "string") trace.name = shorten(trace.name);
+    });
+  }
+
+
+  function equaliseMargins(specs) {
+    // Equal margins asked for are not equal margins drawn. Plotly measures a
+    // legend or colourbar that sits outside the plot and widens that side to fit
+    // it, and the widening is invisible in layout.margin -- it lands in
+    // _fullLayout._size. The apo-vs-holo shift chart, whose legend is twelve full
+    // target names, came out 611px wide against its neighbours' 620 that way.
+    //
+    // So: draw them all, read back the margins Plotly actually used, and give
+    // every chart the largest of each. Because that is at least as big as any
+    // chart's own legend, nothing gets widened a second time and one pass settles
+    // it. This is the "use the minimal size" the sizing is meant to hit -- found
+    // by measuring the most constrained chart rather than guessing at font
+    // metrics, which is what the two previous attempts here did.
+    var hosts = [], used = { l: 0, r: 0, t: 0, b: 0 };
+    specs.forEach(function (spec) {
+      var host = document.getElementById(spec.id);
+      if (!host || !host._fullLayout || !host._fullLayout._size) return;
+      hosts.push(host);
+      var size = host._fullLayout._size;
+      ["l", "r", "t", "b"].forEach(function (side) {
+        used[side] = Math.max(used[side], Math.ceil(size[side]));
+      });
+    });
+    if (hosts.length < 2) return;
+    hosts.forEach(function (host) {
+      var size = host._fullLayout._size;
+      if (Math.ceil(size.l) === used.l && Math.ceil(size.r) === used.r &&
+          Math.ceil(size.t) === used.t && Math.ceil(size.b) === used.b) return;
+      try {
+        Plotly.relayout(host, {
+          "margin.l": used.l, "margin.r": used.r,
+          "margin.t": used.t, "margin.b": used.b,
+        });
+      } catch (err) { /* leave that chart at the size it drew itself */ }
     });
   }
 
@@ -422,12 +466,10 @@ var BoltzExplorer = (function () {
         var layout = spec.layout || {};
         layout.height = CHART_HEIGHT;
         layout.autosize = true;
-        // Identical margins on every chart, which is what makes the plot AREAS the
-        // same size rather than merely the containers. The right margin is sized
-        // for the widest thing that sits outside a plot -- a colourbar with its
-        // title, on pIC50 vs binder probability -- and charts without a legend
-        // simply leave it empty, because a row of plots whose axes start and end
-        // at different x is harder to compare than one with some white space.
+        // The same margins on every chart, which is what makes the plot AREAS match
+        // rather than merely the containers. These are a floor, not the last word:
+        // Plotly grows a margin on its own to fit a legend or colourbar drawn
+        // outside the plot, so equaliseMargins() below settles the final number.
         layout.margin = { t: CHART_MARGIN.t, b: CHART_MARGIN.b,
                           l: CHART_MARGIN.l, r: CHART_MARGIN.r };
         // Created if the report did not define them: guarding on `if (layout.xaxis)`
@@ -454,11 +496,15 @@ var BoltzExplorer = (function () {
         host.innerHTML = '<p class="md-hint">This chart could not be drawn.</p>';
       }
     });
+    equaliseMargins(specs);
     window.addEventListener("resize", function () {
       specs.forEach(function (spec) {
         var host = document.getElementById(spec.id);
         if (host && host.data) Plotly.Plots.resize(host);
       });
+      // A resize re-measures the legends against the new width, so the sizes have
+      // to be settled again or they drift apart the first time the window moves.
+      equaliseMargins(specs);
     });
   }
 

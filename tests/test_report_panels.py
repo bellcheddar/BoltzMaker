@@ -394,3 +394,26 @@ def test_the_right_margin_leaves_room_for_a_legend():
     js = _explorer_js()
     match = re.search(r"var CHART_MARGIN = \{[^}]*r:\s*(\d+)", js)
     assert match and int(match.group(1)) >= 150
+
+
+def test_the_margins_are_equalised_after_drawing():
+    """Setting equal margins is not enough on its own: Plotly widens a side to fit
+    a legend drawn outside the plot, and that widening never appears in
+    layout.margin, so a chart whose legend is twelve full target names came out
+    611px wide beside its neighbours' 620. The second pass reads the margins
+    Plotly actually used and gives every chart the largest."""
+    js = _explorer_js()
+    assert "function equaliseMargins(specs)" in js
+    assert "equaliseMargins(specs);" in js
+    # _fullLayout._size, not _fullLayout.margin -- the latter still reads 170 on a
+    # chart Plotly has quietly widened to 179, which is what made this hard to see.
+    assert "_fullLayout._size" in js
+    assert "Math.max(used[side]" in js
+
+
+def test_a_resize_re_equalises():
+    """Legends are re-measured against the new width, so the sizes drift apart
+    again the first time the window moves unless the pass runs a second time."""
+    js = _explorer_js()
+    resize = js[js.index('window.addEventListener("resize"'):]
+    assert "equaliseMargins(specs);" in resize[:600]
