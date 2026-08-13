@@ -158,6 +158,10 @@ img, canvas { max-width: 100%; height: auto; }
   overflow-x: auto; white-space: pre;
 }
 .md-button-row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+/* Pushes the page save/load controls away from the two actions that actually
+   progress the campaign, so a row of five buttons still reads as two groups.
+   Collapses to nothing once the row wraps on a narrow screen. */
+.md-button-gap { flex: 1 1 20px; min-width: 0; }
 
 .md-status-ok { color: var(--md-accent-green); font-weight: 600; }
 .md-status-bad { color: var(--md-accent-red); font-weight: 600; }
