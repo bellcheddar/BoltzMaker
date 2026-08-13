@@ -80,6 +80,7 @@ _DROP_TITLE_PATTERNS = (
 PANEL_ORDER = (
     "Campaign summary",
     "pIC50 vs confidence score",    # clickable: a point opens the target detail
+    "pIC50 vs binder probability",  # the other view of the same points
     "Summary table",
     "@targets",                     # the sortable, filterable target table
     "@detail",                      # sits directly under the table it is driven by
@@ -88,7 +89,6 @@ PANEL_ORDER = (
     "Ranked predicted pIC50",
     "Ranked confidence",
     "Interaction counts by type",
-    "pIC50 vs binder probability",
     "Family x ligand selectivity",
     "Family coverage",
     "Overall shift statistics",
