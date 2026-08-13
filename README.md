@@ -2,7 +2,7 @@
 
 > **BoltzMaker: Boltz2 campaign-scale structure and affinity prediction, binding analysis, and run control, orchestrated end to end from a single spec file.**
 
-[![live](https://img.shields.io/badge/live-boltzmaker.mdeller.com-00d084?logo=icloud&logoColor=white)](https://boltzmaker.mdeller.com) ![python](https://img.shields.io/badge/python-3.12.3-3776AB?logo=python&logoColor=white) ![flask](https://img.shields.io/badge/flask-3.1.3-000000?logo=flask&logoColor=white) ![gunicorn](https://img.shields.io/badge/gunicorn-26.0.0-499848?logo=gunicorn&logoColor=white) ![nginx](https://img.shields.io/badge/nginx-1.24.0-009639?logo=nginx&logoColor=white) ![boltz](https://img.shields.io/badge/boltz-2-00897B) ![rdkit](https://img.shields.io/badge/RDKit-2026.03-00d084) ![gemmi](https://img.shields.io/badge/gemmi-0.6.5-8a3ffc) ![biopython](https://img.shields.io/badge/Biopython-1.84-1a6b8f) ![plip](https://img.shields.io/badge/PLIP-2025-9b51e0) ![pymol](https://img.shields.io/badge/PyMOL-3.1-ff6900) ![plotly](https://img.shields.io/badge/Plotly.js-2.35.2-3F4F75?logo=plotly&logoColor=white) ![3dmoljs](https://img.shields.io/badge/3Dmol.js-3D%20viewer-fcb900) ![pytest](https://img.shields.io/badge/pytest-168%20passing-0A9EDC?logo=pytest&logoColor=white) ![data](https://img.shields.io/badge/data-GPCRdb%20%C2%B7%20KLIFS%20%C2%B7%20PDBe-467FF7) ![licence](https://img.shields.io/badge/licence-MIT-467FF7) ![author](https://img.shields.io/badge/author-Marc%20C.%20Deller%2C%20D.Phil.-1C244B)
+[![live](https://img.shields.io/badge/live-boltzmaker.mdeller.com-00d084?logo=icloud&logoColor=white)](https://boltzmaker.mdeller.com) ![python](https://img.shields.io/badge/python-3.12.3-3776AB?logo=python&logoColor=white) ![flask](https://img.shields.io/badge/flask-3.1.3-000000?logo=flask&logoColor=white) ![gunicorn](https://img.shields.io/badge/gunicorn-26.0.0-499848?logo=gunicorn&logoColor=white) ![nginx](https://img.shields.io/badge/nginx-1.24.0-009639?logo=nginx&logoColor=white) ![boltz](https://img.shields.io/badge/boltz-2-00897B) ![rdkit](https://img.shields.io/badge/RDKit-2026.03-00d084) ![gemmi](https://img.shields.io/badge/gemmi-0.6.5-8a3ffc) ![biopython](https://img.shields.io/badge/Biopython-1.84-1a6b8f) ![plip](https://img.shields.io/badge/PLIP-2025-9b51e0) ![pymol](https://img.shields.io/badge/PyMOL-3.1-ff6900) ![plotly](https://img.shields.io/badge/Plotly.js-2.35.2-3F4F75?logo=plotly&logoColor=white) ![3dmoljs](https://img.shields.io/badge/3Dmol.js-3D%20viewer-fcb900) ![pytest](https://img.shields.io/badge/pytest-184%20passing-0A9EDC?logo=pytest&logoColor=white) ![data](https://img.shields.io/badge/data-GPCRdb%20%C2%B7%20KLIFS%20%C2%B7%20PDBe-467FF7) ![licence](https://img.shields.io/badge/licence-MIT-467FF7) ![author](https://img.shields.io/badge/author-Marc%20C.%20Deller%2C%20D.Phil.-1C244B)
 
 <table>
 <tr>
@@ -908,19 +908,29 @@ it is quick regardless of campaign size.
 | **Targets** | Sortable, filterable table: target, family, ligand, confidence, pIC50, interaction count and flags. Filter by free text, by family, or to flagged targets only. Click any row to open it. |
 | **Target detail** | An interactive 3D pose viewer (cartoon, surface or spin, with the ligand always drawn as sticks), the detected protein-ligand interactions with PLIP's own labelled diagram, and the full metric set including pTM, ipTM, complex pLDDT, predicted affinity and pIC50 with its ensemble spread. |
 
-Beneath those panels sit **BoltzMaker's own reports**, exactly as it wrote them: the full
-dashboard (campaign summary, ligand preparation and 2D structures, ranked pIC50 and confidence,
-the family-by-ligand selectivity heatmap, interaction counts, pIC50 against binder probability,
-a residue interaction fingerprint per family, and a binding-site panel per target) and, when the
-campaign had an apo reference, the secondary-structure page. Each can be opened full screen or
-downloaded.
+Beneath those panels sit **BoltzMaker's own**, lifted out of the reports it generated and
+rendered as siblings: the campaign summary, ligand preparation, the 2D ligand structures,
+ranked pIC50 and confidence, the family-by-ligand selectivity heatmap, interaction counts,
+pIC50 against binder probability, a residue interaction fingerprint per family, and the
+secondary-structure tables and charts. Twenty panels on a real campaign, against the two the
+explorer draws itself. Both reports can still be downloaded whole.
 
-They are framed rather than reimplemented. The explorer's own panels exist for triage -- sort,
-filter, click a target, spin its pose -- while the dashboard is the complete analysis, and
-rebuilding thirteen more charts in the browser would duplicate the analysis code and drift from
-it. They are also framed **sandboxed**, without `allow-same-origin`: this is HTML that arrived
-in an upload and is served from the site's own origin, so a crafted results file must not be
-able to place script on it.
+They are lifted rather than reimplemented, so they cannot drift from the analysis code, and
+merged rather than framed, so the page does not become a scrolling document inside a card.
+
+**Nothing from the results file executes.** It is user input rendered on this site's own
+origin, so the markup is reduced to a tag allowlist by a tokeniser -- not a regex, which was
+defeated by a `<` inside a quoted attribute -- and every chart is rebuilt from its data: each
+`Plotly.newPlot` call has its arguments JSON-parsed on the server and handed to the page as
+values, which the page's own code then plots. Parsed and re-serialised, an injected payload is
+inert text.
+
+Two things are deliberately dropped. The reports' binding-site panels, because the explorer
+already gives every target a pose viewer with its interactions beside it and the PyMOL sessions
+they link to are not in the archive; and the compare-sse charts the dashboard embeds, because
+the compare-sse page carries the same charts under the same element ids, and rendering both
+would put two divs with one id on the page -- leaving the second unreachable and silently
+undrawn.
 
 Two things worth knowing about the plot. The dashed vertical line at **0.5** is BoltzMaker's
 genuine absolute low-confidence cutoff. The mismatch flags (`HIGH_CONFIDENCE_POOR_AFFINITY`,
@@ -1020,7 +1030,7 @@ uncompressed-size and entry-count caps) before anything is extracted.
 .venv/bin/pytest tests/
 ```
 
-168 tests. The `compare-sse` annotators are covered against real fixture data (a real apo EGFR
+184 tests. The `compare-sse` annotators are covered against real fixture data (a real apo EGFR
 kinase-domain structure vs the `egfr_covalent` example's real holo prediction; a real
 apo beta2-adrenergic-receptor structure vs `adrb2_gs_panel`'s real holo predictions),
 with GPCRdb/KLIFS/PDBe network calls swapped for an injectable fake client seeded with
