@@ -904,9 +904,14 @@ it is quick regardless of campaign size.
 | Panel | What you get |
 |---|---|
 | **Header** | Campaign name, target count, family count, how many targets are flagged, how many carry a structure. An explicit warning if targets are missing from the summary because the campaign did not fully complete. |
-| **Confidence against predicted affinity** | Every target as a point, coloured by BoltzMaker's own flags. Click a point to open that target. |
 | **Targets** | Sortable, filterable table: target, family, ligand, confidence, pIC50, interaction count and flags. Filter by free text, by family, or to flagged targets only. Click any row to open it. |
-| **Target detail** | An interactive 3D pose viewer (cartoon, surface or spin, with the ligand always drawn as sticks), the detected protein-ligand interactions with PLIP's own labelled diagram, and the full metric set including pTM, ipTM, complex pLDDT, predicted affinity and pIC50 with its ensemble spread. |
+| **Target detail** | An interactive 3D pose viewer (cartoon, surface or spin, with the ligand always drawn as sticks), the detected protein-ligand interactions with PLIP's own labelled diagram, and the full metric set including pTM, ipTM, complex pLDDT, predicted affinity and pIC50 with its ensemble spread. Open on the first target from the start, rather than waiting for a click that on a one-target campaign there was nothing to make. |
+
+Everything else on the page comes from BoltzMaker's own reports, and the whole sequence --
+this page's panels and the reports' -- is one ordered list in `reports.PANEL_ORDER`, so
+reordering the page is a line moved rather than a template edit. It opens on the campaign
+summary. BoltzMaker's own **pIC50 vs confidence score** scatter is the one kept, and it is
+wired up here so clicking a point opens that target.
 
 Beneath those panels sit **BoltzMaker's own**, lifted out of the reports it generated and
 rendered as siblings: the campaign summary, ligand preparation, the 2D ligand structures,

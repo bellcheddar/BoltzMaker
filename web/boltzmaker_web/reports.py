@@ -46,8 +46,67 @@ _STYLE_RE = re.compile(r"<style\b.*?</style\s*>", re.S | re.I)
 # Panels this page already covers better, or that depend on files the results
 # archive does not carry.
 _DROP_TITLE_PATTERNS = (
+    # This page gives every target a pose viewer with its interactions beside it,
+    # and the PyMOL sessions these panels link to are not in the archive.
     re.compile(r": binding site$", re.I),
+    # The dashboard's combined secondary-structure panel is the family-coverage
+    # table and the motif table stacked together, and the compare-sse page carries
+    # both separately along with the overall statistics the dashboard omits. Keeping
+    # the granular three and dropping the combined one loses nothing and repeats
+    # nothing.
+    re.compile(r"^Secondary structure shifts", re.I),
 )
+
+# The order panels appear in. Titles not listed keep their original order and fall
+# in at the end, so a new panel in a future dashboard appears rather than vanishing.
+# Two entries are not report panels at all but this page's own, placed by name so
+# the whole sequence is legible in one list.
+PANEL_ORDER = (
+    "Campaign summary",
+    "Summary table",
+    "@targets",                     # the sortable, filterable target table
+    "pIC50 vs confidence score",    # clickable: a point opens its target below
+    "@detail",                      # predicted pose, detected interactions, metrics
+    "Ligand preparation",
+    "Ligand structures",
+    "Ranked predicted pIC50",
+    "Ranked confidence",
+    "Interaction counts by type",
+    "pIC50 vs binder probability",
+    "Family x ligand selectivity",
+    "Family coverage",
+    "Overall shift statistics",
+    "SSE motif shifts (apo vs holo)",
+    "Per-motif Ca RMSD",
+    "Motif x target RMSD",
+)
+
+
+def ordered_slots(panels: list) -> list:
+    """Interleave this page's own panels with the report's, in PANEL_ORDER.
+
+    Returns a list of slots, each either {"kind": "own", "which": ...} or
+    {"kind": "report", "panel": ...}. Reordering the page is then a matter of
+    moving a line in PANEL_ORDER rather than editing the template.
+    """
+    by_title = {}
+    for panel in panels:
+        by_title.setdefault(panel["title"] if isinstance(panel, dict) else panel.title, panel)
+
+    slots, placed = [], set()
+    for entry in PANEL_ORDER:
+        if entry.startswith("@"):
+            slots.append({"kind": "own", "which": entry[1:]})
+        elif entry in by_title:
+            slots.append({"kind": "report", "panel": by_title[entry]})
+            placed.add(entry)
+
+    for panel in panels:
+        title = panel["title"] if isinstance(panel, dict) else panel.title
+        if title not in placed:
+            slots.append({"kind": "report", "panel": panel})
+            placed.add(title)
+    return slots
 
 _VOID_TAGS = {"br", "hr", "img"}
 _DANGEROUS_CONTENT_TAGS = {"script", "style", "iframe", "object", "embed", "svg", "math"}

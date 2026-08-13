@@ -393,7 +393,8 @@ def _render_explorer(token: str, loaded: bmz.Results):
         token=token, results=loaded,
         payload=bmz.to_json(loaded),
         low_confidence=bmz.LOW_CONFIDENCE_THRESHOLD,
-        report_panels=panels, report_charts=json.dumps(charts),
+        slots=report_panels.ordered_slots(panels),
+        has_panels=bool(panels), report_charts=json.dumps(charts),
     )
 
 

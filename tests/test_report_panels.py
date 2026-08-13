@@ -131,3 +131,55 @@ def test_nested_divs_do_not_truncate_a_panel():
 def test_it_survives_a_report_with_no_main():
     panels, _ = reports.extract("<div class='md-card'><h2>T</h2><p>x</p></div>")
     assert [p.title for p in panels] == ["T"]
+
+
+# ===========================================================================
+#  Panel order
+# ===========================================================================
+
+def _panels(*titles):
+    return [reports.Panel(title=title, html="<p>x</p>") for title in titles]
+
+
+def test_the_campaign_summary_comes_first():
+    slots = reports.ordered_slots(_panels("Motif x target RMSD", "Campaign summary"))
+    first_report = next(s for s in slots if s["kind"] == "report")
+    assert first_report["panel"].title == "Campaign summary"
+
+
+def test_this_pages_own_panels_are_placed_by_name():
+    """Both sequences are one list, so reordering the page is a line moved in
+    PANEL_ORDER rather than a template edit."""
+    slots = reports.ordered_slots(_panels("Campaign summary", "pIC50 vs confidence score"))
+    kinds = [(s["kind"], s.get("which") or s["panel"].title) for s in slots]
+    assert kinds == [
+        ("report", "Campaign summary"),
+        ("own", "targets"),
+        ("report", "pIC50 vs confidence score"),
+        ("own", "detail"),
+    ]
+
+
+def test_an_unknown_panel_still_appears():
+    """A future dashboard may add a panel this order does not name. It should land
+    at the end rather than disappear."""
+    slots = reports.ordered_slots(_panels("Campaign summary", "Something brand new"))
+    titles = [s["panel"].title for s in slots if s["kind"] == "report"]
+    assert titles == ["Campaign summary", "Something brand new"]
+
+
+def test_a_panel_appears_once_even_if_both_reports_carry_it():
+    slots = reports.ordered_slots(_panels("Per-motif Ca RMSD", "Per-motif Ca RMSD"))
+    titles = [s["panel"].title for s in slots if s["kind"] == "report"]
+    assert titles == ["Per-motif Ca RMSD"]
+
+
+def test_the_combined_secondary_structure_panel_is_dropped():
+    """The dashboard stacks the family-coverage and motif tables into one panel;
+    the compare-sse page carries both separately plus the overall statistics the
+    dashboard leaves out. Keeping the granular three repeats nothing."""
+    panels, _ = reports.extract(
+        "<main><div class='md-card'><h2>Secondary structure shifts (apo vs holo)</h2>"
+        "<p>x</p></div>"
+        "<div class='md-card'><h2>Family coverage</h2><p>y</p></div></main>")
+    assert [p.title for p in panels] == ["Family coverage"]

@@ -138,71 +138,25 @@ var BoltzExplorer = (function () {
       data.targets.filter(function (t) { return t.structure; }).length;
   }
 
-  // ---- quadrant plot ------------------------------------------------------
+  // ---- the report's scatter, made clickable ---------------------------------
 
-  function renderPlot() {
-    var el = document.getElementById("quadrant");
-    if (!el || !window.Plotly) return;
+  function targetByDisplayName(name) {
+    // The report labels its points with the display name ("HTR2A_GNAI1+GNB1+GNG2_8NU"),
+    // while everything here is keyed by target id ("HTR2A_8NU"). Match on the
+    // display name first, then fall back to the id for a report that used it.
+    var match = data.targets.filter(function (t) { return t.name === name; })[0];
+    return match || data.targets.filter(function (t) { return t.id === name; })[0];
+  }
 
-    var points = data.targets.filter(function (t) {
-      return t.confidence !== null && t.pic50 !== null;
+  function wireScatterClicks(host) {
+    if (!host || !host.on) return;
+    host.on("plotly_click", function (ev) {
+      if (!ev.points || !ev.points.length) return;
+      var point = ev.points[0];
+      var label = point.text || (point.data && point.data.text && point.data.text[point.pointIndex]);
+      var target = label && targetByDisplayName(String(label));
+      if (target) select(target.id);
     });
-    if (!points.length) {
-      el.innerHTML = '<p class="md-hint">No target has both a confidence score and a ' +
-                     'predicted affinity, so there is nothing to plot.</p>';
-      return;
-    }
-
-    var trace = {
-      x: points.map(function (t) { return t.confidence; }),
-      y: points.map(function (t) { return t.pic50; }),
-      text: points.map(function (t) {
-        var note = t.flags.length ? "<br>" + t.flags.join(", ").replace(/_/g, " ").toLowerCase() : "";
-        return "<b>" + (t.name || t.id) + "</b><br>" + (t.ligand || "") +
-               "<br>confidence " + fmt(t.confidence, 3) +
-               "<br>pIC50 " + fmt(t.pic50, 2) +
-               (t.plip_total ? "<br>" + t.plip_total + " interactions" : "") + note;
-      }),
-      customdata: points.map(function (t) { return t.id; }),
-      mode: "markers",
-      type: "scatter",
-      hovertemplate: "%{text}<extra></extra>",
-      marker: {
-        size: 13,
-        color: points.map(colourFor),
-        line: { width: 1, color: "#ffffff" }
-      }
-    };
-
-    var layout = {
-      autosize: true,
-      margin: { l: 60, r: 20, t: 10, b: 50 },
-      font: { family: "Inter, sans-serif", size: 12 },
-      paper_bgcolor: "rgba(0,0,0,0)",
-      plot_bgcolor: "rgba(0,0,0,0)",
-      xaxis: { title: "Confidence score", zeroline: false, gridcolor: "#eef2f7" },
-      yaxis: { title: "Predicted pIC50", zeroline: false, gridcolor: "#eef2f7" },
-      shapes: [{
-        type: "line", x0: data.low_confidence_threshold, x1: data.low_confidence_threshold,
-        yref: "paper", y0: 0, y1: 1,
-        line: { color: "#fcb900", width: 2, dash: "dash" }
-      }],
-      annotations: [{
-        x: data.low_confidence_threshold, yref: "paper", y: 1,
-        text: "low confidence ←", showarrow: false,
-        xanchor: "right", yanchor: "top",
-        font: { size: 11, color: "#8a6100" }
-      }]
-    };
-
-    Plotly.newPlot(el, [trace], layout, {
-      responsive: true, displaylogo: false,
-      modeBarButtonsToRemove: ["lasso2d", "select2d"]
-    });
-    el.on("plotly_click", function (ev) {
-      if (ev.points && ev.points.length) select(ev.points[0].customdata);
-    });
-    window.addEventListener("resize", function () { Plotly.Plots.resize(el); });
   }
 
   // ---- per-target detail --------------------------------------------------
@@ -223,7 +177,6 @@ var BoltzExplorer = (function () {
   }
 
   function renderDetail(t) {
-    document.getElementById("detail-card").style.display = "";
     document.getElementById("detail-title").textContent = t.name || t.id;
 
     var metrics = document.getElementById("detail-metrics");
@@ -380,11 +333,15 @@ var BoltzExplorer = (function () {
     });
 
     renderTable();
-    renderPlot();
 
-    // Restore the target named in the URL, if it is one this campaign has.
+    // Open on a target from the start. The detail panels used to stay hidden until
+    // something was clicked, which on a single-target campaign meant they never
+    // appeared at all -- there was nothing to click that was not already the only
+    // row. The URL wins if it names one.
     var hash = decodeURIComponent((window.location.hash || "").replace(/^#/, ""));
-    if (hash) select(hash, true);
+    var opening = (hash && data.targets.filter(function (t) { return t.id === hash; })[0])
+                  || visibleTargets()[0] || data.targets[0];
+    if (opening) select(opening.id, true);
   }
 
   function plotReportCharts(specs) {
@@ -399,6 +356,9 @@ var BoltzExplorer = (function () {
         config.responsive = true;
         config.displaylogo = false;
         Plotly.newPlot(host, spec.data, spec.layout || {}, config);
+        // The report's own confidence-against-affinity scatter is the one kept, so
+        // it takes over the job of opening a target.
+        if (spec.id === "chart-scatter") wireScatterClicks(host);
       } catch (err) {
         host.innerHTML = '<p class="md-hint">This chart could not be drawn.</p>';
       }

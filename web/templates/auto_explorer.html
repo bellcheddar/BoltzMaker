@@ -36,20 +36,12 @@
   </p>
 </div>
 
-{% if results.has_affinity %}
-<div class="md-card">
-  <h2>Confidence against predicted affinity</h2>
-  <p class="md-hint" style="margin-top:0">
-    Each point is a target. The vertical line at {{ low_confidence }} is BoltzMaker's own
-    absolute low-confidence cutoff. The mismatch flags are <b>not</b> absolute: BoltzMaker
-    assigns them by splitting <i>this campaign</i> into terciles, so they mean "relative to the
-    other targets you ran here", and there is deliberately no horizontal threshold line to
-    imply otherwise. Click a point to open that target below.
-  </p>
-  <div id="quadrant" style="width:100%;height:440px"></div>
-</div>
-{% endif %}
+{#  One ordered sequence, built in reports.ordered_slots from PANEL_ORDER: this
+    page's own panels and the ones lifted out of BoltzMaker's reports, interleaved.
+    Reordering is a line moved in that list, not a template edit.  #}
+{% for slot in slots %}
 
+{% if slot.kind == 'own' and slot.which == 'targets' %}
 <div class="md-card">
   <h2>Targets</h2>
   <div class="md-filter-row">
@@ -79,7 +71,11 @@
   <p class="md-hint" id="empty-note" style="display:none">No target matches that filter.</p>
 </div>
 
-<div class="md-card" id="detail-card" style="display:none">
+{% elif slot.kind == 'own' and slot.which == 'detail' %}
+{#  Open from the start on the first target, rather than waiting for a click: on a
+    one-target campaign there was nothing to click, and the panels simply never
+    appeared.  #}
+<div class="md-card" id="detail-card">
   <h2 id="detail-title">Target</h2>
   <div class="md-detail-grid">
     <div>
@@ -101,33 +97,30 @@
   </div>
 </div>
 
-{#  BoltzMaker's own panels, lifted out of its reports and rendered as siblings of
-    the ones above. Framed in an iframe first, which put a scrolling document
-    inside a card inside the page; flat means every panel can be reordered or
-    dropped on its own. Nothing from the upload executes: the markup is
-    sanitised to a tag allowlist and the charts are replayed from JSON below.  #}
-{% for panel in report_panels %}
-<div class="md-card{% if panel.wide %} md-card-wide{% endif %}">
-  <h2>{{ panel.title }}</h2>
-  <div class="md-report-panel">{{ panel.html | safe }}</div>
+{% elif slot.kind == 'report' %}
+<div class="md-card{% if slot.panel.wide %} md-card-wide{% endif %}">
+  <h2>{{ slot.panel.title }}</h2>
+  {% if slot.panel.title == 'pIC50 vs confidence score' %}
+  <p class="md-hint" style="margin-top:0">Click a point to open that target above.</p>
+  {% endif %}
+  <div class="md-report-panel">{{ slot.panel.html | safe }}</div>
 </div>
+{% endif %}
+
 {% endfor %}
 
-{% if not report_panels %}
+{% if not has_panels %}
 <div class="md-card">
   <h2>Full dashboard</h2>
   {% if results.reports %}
-  {#  Reports are present but nothing could be read out of them -- a layout this
-      version does not recognise. Say that, rather than repeating the message for a
-      file that has no reports at all: the two have different fixes.  #}
   <p class="md-hint" style="margin:0">This results file carries reports, but none of their
     panels could be read -- they may have been written by a newer version of BoltzMaker than
     this site understands. Download them below and open them directly; everything above is
     unaffected.</p>
   {% else %}
   <p class="md-hint" style="margin:0">This results file predates the reports being included, or
-    the campaign did not write them. Everything above still works; the dashboard is on the
-    machine that ran the campaign, as <code>boltz_dashboard.html</code>.</p>
+    the campaign did not write them. The dashboard is on the machine that ran the campaign, as
+    <code>boltz_dashboard.html</code>.</p>
   {% endif %}
 </div>
 {% endif %}
