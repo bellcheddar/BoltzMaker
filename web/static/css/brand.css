@@ -122,6 +122,11 @@ img, canvas { max-width: 100%; height: auto; }
 .md-intro-grid h2 { margin: 0 0 10px; }
 .md-intro-grid .md-sub { margin: 20px 0 8px; }
 .md-intro-lead { font-size: 13.5px; color: var(--md-text-muted); margin: 0 0 10px; max-width: 68ch; }
+/* Below both columns, so the bullets get the full measure rather than half of it. */
+.md-intro-full { margin-top: 22px; padding-top: 20px; border-top: 1px solid var(--md-border); }
+.md-intro-full .md-sub { margin-top: 0; }
+.md-intro-full .md-intro-list { max-width: none; }
+.md-intro-full .md-intro-lead { max-width: 90ch; }
 .md-intro-list { margin: 0 0 12px; padding-left: 18px; font-size: 13.5px; color: var(--md-text-muted); }
 .md-intro-list li { margin-bottom: 8px; }
 .md-intro-list b { color: var(--md-text); }
