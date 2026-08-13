@@ -386,6 +386,41 @@ def image(token: str, target: str):
     return _session_asset(token, target, "plip", ".png", "image/png")
 
 
+# Only the names results.py recognises, so this route can never be asked for an
+# arbitrary path inside a session.
+_REPORT_NAMES = ("boltz_dashboard.html", "boltz_sse_comparison.html")
+
+
+@bp.route("/analysis/<token>/report/<name>")
+def report(token: str, name: str):
+    """Serve a report out of the uploaded results file.
+
+    This is HTML that arrived in someone's upload, served from our own origin, so
+    it is treated as hostile even though BoltzMaker generated it: a crafted .bmz
+    could otherwise put arbitrary script on boltzmaker.mdeller.com. The response
+    carries a sandbox CSP and the page frames it with a `sandbox` attribute that
+    withholds allow-same-origin, so its scripts run -- Plotly needs them -- while
+    the document sits in an opaque origin with no access to ours.
+    """
+    session = _session_dir(token)
+    if session is None:
+        return Response("session expired", status=404, mimetype="text/plain")
+    if name not in _REPORT_NAMES:
+        return Response("no such report", status=404, mimetype="text/plain")
+
+    path = (session / "campaign" / "reports" / name).resolve()
+    root = (session / "campaign" / "reports").resolve()
+    if path.parent != root or not path.is_file():
+        return Response("not found", status=404, mimetype="text/plain")
+
+    response = send_file(path, mimetype="text/html", max_age=SESSION_TTL_SECONDS)
+    # `sandbox` with no tokens: scripts are allowed by the frame's own sandbox
+    # attribute, and this stops the document reaching anything of ours regardless.
+    response.headers["Content-Security-Policy"] = "sandbox allow-scripts"
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    return response
+
+
 @bp.route("/analysis/<token>/summary.csv")
 def summary_csv(token: str):
     session = _session_dir(token)

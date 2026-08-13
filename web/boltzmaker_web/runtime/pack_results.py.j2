@@ -9,15 +9,23 @@ Stdlib only, deliberately: this runs in the pixi environment right after a
 long campaign, and a packing step that fails on an import would be the worst
 possible moment to discover a missing dependency.
 
-**What is included, and what is not.** The .bmz carries structured data -- the
-summary CSVs, one structure per target, and the labelled PLIP interaction
-image per target. It does NOT carry boltz_dashboard.html or the PyMOL .pse
-sessions. Those are the two largest artefacts by a wide margin (measured on a
-real 15-target campaign: a 19.4MB dashboard and 50.6MB of sessions, against
-11MB for everything included here), they stay on this machine where they were
-written, and the web Analysis step renders its own views from the structured
-data rather than embedding the dashboard. Open ./boltz_dashboard.html directly
-for the offline report.
+**What is included, and what is not.** The .bmz carries the structured data --
+the summary CSVs, one structure per target, and the labelled PLIP interaction
+image per target -- and BoltzMaker's own generated reports, which are the
+dashboard and the compare-sse page.
+
+The reports were left out at first, on the grounds that the web Analysis step
+renders its own views. It renders two of them. The dashboard has fifteen panels:
+the campaign summary, the ligand preparation table, the 2D ligand grid, ranked
+pIC50 and confidence, the family-by-ligand selectivity heatmap, interaction
+counts, pIC50 against binder probability, a residue interaction fingerprint per
+family, a binding-site panel per target, and the secondary-structure tables and
+charts. Re-implementing those in the browser would duplicate the analysis code
+and drift from it; shipping what BoltzMaker itself produced cannot drift. It
+costs about 9MB compressed on a 15-target campaign.
+
+The PyMOL .pse sessions are still left behind -- 50.6MB on that same campaign,
+and nothing reads them but PyMOL.
 """
 
 from __future__ import annotations
@@ -98,6 +106,12 @@ def main() -> int:
         members.append((arcname, path))
 
     add("boltz_input.md", MD_PATH, "spec")
+    # BoltzMaker's own reports, exactly as it wrote them. These are what the web
+    # Analysis step shows for everything its own panels do not cover.
+    for name in ("boltz_dashboard.html", "boltz_sse_comparison.html"):
+        path = CAMPAIGN_DIR / name
+        if path.is_file():
+            members.append((f"reports/{name}", path))
     add("config.json", CAMPAIGN_DIR / "config.json", "config")
     for name in ("boltz_summary.csv", "boltz_interactions.csv",
                  "boltz_sse_comparison.csv", "boltz_sse_family_status.json"):
@@ -127,6 +141,9 @@ def main() -> int:
         running = 0
         # Largest structures go first: dropping two 20MB complexes beats dropping
         # twenty small ones, and the smaller targets stay explorable.
+        # Structures sort last so they are the first dropped: a report covers the
+        # whole campaign, while a structure covers one target and is still on this
+        # machine in boltz_cif/.
         order = sorted(
             members,
             key=lambda m: (m[0].startswith("structures/"), m[1].stat().st_size),

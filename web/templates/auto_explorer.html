@@ -101,6 +101,42 @@
   </div>
 </div>
 
+{% if results.reports %}
+{#  BoltzMaker's own reports, framed rather than reimplemented. The explorer above
+    is for triage -- sort, filter, click a target; these are everything else it
+    computed, byte for byte as it wrote them.  #}
+{% for report in results.reports %}
+<div class="md-card">
+  <h2 style="display:flex;align-items:baseline;gap:10px;flex-wrap:wrap">
+    {{ report.title }}
+    <span class="md-hint" style="font-weight:400">{{ (report.bytes / 1024 / 1024) | round(1) }} MB</span>
+  </h2>
+  <p class="md-hint" style="margin-top:0">{{ report.blurb }}</p>
+  <p style="margin:0 0 12px">
+    <a class="md-btn md-btn-secondary"
+       href="{{ url_for('auto.report', token=token, name=report.name) }}" target="_blank"
+       rel="noopener noreferrer">Open full screen</a>
+    <a class="md-btn md-btn-secondary" style="margin-left:6px"
+       href="{{ url_for('auto.report', token=token, name=report.name) }}"
+       download="{{ report.name }}">Download</a>
+  </p>
+  {#  sandbox WITHOUT allow-same-origin: the report's scripts run (Plotly needs
+      them) but the document sits in an opaque origin and cannot touch this one.  #}
+  <iframe src="{{ url_for('auto.report', token=token, name=report.name) }}"
+          sandbox="allow-scripts allow-popups allow-downloads"
+          loading="lazy" title="{{ report.title }}"
+          style="width:100%;height:900px;border:1px solid var(--md-border);border-radius:var(--md-radius);background:#fff"></iframe>
+</div>
+{% endfor %}
+{% else %}
+<div class="md-card">
+  <h2>Full dashboard</h2>
+  <p class="md-hint" style="margin:0">This results file predates the reports being included, or
+    the campaign did not write them. Everything above still works; the dashboard is on the
+    machine that ran the campaign, as <code>boltz_dashboard.html</code>.</p>
+</div>
+{% endif %}
+
 <script id="results-payload" type="application/json">{{ payload | safe }}</script>
 <script src="{{ url_for('vendor', filename='plotly-2.35.2.min.js') }}"></script>
 <script src="{{ url_for('vendor', filename='3Dmol-2.5.5-min.js') }}"></script>

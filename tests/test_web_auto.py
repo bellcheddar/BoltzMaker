@@ -21,6 +21,7 @@ import subprocess
 import sys
 import zipfile
 from pathlib import Path
+from pathlib import Path as pathlib_Path
 
 import pytest
 from werkzeug.datastructures import MultiDict
@@ -350,6 +351,84 @@ def test_payload_json_matches_the_loaded_results(tmp_path, packed_bmz):
     assert [t["id"] for t in payload["targets"]] == ["AAA_LIG", "BBB_LIG"]
     assert payload["low_confidence_threshold"] == bmz.LOW_CONFIDENCE_THRESHOLD
     assert payload["targets"][1]["pic50"] is None
+
+
+# ===========================================================================
+#  The generated reports
+# ===========================================================================
+
+def _bmz_with_reports(tmp_path, packed_bmz) -> pathlib_Path:
+    """Add report files to a packed .bmz, standing in for a campaign that wrote them."""
+    import shutil
+    out = tmp_path / "with_reports.bmz"
+    shutil.copyfile(packed_bmz, out)
+    with zipfile.ZipFile(out, "a", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("reports/boltz_dashboard.html",
+                    "<html><body><h1>Campaign summary</h1></body></html>")
+        zf.writestr("reports/boltz_sse_comparison.html",
+                    "<html><body><h1>Per-motif Ca RMSD</h1></body></html>")
+    return out
+
+
+def test_the_explorer_frames_every_report_the_campaign_wrote(client, tmp_path, packed_bmz):
+    """The explorer's own panels cover two things: the target table and the
+    confidence-against-affinity plot. The dashboard has fifteen. Rather than
+    reimplement thirteen charts in the browser and let them drift from the
+    analysis code, the reports BoltzMaker generated travel in the .bmz and are
+    framed here."""
+    source = _bmz_with_reports(tmp_path, packed_bmz)
+    response = client.post(
+        "/auto/analysis",
+        data={"results_file": (io.BytesIO(source.read_bytes()), "r.bmz")},
+        content_type="multipart/form-data")
+    html = response.data.decode()
+    assert "Full dashboard" in html
+    assert "Secondary structure (apo vs holo)" in html
+
+
+def test_reports_are_served_sandboxed(client, tmp_path, packed_bmz):
+    """This is HTML that arrived in an upload, served from our own origin. A
+    crafted .bmz could otherwise place arbitrary script on the site. The frame
+    withholds allow-same-origin and the response says so too, so the report's
+    scripts run -- Plotly needs them -- in an opaque origin."""
+    source = _bmz_with_reports(tmp_path, packed_bmz)
+    response = client.post(
+        "/auto/analysis",
+        data={"results_file": (io.BytesIO(source.read_bytes()), "r.bmz")},
+        content_type="multipart/form-data")
+    html = response.data.decode()
+    token = html.split('BoltzExplorer.init("')[1].split('"')[0]
+
+    frame = re.search(r'<iframe[^>]*src="[^"]*report/boltz_dashboard\.html"[^>]*>', html).group(0)
+    assert "allow-same-origin" not in frame, "the report must not share this origin"
+    assert "allow-scripts" in frame
+
+    served = client.get(f"/auto/analysis/{token}/report/boltz_dashboard.html")
+    assert served.status_code == 200
+    assert "sandbox" in served.headers.get("Content-Security-Policy", "")
+    assert served.headers.get("X-Content-Type-Options") == "nosniff"
+
+
+def test_only_known_report_names_are_served(client, tmp_path, packed_bmz):
+    source = _bmz_with_reports(tmp_path, packed_bmz)
+    response = client.post(
+        "/auto/analysis",
+        data={"results_file": (io.BytesIO(source.read_bytes()), "r.bmz")},
+        content_type="multipart/form-data")
+    token = response.data.decode().split('BoltzExplorer.init("')[1].split('"')[0]
+
+    for name in ("boltz_input.md", "../boltz_input.md", "../../etc/passwd", "anything.html"):
+        assert client.get(f"/auto/analysis/{token}/report/{name}").status_code in (400, 404)
+
+
+def test_a_results_file_without_reports_says_so(client, packed_bmz):
+    """Older files, and campaigns whose compare-sse had nothing to compare."""
+    response = client.post(
+        "/auto/analysis",
+        data={"results_file": (io.BytesIO(packed_bmz.read_bytes()), "r.bmz")},
+        content_type="multipart/form-data")
+    html = response.data.decode()
+    assert "predates the reports being included" in html
 
 
 # ===========================================================================

@@ -908,6 +908,20 @@ it is quick regardless of campaign size.
 | **Targets** | Sortable, filterable table: target, family, ligand, confidence, pIC50, interaction count and flags. Filter by free text, by family, or to flagged targets only. Click any row to open it. |
 | **Target detail** | An interactive 3D pose viewer (cartoon, surface or spin, with the ligand always drawn as sticks), the detected protein-ligand interactions with PLIP's own labelled diagram, and the full metric set including pTM, ipTM, complex pLDDT, predicted affinity and pIC50 with its ensemble spread. |
 
+Beneath those panels sit **BoltzMaker's own reports**, exactly as it wrote them: the full
+dashboard (campaign summary, ligand preparation and 2D structures, ranked pIC50 and confidence,
+the family-by-ligand selectivity heatmap, interaction counts, pIC50 against binder probability,
+a residue interaction fingerprint per family, and a binding-site panel per target) and, when the
+campaign had an apo reference, the secondary-structure page. Each can be opened full screen or
+downloaded.
+
+They are framed rather than reimplemented. The explorer's own panels exist for triage -- sort,
+filter, click a target, spin its pose -- while the dashboard is the complete analysis, and
+rebuilding thirteen more charts in the browser would duplicate the analysis code and drift from
+it. They are also framed **sandboxed**, without `allow-same-origin`: this is HTML that arrived
+in an upload and is served from the site's own origin, so a crafted results file must not be
+able to place script on it.
+
 Two things worth knowing about the plot. The dashed vertical line at **0.5** is BoltzMaker's
 genuine absolute low-confidence cutoff. The mismatch flags (`HIGH_CONFIDENCE_POOR_AFFINITY`,
 `LOW_CONFIDENCE_STRONG_AFFINITY`) are **not** absolute: BoltzMaker assigns them by splitting
@@ -1049,6 +1063,8 @@ example campaigns.
 
 ## 📋 To do
 
+- [x] Run a real GPU campaign end to end -- prepared on the site, run from the bundle, packed, uploaded and explored. Four bundle defects had reached a user before this (a preflight timeout too short for a cold torch import, `sse_comparison` and `vendor` missing from the bundle, pre-1980 zip timestamps, `sh` portability), because everything up to the campaign is verified automatically while the `pixi install` -> `boltz predict` -> `analyze` path is not. Worth repeating before each release
+- [x] Show everything the dashboard computes in the hosted Analysis step, not only the two panels the explorer draws itself. BoltzMaker's own generated reports now travel inside the `.bmz` and are framed beside the interactive panels, so the hosted view cannot drift from the offline one
 - [x] Give every protein an apo reference so compare-sse can actually run from the web form: a predicted ligand-free companion by default, an experimental PDB entry when one is named (mmCIF preferred, since most recent cryo-EM entries have no legacy file), or both. Previously the form emitted no `Apo structure:` at all, so the comparison never ran and its skip option had nothing to skip
 - [x] Add **Keep private** and a **Runs** tab: the decision travels in the user's own files (the bundle records it, the packer copies it into the results manifest) so a private run leaves nothing on the server to list, while everything else is archived with its bundle and results under a capped, self-pruning archive
 - [x] Add single-keypress run controls: `p` pauses and resumes via a real SIGSTOP of the whole Boltz process tree, so an interrupted target is neither discarded nor recomputed, and `q` stops the run and all its workers cleanly. Fixed a leak found on the way: terminating only the parent left dataloader workers alive holding RAM and the GPU
@@ -1066,7 +1082,6 @@ example campaigns.
 - [x] Bundle Plotly.js locally instead of via CDN so the dashboard renders fully offline/air-gapped
 - [x] Add a ligand-preparation/validation step (canonicalization, stereocentre/protonation-state flagging, disconnected-fragment detection) so bad input chemistry is caught before hours of compute, not silently mispredicted
 - [x] Add a 3Dmol.js rotating structure view to each target's binding-site panel, placed next to the existing static PyMOL image (keep the static image, add a "Download image" link for it -- doesn't exist yet -- and add the interactive 3Dmol.js view alongside rather than replacing anything)
-- [ ] Run one real GPU campaign end to end as part of the release check. Four separate bundle defects (a preflight timeout, missing packages, unrepresentable zip timestamps, `sh` portability) reached a user because everything up to the campaign is verified automatically and the `pixi install` -> `boltz predict` -> `analyze` path is not
 - [ ] Share pip cache between the two environments (`PIP_CACHE_DIR`) so `setup-plip` doesn't re-download wheels the main venv already fetched
 - [ ] Add `BoltzMaker.py doctor` -- a post-install check that imports boltz/rdkit/plip/openbabel/pymol in-process and reports exactly which env/feature is broken
 - [ ] Add an explicit Boltz model-weights cache dir + a `preflight` check for it (ties into the existing iCloud dataless-file eviction check)

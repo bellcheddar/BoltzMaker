@@ -198,6 +198,9 @@ class Results:
         expected = self.manifest.get("targets_expected") or 0
         return max(0, int(expected) - len(self.targets))
 
+    #: Reports BoltzMaker generated, present in the file if the campaign wrote them.
+    reports: list = field(default_factory=list)
+
     @property
     def private(self) -> bool:
         """Whether this results file asked not to be kept.
@@ -310,6 +313,24 @@ def load(root: Path) -> Results:
     md_path = root / "boltz_input.md"
     families = sorted({t.family_id for t in targets if t.family_id})
 
+    # Only the reports this campaign actually produced: compare-sse writes its page
+    # only when a family had an apo structure, so its absence is normal.
+    known_reports = (
+        ("boltz_dashboard.html", "Full dashboard",
+         "Every panel BoltzMaker computed: campaign summary, ligand preparation and 2D "
+         "structures, ranked pIC50 and confidence, selectivity heatmap, interaction counts, "
+         "per-family interaction fingerprints and a binding-site panel per target."),
+        ("boltz_sse_comparison.html", "Secondary structure (apo vs holo)",
+         "Per-motif Ca RMSD, the motif-by-target heatmap, and the per-residue detail behind "
+         "the comparison."),
+    )
+    reports = [
+        {"name": name, "title": title, "blurb": blurb,
+         "bytes": (root / "reports" / name).stat().st_size}
+        for name, title, blurb in known_reports
+        if (root / "reports" / name).is_file()
+    ]
+
     return Results(
         manifest=manifest,
         targets=targets,
@@ -318,6 +339,7 @@ def load(root: Path) -> Results:
         created_utc=str(manifest.get("created_utc") or ""),
         md_text=md_path.read_text(encoding="utf-8", errors="replace") if md_path.is_file() else "",
         sse_rows=sse_rows,
+        reports=reports,
     )
 
 
