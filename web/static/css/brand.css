@@ -238,13 +238,18 @@ img, canvas { max-width: 100%; height: auto; }
    "Likely binder (p >= 0.7) Uncertain (0.3-0.7) Likely non-binder" ran together as
    one sentence. The report styles this in its own <style>, which is stripped. */
 .summary-legend {
-  display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px;
-  font-size: 12px; color: var(--md-text-muted); margin-top: 10px;
+  display: flex; flex-wrap: wrap; gap: 6px 28px;
+  font-size: 12px; color: var(--md-text-muted); margin-top: 12px;
 }
-.summary-legend .legend-title { font-weight: 600; color: var(--md-text); }
+/* Two groups, one per icon: what the target marks, and what the shield marks.
+   As one flat row it was six phrases under a heading naming two things, with
+   nothing saying which three belonged to which. */
+.legend-group { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
+.summary-legend .legend-title { font-weight: 700; color: var(--md-text); }
 .summary-legend .legend-item { display: inline-flex; align-items: center; gap: 5px; }
 .summary-legend .legend-item + .legend-item::before {
-  content: "\00b7"; margin-right: 6px; color: var(--md-border);
+  content: "\00b7"; margin-right: 4px;
+  color: var(--md-text); font-weight: 700; font-size: 15px; line-height: 1;
 }
 .summary-legend svg { vertical-align: middle; }
 .summary-table-footer { font-size: 12px; color: var(--md-text-muted); }

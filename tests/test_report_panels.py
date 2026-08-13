@@ -296,3 +296,67 @@ def test_the_scatter_comes_before_the_tables_it_summarises():
     order = list(reports.PANEL_ORDER)
     assert order.index("pIC50 vs confidence score") < order.index("Summary table")
     assert order.index("Campaign summary") < order.index("pIC50 vs confidence score")
+
+
+# ===========================================================================
+#  The summary table's legend
+# ===========================================================================
+
+LEGEND = """<main><div class='md-card'><h2>Summary table</h2>
+<div class="summary-legend">
+  <span class="legend-title">&#127919; affinity &middot; &#128737; confidence:</span>
+  <span class="legend-item"><span style="color:#00d084"><svg viewBox="0 0 24 24">
+    <circle cx="12" cy="12" r="9"/></svg></span> Likely binder</span>
+  <span class="legend-item"><span style="color:#fcb900"><svg viewBox="0 0 24 24">
+    <circle cx="12" cy="12" r="9"/></svg></span> Uncertain</span>
+  <span class="legend-item"><span style="color:#00d084"><svg viewBox="0 0 24 24">
+    <path d="M12 2 L20 6"/></svg></span> High confidence</span>
+  <span class="legend-item"><span style="color:#fcb900"><svg viewBox="0 0 24 24">
+    <path d="M12 2 L20 6"/></svg></span> Moderate confidence</span>
+</div></div></main>"""
+
+
+def test_the_legend_is_split_into_its_two_groups():
+    """One flat row put six phrases under a heading naming two things, with
+    nothing to say which three described the target icon and which the shield."""
+    panels, _ = reports.extract(LEGEND)
+    html = panels[0].html
+    assert html.count('class="legend-group"') == 2
+
+    affinity = html.split('class="legend-group"')[1]
+    confidence = html.split('class="legend-group"')[2]
+    assert "Likely binder" in affinity and "Uncertain" in affinity
+    assert "High confidence" in confidence and "Moderate confidence" in confidence
+    assert "confidence" not in affinity.split("Uncertain")[0].replace("&#128737;", "")
+
+
+def test_the_groups_are_split_by_icon_not_by_position():
+    """The affinity icon is a target of concentric circles and the confidence icon
+    is a shield drawn from a path, so the split needs no assumption about how many
+    of each there are or what order they come in."""
+    reordered = LEGEND.replace("Likely binder", "PLACEHOLDER") \
+                      .replace("High confidence", "Likely binder") \
+                      .replace("PLACEHOLDER", "High confidence")
+    panels, _ = reports.extract(reordered)
+    html = panels[0].html
+    groups = html.split('class="legend-group"')
+    # "High confidence" now carries the target icon, so it belongs to the first group.
+    assert "High confidence" in groups[1]
+    assert "Likely binder" in groups[2]
+
+
+def test_a_legend_that_does_not_split_cleanly_is_left_alone():
+    """A future dashboard drawing both icons with the same primitive should get
+    its legend rendered unchanged rather than regrouped on a guess."""
+    same_icon = LEGEND.replace('<path d="M12 2 L20 6"/>', '<circle cx="1" cy="1" r="1"/>')
+    panels, _ = reports.extract(same_icon)
+    assert "legend-group" not in panels[0].html
+    assert "Likely binder" in panels[0].html
+
+
+def test_a_legend_with_no_title_is_left_alone():
+    panels, _ = reports.extract(
+        '<main><div class="md-card"><h2>T</h2><div class="summary-legend">'
+        '<span class="legend-item"><svg><circle r="1"/></svg> a</span>'
+        '</div></div></main>')
+    assert "legend-group" not in panels[0].html

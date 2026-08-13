@@ -237,6 +237,73 @@ def _sanitise(fragment: str) -> str:
     return parser.result()
 
 
+_LEGEND_RE = re.compile(r'<div class="summary-legend">(.*?)</div>', re.S)
+_LEGEND_TITLE_RE = re.compile(r'<span class="legend-title">(.*?)</span>', re.S)
+
+
+def _legend_items(body: str) -> list:
+    """Each legend-item span, walked rather than pattern-matched.
+
+    An item is `<span class="legend-item"><span style=..>icon</span> text</span>`,
+    so a regex ending at "</span></span>" never matches: the two closers have the
+    label between them. Nesting has to be counted, exactly as the cards are.
+    """
+    items = []
+    for opening in re.finditer(r'<span class="legend-item">', body):
+        start = opening.start()
+        depth = 0
+        for tag in re.finditer(r"<(/?)span\b[^>]*>", body[start:]):
+            depth += -1 if tag.group(1) else 1
+            if depth == 0:
+                items.append(body[start:start + tag.end()])
+                break
+    return items
+
+
+def _regroup_legend(html: str) -> str:
+    """Split the summary table's legend into its two real groups.
+
+    The report emits one flat row: a title reading "affinity . confidence:" and
+    then six items -- three describing the affinity icon and three describing the
+    confidence icon, with nothing to say which is which. Read left to right it is
+    six unrelated phrases under a heading naming two things.
+
+    They are separable without guessing: the affinity icon is a target drawn from
+    concentric circles, the confidence icon is a shield drawn from a path. Items
+    are grouped by which they contain, and the title's own two halves become the
+    two group labels. If they do not split cleanly -- a future dashboard drawing
+    both with the same primitive, say -- the legend is left exactly as it was.
+    """
+    match = _LEGEND_RE.search(html)
+    if not match:
+        return html
+    body = match.group(1)
+
+    title_match = _LEGEND_TITLE_RE.search(body)
+    items = _legend_items(body)
+    if not title_match or len(items) < 2:
+        return html
+
+    labels = [part.strip().rstrip(":") for part in title_match.group(1).split("\u00b7")]
+    if len(labels) != 2:
+        return html
+
+    targets = [item for item in items if "<circle" in item and "<path" not in item]
+    shields = [item for item in items if "<path" in item]
+    if not targets or not shields or len(targets) + len(shields) != len(items):
+        return html
+
+    def group(label: str, members: list) -> str:
+        return ('<div class="legend-group">'
+                f'<span class="legend-title">{label}</span>'
+                + "".join(members) + "</div>")
+
+    rebuilt = ('<div class="summary-legend">'
+               + group(labels[0], targets) + group(labels[1], shields)
+               + "</div>")
+    return html[:match.start()] + rebuilt + html[match.end():]
+
+
 def _cards(main_html: str):
     """Yield each md-card block, by walking div nesting rather than matching
     greedily: the cards contain divs of their own, so a regex for the closing tag
@@ -316,7 +383,7 @@ def extract(html: str) -> tuple:
             continue
         body = card[title_match.end():] if title_match else card
         body = body.rsplit("</div>", 1)[0]
-        html = _sanitise(body)
+        html = _regroup_legend(_sanitise(body))
         if "lig-grid" in html:
             kind = "ligands"
         elif "<img" in html and "<table" not in html:
