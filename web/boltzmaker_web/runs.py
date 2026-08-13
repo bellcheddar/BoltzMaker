@@ -133,18 +133,23 @@ class Archive:
             handle.write(json.dumps(record) + "\n")
 
     def record_bundle(self, key: str, campaign: str, targets: int, filename: str,
-                      content: bytes) -> Run:
+                      content: bytes, created: str = "") -> Run:
+        """`created` is for importing a run that happened before this archive
+        existed, so its row carries the date it was actually run rather than the
+        date it was filed. Left empty, which is every path the site itself takes,
+        it is now."""
         stored = self.bundles / f"{key}.command"
         stored.write_bytes(content)
         run = Run(key=key, campaign=campaign,
-                  created=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                  created=created or time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                   targets=targets, bundle_name=stored.name, bundle_bytes=len(content),
                   note=filename)
         self._append(run.to_json())
         self.prune()
         return run
 
-    def record_results(self, key: str, campaign: str, source: Path, targets: int) -> Run:
+    def record_results(self, key: str, campaign: str, source: Path, targets: int,
+                       uploaded: str = "") -> Run:
         stored = self.results / f"{key}.bmz"
         shutil.copyfile(source, stored)
         existing = self.get(key)
@@ -156,7 +161,7 @@ class Archive:
             bundle_name=existing.bundle_name if existing else "",
             bundle_bytes=existing.bundle_bytes if existing else 0,
             results_name=stored.name, results_bytes=stored.stat().st_size,
-            results_uploaded=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            results_uploaded=uploaded or time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             note=existing.note if existing else "",
         )
         self._append(run.to_json())

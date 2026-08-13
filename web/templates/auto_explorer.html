@@ -7,7 +7,11 @@
     {{ results.campaign_name }}
     <span class="md-hint" style="font-weight:400">
       {{ results.targets | length }} target{{ 's' if results.targets | length != 1 }}
-      &middot; run {{ results.created_utc[:10] }}
+      {#  This is manifest.created_utc: when the results were packed, not when the
+          campaign ran. Normally minutes apart, so "run" was a fair label -- but not
+          for a campaign packed later from an archive, where it read as a run date
+          five weeks wrong.  #}
+      &middot; packed {{ results.created_utc[:10] }}
     </span>
   </h2>
 
