@@ -26,7 +26,9 @@ import csv
 import hashlib
 import json
 import platform
+import shutil
 import sys
+import time
 import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
@@ -43,6 +45,12 @@ OUT_PATH = CAMPAIGN_DIR / "{{ results_filename }}"
 # cap bites, structures are dropped before images: a missing pose viewer costs
 # one panel, whereas a missing summary row costs the target entirely.
 MAX_TOTAL_BYTES = 180 * 1024 * 1024
+
+# The earliest timestamp a zip can represent. Anything older is clamped rather
+# than raised on: this runs *after* the campaign, so a file with an odd mtime
+# must never be the reason hours of finished compute cannot be packed. The
+# bundle's own files used to arrive dated 1970 and did exactly that.
+ZIP_SAFE_EPOCH = 315532800  # 1980-01-01T00:00:00Z
 
 BLUE, GREEN, AMBER, RED, RESET = (
     "\033[38;2;30;115;190m", "\033[38;2;0;208;132m",
@@ -158,10 +166,19 @@ def main() -> int:
         "files": {},
     }
 
+    def add(zf, path, arcname):
+        """zf.write(), but tolerant of a timestamp the zip format cannot store."""
+        stamp = max(path.stat().st_mtime, ZIP_SAFE_EPOCH)
+        entry = zipfile.ZipInfo(arcname, date_time=time.localtime(stamp)[:6])
+        entry.compress_type = zipfile.ZIP_DEFLATED
+        entry.external_attr = 0o644 << 16
+        with path.open("rb") as src, zf.open(entry, "w") as dest:
+            shutil.copyfileobj(src, dest)
+
     info(f"packing {len(members)} files for {len(rows)} targets")
     with zipfile.ZipFile(OUT_PATH, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as zf:
         for arcname, path in members:
-            zf.write(path, arcname=arcname)
+            add(zf, path, arcname)
             manifest["files"][arcname] = {
                 "bytes": path.stat().st_size,
                 "sha256": sha256_of(path),

@@ -12,6 +12,7 @@ and read the result back with the real reader.
 
 from __future__ import annotations
 
+import base64
 import io
 import json
 import re
@@ -157,12 +158,74 @@ def test_every_registry_flag_exists_on_the_real_cli():
 
 def test_bundle_round_trips_every_member(built_bundle):
     members = bundle.unpack(built_bundle.content)
-    assert set(members) == {
+    # A subset check, not equality: the repo packages the bundle carries are
+    # asserted by test_bundle_carries_every_repo_module_boltzmaker_imports, which
+    # derives them from BoltzMaker.py's own imports. Pinning the full set here
+    # would mean every legitimate addition breaks an unrelated test.
+    assert {
         "BoltzMaker.py", "README.md", "boltz_input.md", "config.json",
         "pack_results.py", "pixi.lock", "pixi.toml", "run_campaign.sh",
-    }
+    } <= set(members)
     assert members["BoltzMaker.py"] == (REPO_ROOT / "BoltzMaker.py").read_bytes()
     assert members["pixi.lock"] == (REPO_ROOT / "pixi.lock").read_bytes()
+
+
+def test_bundle_carries_every_repo_module_boltzmaker_imports(built_bundle):
+    """Derived from BoltzMaker.py's own imports, not from a hand-kept list.
+
+    Shipping only the script produced a bundle that ran a 45-minute campaign
+    successfully and then died in `analyze` with "ModuleNotFoundError: No module
+    named 'sse_comparison'". A list of directories maintained by hand would have
+    stayed wrong the same way; this reads the imports out of the source, so a new
+    repo-local import fails here rather than an hour into someone's run.
+    """
+    members = bundle.unpack(built_bundle.content)
+    source = (REPO_ROOT / "BoltzMaker.py").read_text()
+
+    # Local packages are the importable top-level directories of the repo.
+    local_packages = {
+        path.name for path in REPO_ROOT.iterdir()
+        if path.is_dir() and (path / "__init__.py").is_file()
+    }
+    imported = {
+        name for name in re.findall(r"^\s*(?:from|import)\s+([A-Za-z_][\w.]*)", source, re.M)
+        if name.split(".")[0] in local_packages
+    }
+    assert imported, "no repo-local imports found -- has the import style changed?"
+
+    for dotted in sorted(imported):
+        module_path = dotted.replace(".", "/")
+        assert any(name == f"{module_path}.py" or name.startswith(f"{module_path}/")
+                   for name in members), f"{dotted} is imported but not shipped in the bundle"
+
+
+def test_bundle_carries_the_vendored_dashboard_assets(built_bundle):
+    """BoltzMaker reads these off disk when it writes the offline dashboard."""
+    members = bundle.unpack(built_bundle.content)
+    source = (REPO_ROOT / "BoltzMaker.py").read_text()
+    for filename in re.findall(r'"vendor"\s*/\s*"([^"]+)"', source):
+        assert f"vendor/{filename}" in members, f"vendor/{filename} is read at runtime but not shipped"
+
+
+def test_bundle_members_carry_zip_safe_timestamps(built_bundle):
+    """A fixed mtime is what makes builds reproducible, but the epoch is before the
+    earliest date a zip can represent -- and the campaign's own pack_results.py zips
+    these very files at the end of a run. Epoch-dated members made it die with "ZIP
+    does not support timestamps before 1980" after the compute was already done."""
+    import io as _io
+    import tarfile
+    payload = built_bundle.content.rsplit(b"__BOLTZMAKER_PAYLOAD__\n", 1)[1]
+    with tarfile.open(fileobj=_io.BytesIO(base64.b64decode(payload)), mode="r:gz") as tar:
+        stamps = [(member.name, member.mtime) for member in tar.getmembers()]
+    assert stamps
+    for name, mtime in stamps:
+        assert mtime >= 315532800, f"{name} is dated before 1980 and cannot be zipped"
+
+
+def test_no_compiled_bytecode_is_shipped(built_bundle):
+    members = bundle.unpack(built_bundle.content)
+    assert not [name for name in members if name.endswith((".pyc", ".pyo"))]
+    assert not [name for name in members if "__pycache__" in name]
 
 
 def test_generated_shell_scripts_are_valid_bash(tmp_path, built_bundle):

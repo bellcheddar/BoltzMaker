@@ -832,6 +832,7 @@ rather than an hour into a run on your machine) and downloads
 | File | What it is |
 |---|---|
 | `boltz_input.md` | Your campaign spec, tidied to the house style. Editable. |
+| `sse_comparison/`, `vendor/` | The compare-sse package BoltzMaker imports during `analyze`, and the Plotly and 3Dmol builds the offline dashboard embeds. `vendor/` is most of the bundle's size and is included so the run needs nothing from the network beyond the model weights. |
 | `config.json` | The run settings, machine-readable. Provenance; not read at run time. |
 | `run_campaign.sh` | Installs the environment, runs the campaign, packs the results. |
 | `pack_results.py` | Writes the `.bmz`. |

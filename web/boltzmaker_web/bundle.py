@@ -53,10 +53,30 @@ BMZ_VERSION = 1
 # Files copied verbatim from the repo into every bundle.
 REPO_FILES = ("BoltzMaker.py", "pixi.toml", "pixi.lock")
 
+# Directories copied whole. BoltzMaker.py is not self-contained: it imports
+# sse_comparison for compare-sse, and reads the vendored Plotly and 3Dmol builds
+# off disk when it writes the dashboard. Shipping only the script produced a
+# bundle that ran a 45-minute campaign successfully and then died in `analyze`
+# with "ModuleNotFoundError: No module named 'sse_comparison'" -- the worst
+# possible place to discover a missing file.
+#
+# vendor/ is 4.9MB of third-party JavaScript and dominates the bundle size. It
+# is included anyway: the whole promise is a self-contained run, and without it
+# the offline dashboard cannot embed its own charts.
+REPO_DIRS = ("sse_comparison", "vendor")
+
+# Never packed: compiled bytecode is per-interpreter, and the bundle's Python is
+# not necessarily the one that produced it.
+_SKIP_DIR_NAMES = {"__pycache__", ".pytest_cache"}
+_SKIP_SUFFIXES = {".pyc", ".pyo"}
+
 # Guard against a pathological spec turning into a multi-hundred-MB download.
 # Real campaigns are tiny here -- the payload is dominated by pixi.lock (~300KB)
 # and BoltzMaker.py (~200KB), so anything near this is a bug, not a big campaign.
 MAX_BUNDLE_BYTES = 32 * 1024 * 1024
+
+# 1980-01-01T00:00:00Z, the earliest timestamp the zip format can represent.
+_ZIP_SAFE_EPOCH = 315532800
 
 
 class BundleError(ValueError):
@@ -134,7 +154,13 @@ def _pack(files: dict[str, bytes]) -> bytes:
             data = files[name]
             info = tarfile.TarInfo(name=name)
             info.size = len(data)
-            info.mtime = 0
+            # 1980-01-01, not 0. A fixed timestamp is what makes two builds of the
+            # same inputs byte-identical, but the epoch is before the earliest date
+            # a zip can represent -- and the campaign's own pack_results.py zips
+            # these very files at the end of a run, so epoch-dated members made it
+            # die with "ZIP does not support timestamps before 1980" after the
+            # compute was already done.
+            info.mtime = _ZIP_SAFE_EPOCH
             info.uid = info.gid = 0
             info.uname = info.gname = ""
             # The two scripts must arrive executable; the user is told to run
@@ -220,6 +246,26 @@ def build(campaign_name: str, md_text: str, cfg: dict[str, Any], target_count: i
                 "BoltzMaker checkout, so the bundle cannot be assembled."
             )
         files[name] = path.read_bytes()
+
+    for dirname in REPO_DIRS:
+        root = REPO_ROOT / dirname
+        if not root.is_dir():
+            raise BundleError(
+                f"{dirname}/ not found at {root} -- BoltzMaker.py imports it at "
+                "analyze time, so a bundle without it would fail after the run."
+            )
+        found = 0
+        for path in sorted(root.rglob("*")):
+            if not path.is_file():
+                continue
+            if path.suffix in _SKIP_SUFFIXES:
+                continue
+            if _SKIP_DIR_NAMES.intersection(path.relative_to(REPO_ROOT).parts):
+                continue
+            files[str(path.relative_to(REPO_ROOT))] = path.read_bytes()
+            found += 1
+        if not found:
+            raise BundleError(f"{dirname}/ contains no files to ship -- refusing to build.")
 
     payload = base64.b64encode(_pack(files))
     slug = context["campaign_slug"]
