@@ -374,7 +374,8 @@ def _report_panels(session: Path, loaded: bmz.Results) -> tuple:
                 continue                      # a duplicated table or note
             seen_charts |= panel_charts
             seen_titles.add(panel.title)
-            panels.append({"title": panel.title, "html": panel.html, "wide": panel.wide})
+            panels.append({"title": panel.title, "html": panel.html,
+                           "wide": panel.wide, "kind": panel.kind})
         charts.extend(spec for spec in specs if spec["id"] not in
                       {existing["id"] for existing in charts})
 

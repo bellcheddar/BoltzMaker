@@ -77,22 +77,33 @@
     appeared.  #}
 <div class="md-card" id="detail-card">
   <h2 id="detail-title">Target</h2>
+  {#  Four panes of equal width, rather than a tall column beside a short one: the
+      pose used to leave most of its half empty while the metrics table ran on
+      below the fold.  #}
   <div class="md-detail-grid">
-    <div>
+    <div class="md-detail-pane">
       <h3 class="md-sub">Predicted pose</h3>
-      <div id="viewer" class="md-viewer"></div>
+      <div class="md-detail-body"><div id="viewer" class="md-viewer"></div></div>
       <div class="md-viewer-controls">
         <button type="button" class="md-btn md-btn-secondary" data-style="cartoon">Cartoon</button>
         <button type="button" class="md-btn md-btn-secondary" data-style="surface">Surface</button>
         <button type="button" class="md-btn md-btn-secondary" data-style="spin">Spin</button>
       </div>
-      <p class="md-hint" id="viewer-note"></p>
+      <p class="md-hint" id="viewer-note" style="margin-bottom:0"></p>
     </div>
-    <div>
+    <div class="md-detail-pane">
+      <h3 class="md-sub">Interaction diagram</h3>
+      <div class="md-detail-body" id="detail-diagram"></div>
+    </div>
+    <div class="md-detail-pane">
       <h3 class="md-sub">Detected interactions</h3>
-      <div id="detail-plip"></div>
+      <div class="md-detail-body" id="detail-plip"></div>
+    </div>
+    <div class="md-detail-pane">
       <h3 class="md-sub">Metrics</h3>
-      <table class="md-check-table" id="detail-metrics"></table>
+      <div class="md-detail-body">
+        <table class="md-check-table" id="detail-metrics"></table>
+      </div>
     </div>
   </div>
 </div>
@@ -103,7 +114,7 @@
   {% if slot.panel.title == 'pIC50 vs confidence score' %}
   <p class="md-hint" style="margin-top:0">Click a point to open that target above.</p>
   {% endif %}
-  <div class="md-report-panel">{{ slot.panel.html | safe }}</div>
+  <div class="md-report-panel md-report-{{ slot.panel.kind }}">{{ slot.panel.html | safe }}</div>
 </div>
 {% endif %}
 

@@ -194,6 +194,7 @@ var BoltzExplorer = (function () {
       metrics.appendChild(tr);
     });
 
+    // Counts and diagram are separate panes now, so each is filled on its own.
     var plip = document.getElementById("detail-plip");
     plip.innerHTML = "";
     if (t.plip_total) {
@@ -213,13 +214,25 @@ var BoltzExplorer = (function () {
         : "No protein-ligand interactions were detected for this target.";
       plip.appendChild(none);
     }
+
+    var diagram = document.getElementById("detail-diagram");
+    diagram.innerHTML = "";
     if (t.image) {
       var img = document.createElement("img");
       img.src = "/auto/analysis/" + token + "/image/" + encodeURIComponent(t.id);
       img.alt = "Detected interactions for " + (t.name || t.id);
       img.className = "md-plip-image";
       img.loading = "lazy";
-      plip.appendChild(img);
+      diagram.appendChild(img);
+    } else {
+      var noDiagram = document.createElement("p");
+      noDiagram.className = "md-hint";
+      // An apo target has no ligand, so there is nothing for PLIP to draw --
+      // which is different from PLIP having failed, and should not read as it.
+      noDiagram.textContent = t.ligand
+        ? "No interaction diagram was produced for this target."
+        : "This target has no ligand, so there are no interactions to draw.";
+      diagram.appendChild(noDiagram);
     }
 
     loadStructure(t);

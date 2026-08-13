@@ -170,16 +170,102 @@ img, canvas { max-width: 100%; height: auto; }
 
 /* ---- panels lifted from the generated reports ---- */
 .md-card-wide { grid-column: 1 / -1; }
-/* The reports are laid out for a full-width page; their tables are wider than
-   this column, so each scrolls in its own box rather than widening the page. */
-.md-report-panel { overflow-x: auto; }
-.md-report-panel table { border-collapse: collapse; font-size: 12.5px; width: 100%; }
-.md-report-panel th, .md-report-panel td {
-  border: 1px solid var(--md-border); padding: 5px 8px; text-align: left; vertical-align: top;
+
+/* No horizontal scrollbar. The reports are laid out for a full-width page and
+   their widest table runs to eighteen columns, so fitting it means letting cells
+   wrap rather than letting the panel scroll: a scrollbar hides the columns that
+   matter (the RMSD figures are at the right-hand end) behind a gesture. */
+.md-report-panel { overflow-x: visible; }
+.md-report-panel table {
+  border-collapse: collapse; width: 100%; table-layout: auto;
+  font-size: 12.5px; font-variant-numeric: tabular-nums;
 }
+.md-report-panel th, .md-report-panel td {
+  border: 1px solid var(--md-border); padding: 5px 7px; text-align: left;
+  vertical-align: top;
+}
+/* Headers break between words only. `anywhere` lets a column shrink to one
+   character, which produced "Liga nd" and "Mo tif" across the eighteen-column
+   table -- a header split mid-word is harder to read than a slightly wider column. */
+.md-report-panel th { overflow-wrap: break-word; }
+/* Cells may break anywhere: the identifiers here are single unbroken tokens
+   (HTR2A_GNAI1+GNB1+GNG2_8NU) that would otherwise set the column width alone. */
+.md-report-panel td { overflow-wrap: anywhere; }
 .md-report-panel th { background: var(--md-bg-alt); font-weight: 600; }
+/* A wide table earns tighter type: eighteen columns at 12.5px would wrap every
+   header onto four lines. */
+.md-report-wide-table table { font-size: 11px; }
+.md-report-wide-table th, .md-report-wide-table td { padding: 4px 5px; }
 .md-report-panel img { max-width: 100%; height: auto; display: block; margin: 0 auto; }
 .md-report-panel .plotly-graph-div { width: 100% !important; }
+.md-report-panel > p:last-child { margin-bottom: 0; }
+
+/* ---- ligand structures ---- */
+/* The report styles these classes in its own <style>, which is stripped along
+   with every other style and script, so they arrive here with no styling at all:
+   the legend ran together as one line of text and the grid stacked. */
+.md-report-ligands { display: flex; flex-direction: column; gap: 16px; }
+.lig-grid-legend { display: flex; flex-wrap: wrap; gap: 8px 16px; font-size: 12px; order: 0; }
+.lig-legend-item { display: inline-flex; align-items: center; gap: 6px; color: var(--md-text-muted); }
+.lig-badge {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 20px; height: 18px; padding: 0 6px; border-radius: 9px;
+  color: #fff; font-size: 10px; font-weight: 700; line-height: 1;
+}
+#lig-grid { order: 1; }
+/* auto-FILL, not auto-fit: with auto-fit the empty tracks collapse, so a campaign
+   with one ligand stretches its single structure across the whole panel. auto-fill
+   keeps them, so one ligand sits in a normal-sized cell and twelve lay out in an
+   even grid, without either case being special. */
+.lig-page {
+  display: grid; gap: 16px;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+}
+.lig-cell {
+  border: 1px solid var(--md-border); border-radius: var(--md-radius);
+  padding: 14px; background: var(--md-bg-alt);
+  display: flex; flex-direction: column; align-items: center; gap: 10px;
+}
+.lig-cell img { max-width: 100%; height: auto; }
+/* The name sits with its structure, not adrift above the grid. */
+.lig-cell-header {
+  display: flex; align-items: center; justify-content: center; gap: 8px;
+  font-weight: 700; font-size: 14px; width: 100%;
+}
+.lig-badges { display: inline-flex; gap: 4px; }
+.lig-cell-desc {
+  font-family: 'Roboto Mono', monospace; font-size: 11.5px;
+  color: var(--md-text-muted); text-align: center; margin-top: auto;
+}
+.lig-footnote { order: 2; font-size: 12px; color: var(--md-text-muted); margin: 0; }
+/* Downloads last, as on every other panel. */
+.md-report-ligands > p:not(.lig-footnote) { order: 3; margin: 0; }
+.md-report-ligands > p:not(.lig-footnote) a {
+  display: inline-block; padding: 6px 14px; border-radius: 20px; font-size: 13px;
+  border: 1px solid var(--md-primary); color: var(--md-primary); text-decoration: none;
+  margin-right: 8px;
+}
+.md-report-ligands > p:not(.lig-footnote) a:hover { background: var(--md-bg-alt); }
+
+/* ---- target detail: four equal panes ---- */
+.md-detail-grid {
+  display: grid; gap: 16px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.md-detail-pane {
+  border: 1px solid var(--md-border); border-radius: var(--md-radius);
+  padding: 14px; background: var(--md-bg-alt);
+  display: flex; flex-direction: column; min-width: 0;
+}
+.md-detail-pane .md-sub { margin-top: 0; }
+/* Each pane the same height, so the four read as a set rather than as a tall
+   column beside a short one. */
+.md-detail-pane > .md-detail-body { flex: 1; min-height: 300px; display: flex; flex-direction: column; }
+.md-viewer { width: 100%; flex: 1; min-height: 300px; border: 1px solid var(--md-border);
+  border-radius: var(--md-radius); background: var(--md-surface); position: relative; }
+.md-plip-image { width: 100%; border: 1px solid var(--md-border);
+  border-radius: var(--md-radius); background: #fff; }
+.md-detail-pane table.md-check-table { font-size: 12.5px; }
 
 /* ---- runs table ---- */
 .md-runs-empty { text-align: center; padding: 30px 20px; color: var(--md-text-muted); font-size: 14px; }
@@ -221,14 +307,11 @@ tr.md-row-active { background: #e8f1fb; }
   border-radius: 10px; padding: 2px 8px; margin-right: 4px; white-space: nowrap;
 }
 
-.md-detail-grid { display: grid; gap: 20px; grid-template-columns: 1fr 1fr; }
 .md-sub { font-size: 13px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--md-text-muted); margin: 0 0 8px; }
-.md-viewer { width: 100%; height: 360px; border: 1px solid var(--md-border); border-radius: var(--md-radius); background: var(--md-bg-alt); position: relative; }
 .md-viewer-controls { display: flex; gap: 6px; margin-top: 10px; flex-wrap: wrap; }
 .md-viewer-controls .md-btn { padding: 5px 14px; font-size: 12px; }
 .md-plip-list { list-style: none; padding: 0; margin: 0 0 12px; font-size: 13px; }
 .md-plip-list li { padding: 3px 0; border-bottom: 1px dotted var(--md-border); }
-.md-plip-image { width: 100%; border: 1px solid var(--md-border); border-radius: var(--md-radius); margin-bottom: 12px; }
 
 /* ---- preflight check table ---- */
 table.md-check-table { border-collapse: collapse; font-size: 13px; width: 100%; }
@@ -252,7 +335,9 @@ tr.md-check-na .md-check-fail { color: var(--md-text-muted); }
   .md-main { padding: 14px; }
   .md-card { padding: 14px; }
   .md-tool-grid, .md-mode-grid, .md-detail-grid { grid-template-columns: 1fr; }
+  .lig-page { grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); }
+  .md-report-panel table { font-size: 11px; }
   .md-stat-row { gap: 18px; }
-  .md-viewer { height: 280px; }
+  .md-viewer { min-height: 260px; }
   .md-mode-card { padding: 18px; }
 }

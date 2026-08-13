@@ -117,6 +117,11 @@ class Panel:
     title: str
     html: str
     wide: bool = False
+    #: What the panel contains, so the stylesheet can target it without matching
+    #: on the title. The reports carry their own <style>, which is stripped along
+    #: with every other script and style, so their class names arrive unstyled and
+    #: this page has to dress them.
+    kind: str = "plain"
 
 
 class _Sanitiser(HTMLParser):
@@ -264,7 +269,17 @@ def extract(html: str) -> tuple:
             continue
         body = card[title_match.end():] if title_match else card
         body = body.rsplit("</div>", 1)[0]
-        panels.append(Panel(title=title, html=_sanitise(body),
+        html = _sanitise(body)
+        if "lig-grid" in html:
+            kind = "ligands"
+        elif re.search(r"<table", html) and len(re.findall(r"<th\b", html)) >= 12:
+            # A wide table: the secondary-structure one runs to eighteen columns.
+            kind = "wide-table"
+        elif "<table" in html:
+            kind = "table"
+        else:
+            kind = "plain"
+        panels.append(Panel(title=title, html=html, kind=kind,
                             wide="md-card-span2" in card))
 
     kept_ids = {match for panel in panels

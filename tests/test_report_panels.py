@@ -183,3 +183,42 @@ def test_the_combined_secondary_structure_panel_is_dropped():
         "<p>x</p></div>"
         "<div class='md-card'><h2>Family coverage</h2><p>y</p></div></main>")
     assert [p.title for p in panels] == ["Family coverage"]
+
+
+# ===========================================================================
+#  Panel kinds -- what the stylesheet hangs off
+# ===========================================================================
+
+def test_a_ligand_panel_is_recognised():
+    """The reports carry their own <style>, which is stripped with every other
+    style and script, so their class names arrive here unstyled. The kind is what
+    lets this page dress them without matching on the title."""
+    panels, _ = reports.extract(
+        "<main><div class='md-card'><h2>Ligand structures</h2>"
+        "<div id='lig-grid'><div class='lig-page'><div class='lig-cell'>x</div></div></div>"
+        "</div></main>")
+    assert panels[0].kind == "ligands"
+
+
+def test_a_wide_table_is_recognised():
+    """Eighteen columns at the normal size wraps every header onto four lines."""
+    headers = "".join(f"<th>c{i}</th>" for i in range(18))
+    panels, _ = reports.extract(
+        f"<main><div class='md-card'><h2>SSE motif shifts</h2>"
+        f"<table><tr>{headers}</tr></table></div></main>")
+    assert panels[0].kind == "wide-table"
+
+
+def test_an_ordinary_table_is_not_treated_as_wide():
+    headers = "".join(f"<th>c{i}</th>" for i in range(3))
+    panels, _ = reports.extract(
+        f"<main><div class='md-card'><h2>Family coverage</h2>"
+        f"<table><tr>{headers}</tr></table></div></main>")
+    assert panels[0].kind == "table"
+
+
+def test_a_chart_panel_has_no_table_styling_applied():
+    panels, _ = reports.extract(
+        "<main><div class='md-card'><h2>Ranked confidence</h2>"
+        "<div id='chart-confidence'></div></div></main>")
+    assert panels[0].kind == "plain"
