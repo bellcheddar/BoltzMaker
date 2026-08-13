@@ -105,6 +105,11 @@ class ProteinInput:
     # structure is the comparison reference and no ligand-free prediction is made for
     # this protein: measured beats predicted.
     apo_pdb: str = ""
+    # Predict a ligand-free companion of this protein. On by default, and
+    # independent of apo_pdb: an experimental structure is the better thing to
+    # measure against, but a predicted apo of the user's own construct is worth
+    # having alongside it, and is a target in its own right.
+    apo_predict: bool = True
 
 
 @dataclass
@@ -171,15 +176,24 @@ def assemble_boltz_input_md(
 
     if compare_sse:
         for p in proteins:
-            if p.apo_pdb:
-                if apo_reference_paths.get(p.name):
-                    apo_reference[p.name] = apo_reference_paths[p.name]
-                continue
-            companion = apo_companion_name(p.name, used_names)
-            used_names.add(companion)
-            apo_companions.append(ProteinInput(name=companion, sequence=p.sequence,
-                                               partner_names=list(p.partner_names)))
-            apo_reference[p.name] = f"boltz_cif/{companion}_model_0.cif"
+            experimental = apo_reference_paths.get(p.name) if p.apo_pdb else None
+
+            companion_path = None
+            if p.apo_predict:
+                companion = apo_companion_name(p.name, used_names)
+                used_names.add(companion)
+                apo_companions.append(ProteinInput(name=companion, sequence=p.sequence,
+                                                   partner_names=list(p.partner_names)))
+                companion_path = f"boltz_cif/{companion}_model_0.cif"
+
+            # A family can name exactly one apo structure, so when both exist the
+            # experimental one wins: it is a measurement, and the prediction is a
+            # prediction. The companion is still computed and still appears in the
+            # results as its own target -- a predicted apo of the user's own
+            # construct, which the deposited entry generally is not.
+            reference = experimental or companion_path
+            if reference:
+                apo_reference[p.name] = reference
 
     for p in proteins:
         block = [f"Protein: {p.name}", f"Sequence: {p.sequence.strip()}"]

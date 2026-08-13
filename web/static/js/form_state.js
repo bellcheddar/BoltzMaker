@@ -101,6 +101,9 @@ var BoltzFormState = (function () {
         });
       });
     });
+
+    // Rows were rebuilt from scratch, so their checkbox ordinals are all stale.
+    BoltzWizard.renumberAll();
   }
 
   // ---- persistence ---------------------------------------------------------

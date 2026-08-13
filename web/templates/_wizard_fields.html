@@ -65,8 +65,26 @@
       <label>Apo structure PDB id (optional)</label>
       <input type="text" name="protein_apo_pdb[]" maxlength="4" placeholder="e.g. 2RH1">
       <p class="md-hint">An experimental ligand-free structure of this protein, for the
-        apo-vs-holo comparison. Leave blank and one is predicted instead, as an extra
-        ligand-free target. A real structure is the better reference when you have one.</p>
+        apo-vs-holo comparison. mmCIF is used where the PDB has no legacy file, which is
+        the case for most recent cryo-EM entries.</p>
+    </div>
+    {#  The value is the row's ordinal, stamped by wizard.js, not a plain "on".
+        An unchecked box posts nothing at all, so a bare name="...[]" checkbox would
+        shift every later row's value up by one -- the same silent misalignment that
+        dropped ligands when the identifier type was a shared radio group. Posting
+        indices means the server reads a set of checked rows and cannot be confused
+        by which ones are missing.  #}
+    <div class="md-field">
+      <label style="font-weight:400">
+        <input type="checkbox" name="protein_apo_predict[]" value="0" checked>
+        Also predict a ligand-free structure of this protein
+      </label>
+      <p class="md-hint">On by default, and independent of the box above. With a PDB id
+        set, the experimental structure is what compare-sse measures against and this adds
+        a predicted apo of your own construct alongside it, as its own target. With no PDB
+        id, this prediction <i>is</i> the reference. Unticking both leaves the protein with
+        no apo reference, so it is skipped by the comparison. Each prediction is an extra
+        target to compute.</p>
     </div>
   </div>
 </template>

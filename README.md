@@ -832,10 +832,20 @@ produce a secondary-structure comparison, and the skip option had nothing to ski
 
 Each protein now gets an apo reference automatically:
 
-| Apo structure PDB id | What happens |
-|---|---|
-| left blank (default) | A ligand-free companion of that protein is predicted, as an extra target, and the holo families point at its CIF. This is the idiom the bundled 5HT2 example uses. |
-| a PDB id, e.g. `2RH1` or `9LL9` | That experimental structure is fetched here, shipped inside the bundle, and used as the reference. No companion is predicted: measured beats predicted. mmCIF is fetched in preference to legacy PDB, since many recent entries (large complexes, most cryo-EM) are published only as mmCIF. |
+Each protein row carries an optional **Apo structure PDB id** and an **Also predict a
+ligand-free structure** box, ticked by default. They are independent:
+
+| PDB id | Predict box | What happens |
+|---|---|---|
+| blank | **on** (default) | A ligand-free companion of that protein is predicted as an extra target, and the holo families point at its CIF. This is the idiom the bundled 5HT2 example uses. |
+| `2RH1`, `9LL9`, … | **on** (default) | The experimental structure is fetched, shipped in the bundle, and used as the reference, **and** a companion is predicted alongside it as its own target. The deposited entry is usually a different construct (another species, a fusion partner, a thermostabilising mutation), so a predicted apo of your own sequence is worth having next to it. |
+| `2RH1`, `9LL9`, … | off | Only the experimental structure. Nothing extra is computed. |
+| blank | off | That protein has no apo reference, so the comparison skips it. |
+
+A family can name exactly one `Apo structure:`, so when both exist the experimental one is
+what compare-sse measures against: it is a measurement and the other is a prediction. mmCIF
+is fetched in preference to legacy PDB, since many recent entries (large complexes, most
+cryo-EM) are published only as mmCIF.
 
 It is not free. Each companion is another target: one protein with one ligand doubles the
 campaign, while one protein with six ligands adds a seventh. Ticking **Skip apo-vs-holo

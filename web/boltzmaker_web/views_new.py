@@ -71,13 +71,26 @@ def _parse_form() -> tuple[bool, list[ProteinInput], list[PartnerInput], list[Li
     protein_sequences = request.form.getlist("protein_sequence[]")
     protein_partners_raw = request.form.getlist("protein_partners[]")  # comma-separated
     protein_apo_raw = request.form.getlist("protein_apo_pdb[]")
+    # A set of row ordinals, not a parallel array: an unchecked box posts nothing,
+    # so this field is shorter than the others by however many were left unticked.
+    # Anything unparseable is ignored rather than shifting a row's meaning.
+    apo_predict_rows = set()
+    for raw in request.form.getlist("protein_apo_predict[]"):
+        try:
+            apo_predict_rows.add(int(raw))
+        except (TypeError, ValueError):
+            continue
+    # A page cached from before this field existed posts none of them at all. That
+    # must not silently turn the default off for everyone still on the old page, so
+    # absence of the field entirely means "default", not "all unticked".
+    apo_field_present = "protein_apo_predict[]" in request.form
     proteins: list[ProteinInput] = []
     # zip_longest, not zip: the apo field was added after this form shipped, and a
     # cached page (or a saved page file from before it existed) posts one fewer array.
     # Plain zip would silently drop the last protein rather than defaulting its apo.
-    for raw_name, seq, partners_csv, apo_raw in itertools.zip_longest(
+    for row_index, (raw_name, seq, partners_csv, apo_raw) in enumerate(itertools.zip_longest(
             protein_names_raw, protein_sequences, protein_partners_raw, protein_apo_raw,
-            fillvalue=""):
+            fillvalue="")):
         if not raw_name.strip() and not seq.strip():
             continue
         name = validate_name(raw_name, used_names, field="protein_name")
@@ -91,8 +104,11 @@ def _parse_form() -> tuple[bool, list[ProteinInput], list[PartnerInput], list[Li
                     f"Protein '{name}' references partner '{pn}', which isn't defined above.",
                     field="protein_partners",
                 )
-        proteins.append(ProteinInput(name=name, sequence=seq, partner_names=chosen_partners,
-                                     apo_pdb=clean_pdb_id(apo_raw)))
+        proteins.append(ProteinInput(
+            name=name, sequence=seq, partner_names=chosen_partners,
+            apo_pdb=clean_pdb_id(apo_raw),
+            apo_predict=(row_index in apo_predict_rows) if apo_field_present else True,
+        ))
 
     protein_names_defined = {p.name for p in proteins}
     constraint_owners = request.form.getlist("constraint_owner[]")

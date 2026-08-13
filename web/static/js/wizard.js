@@ -22,6 +22,7 @@ var BoltzWizard = (function () {
     if (btn) {
       btn.addEventListener("click", function () {
         rowEl.remove();
+        renumberAll();
         document.dispatchEvent(new CustomEvent("boltz:form-changed"));
       });
     }
@@ -36,6 +37,24 @@ var BoltzWizard = (function () {
     var rowEl = container.lastElementChild;
     wireRemove(rowEl);
     return rowEl;
+  }
+
+  // Row-ordinal stamping. Checkboxes inside repeating rows post nothing when
+  // unchecked, so a shared name="x[]" cannot say WHICH rows were ticked. Giving each
+  // one its row index as its value turns the post into a set of indices, which is
+  // unambiguous however many are left unticked.
+  function renumber(group) {
+    var container = document.getElementById(group.container);
+    if (!container) return;
+    var rows = container.querySelectorAll(".md-repeat-block");
+    for (var i = 0; i < rows.length; i++) {
+      var boxes = rows[i].querySelectorAll('input[type="checkbox"][name$="[]"]');
+      for (var j = 0; j < boxes.length; j++) boxes[j].value = String(i);
+    }
+  }
+
+  function renumberAll() {
+    GROUPS.forEach(renumber);
   }
 
   function groupFor(key) {
@@ -62,6 +81,7 @@ var BoltzWizard = (function () {
     if (!btn) return;
     btn.addEventListener("click", function () {
       addRow(group.template, group.container);
+      renumber(group);
       document.dispatchEvent(new CustomEvent("boltz:form-changed"));
     });
     if (group.seed) addRow(group.template, group.container);
@@ -69,10 +89,12 @@ var BoltzWizard = (function () {
 
   document.addEventListener("DOMContentLoaded", function () {
     GROUPS.forEach(wireAdd);
+    renumberAll();
     // Announce that the default rows exist, so anything restoring saved state knows
     // the DOM it is about to replace is ready.
     document.dispatchEvent(new CustomEvent("boltz:wizard-ready"));
   });
 
-  return { GROUPS: GROUPS, addRowFor: addRowFor, clearRows: clearRows };
+  return { GROUPS: GROUPS, addRowFor: addRowFor, clearRows: clearRows,
+           renumber: renumber, renumberAll: renumberAll };
 })();

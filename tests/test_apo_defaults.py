@@ -91,16 +91,6 @@ def test_companion_names_do_not_collide_across_many_proteins():
 
 # ---- a real experimental structure ---------------------------------------
 
-def test_a_named_pdb_replaces_the_companion_rather_than_adding_to_it():
-    """Measured beats predicted: if a real apo structure is given there is no
-    reason to spend GPU time predicting one."""
-    spec = _spec(proteins=[ProteinInput(name="T4L", sequence=SEQUENCE, apo_pdb="2RH1")],
-                 apo_reference_paths={"T4L": "reference/2rh1.pdb"})
-    assert "Apo structure: reference/2rh1.pdb" in spec
-    assert "Ligands: none" not in spec
-    assert spec.count("Protein:") == 1
-
-
 @pytest.mark.parametrize("raw,expected", [("2rh1", "2RH1"), ("  6LU7 ", "6LU7"), ("", "")])
 def test_pdb_ids_are_normalised(raw, expected):
     assert clean_pdb_id(raw) == expected
@@ -224,3 +214,71 @@ def test_a_malformed_pdb_id_stops_at_the_form(client):
     response = client.post("/auto/prepare", data=_form(protein_apo_pdb="NOPE"))
     assert response.headers.get("Content-Disposition") is None
     assert "is not a PDB id" in response.data.decode()
+
+
+# ---- the companion is independent of the PDB id ---------------------------
+
+def test_a_named_pdb_still_gets_a_predicted_companion_by_default():
+    """Both, not either. The deposited entry is generally a different construct --
+    a different species, a fusion partner, a thermostabilising mutation -- so a
+    predicted apo of the user's own sequence is worth having alongside it."""
+    spec = _spec(proteins=[ProteinInput(name="T4L", sequence=SEQUENCE, apo_pdb="2RH1")],
+                 apo_reference_paths={"T4L": "reference/2rh1.cif"})
+    assert "Apo structure: reference/2rh1.cif" in spec, "measured must be the reference"
+    assert "Protein: T4LAP" in spec, "the companion should still be predicted"
+    assert "Ligands: none" in spec
+
+
+def test_the_experimental_structure_wins_as_the_reference():
+    """A family can name exactly one apo structure. When both exist the measured
+    one is what compare-sse measures against; the prediction is still a target."""
+    spec = _spec(proteins=[ProteinInput(name="T4L", sequence=SEQUENCE, apo_pdb="2RH1")],
+                 apo_reference_paths={"T4L": "reference/2rh1.cif"})
+    assert "Apo structure: boltz_cif/" not in spec
+
+
+def test_turning_the_companion_off_leaves_only_the_experimental_structure():
+    spec = _spec(proteins=[ProteinInput(name="T4L", sequence=SEQUENCE, apo_pdb="2RH1",
+                                        apo_predict=False)],
+                 apo_reference_paths={"T4L": "reference/2rh1.cif"})
+    assert "Apo structure: reference/2rh1.cif" in spec
+    assert "Ligands: none" not in spec
+
+
+def test_no_pdb_and_no_companion_means_no_comparison_for_that_protein():
+    spec = _spec(proteins=[ProteinInput(name="T4L", sequence=SEQUENCE, apo_predict=False)])
+    assert "Apo structure" not in spec
+    assert spec.count("Protein:") == 1
+
+
+def test_checked_rows_are_read_as_ordinals_not_a_parallel_array(client):
+    """An unchecked box posts nothing, so this field is shorter than the others by
+    however many were left unticked. Read as a parallel array it would shift every
+    later row -- the same silent misalignment that once dropped ligands.
+    """
+    form = MultiDict([("campaign_name", "Mixed")])
+    for name in ("PA", "PB", "PC"):
+        form.add("protein_name[]", name)
+        form.add("protein_sequence[]", SEQUENCE)
+        form.add("protein_partners[]", "")
+        form.add("protein_apo_pdb[]", "")
+    form.add("protein_apo_predict[]", "0")      # first row ticked
+    form.add("protein_apo_predict[]", "2")      # third row ticked, middle one not
+    form.add("ligand_name[]", "BNZ")
+    form.add("ligand_kind[]", "smiles")
+    form.add("ligand_value[]", "c1ccccc1")
+
+    spec = bundle.unpack(client.post("/auto/prepare", data=form).data)["boltz_input.md"].decode()
+    declared = re.findall(r"^Protein: (\S+)$", spec, re.M)
+    assert "PAAP" in declared and "PCAP" in declared
+    assert "PBAP" not in declared, "the unticked middle row was shifted"
+
+
+def test_a_page_predating_the_field_still_gets_the_default(client):
+    """A browser holding a cached copy of the form posts none of these. That must
+    not read as "every row unticked", which would quietly disable the default for
+    everyone who had not hard-refreshed."""
+    form = _form()
+    assert "protein_apo_predict[]" not in form
+    spec = bundle.unpack(client.post("/auto/prepare", data=form).data)["boltz_input.md"].decode()
+    assert "Ligands: none" in spec
