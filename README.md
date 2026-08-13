@@ -532,10 +532,29 @@ hardware may not be viable for a complex that size), not something to force thro
 
 ## ⚙️ Progress, and how long a run will take
 
-Two rows during `run`. The outer bar shows targets done/total, elapsed time, live memory
-across the whole Boltz process tree, and an ETA. The inner row shows which **phase** Boltz
-is in (MSA generation / structure prediction / affinity prediction), parsed from its log
-output.
+Two rows during `run`, laid out as a metrics rail: a state mark, a label, the bar, then every
+measurable value right-aligned in a fixed-width column.
+
+```
+▶ targets    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━  3/15  2h14m   ~3h40m
+  structure  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━        18m04s  ▓▓▓░░░░░  21.4/69G
+```
+
+The top row is the campaign: targets done, elapsed, and the estimate. The second is the
+**phase** Boltz is in (MSA generation / structure prediction / affinity prediction), parsed
+from its log output, with its own clock and the memory gauge.
+
+Only the bar is elastic. Everything else has a fixed width and is right-aligned in tabular
+figures, so digits sit under digits and a phase name changing length no longer drags the row
+sideways. The state mark replaces the second spinner: <span>▶</span> running,
+<span>⏸</span> paused, <span>■</span> stopping, always in the same column.
+
+**The memory gauge is filled against the point this machine starts to hurt, not against
+installed RAM** -- the same `MEMORY_THRASH_FRACTION` the swap-thrash warning uses. A 4-chain
+GPCR complex took ~65GB on a 64GB Mac and thrashed for 20 minutes with no progress; measured
+against total memory that run would have looked merely "quite full" until the moment it died.
+The gauge turns amber at 60% of that ceiling and red at 85%, so it changes colour before the
+log starts complaining rather than after.
 
 **Boltz exposes no diffusion- or recycling-step-level progress** anywhere in its output
 (verified against the installed package's source), so that is the finest granularity

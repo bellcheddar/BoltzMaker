@@ -229,3 +229,64 @@ def test_controls_are_unavailable_without_a_terminal(bm, tree):
     assert controls.available is False       # pytest captures stdin
     controls.start()                          # must be a no-op, not an error
     controls.stop()
+
+
+# ===========================================================================
+#  The status rail
+# ===========================================================================
+
+def test_the_memory_gauge_is_read_against_the_thrash_point(bm):
+    """Not against installed RAM. A 4-chain complex took ~65GB on a 64GB Mac and
+    swap-thrashed for 20 minutes with no progress; measured against total memory
+    that run would have looked merely "quite full" right up until it died. The
+    ceiling is the same fraction the thrash warning already uses, so the gauge
+    turns red where the log starts complaining."""
+    empty, colour = bm._memory_gauge(0.0, 69)
+    assert empty == "\u2591" * 8 and colour == bm._RICH_GREEN
+
+    # 62.1GB is 0.90 * 69, the point the run is considered to be in trouble.
+    full, colour = bm._memory_gauge(62.1, 69)
+    assert full == "\u2593" * 8 and colour == bm._RICH_RED
+
+    # Past the ceiling the gauge stays full rather than overflowing its column.
+    over, _ = bm._memory_gauge(200.0, 69)
+    assert len(over) == 8
+
+
+def test_the_gauge_changes_colour_before_it_is_too_late(bm):
+    green = bm._memory_gauge(21, 69)[1]
+    amber = bm._memory_gauge(40, 69)[1]
+    red = bm._memory_gauge(55, 69)[1]
+    assert (green, amber, red) == (bm._RICH_GREEN, bm._RICH_AMBER, bm._RICH_RED)
+
+
+def test_a_machine_with_no_reported_memory_does_not_divide_by_zero(bm):
+    assert bm._memory_gauge(4.0, 0) == ("", bm._RICH_GREEN)
+
+
+def test_compact_durations_fit_a_fixed_column(bm):
+    """The estimate lives in a 13-character column. _format_duration renders
+    "1h 13m 31s" -- eleven characters of which the last three are noise on an
+    hour-long estimate, and enough to shift the column as it ticks."""
+    assert bm._compact_duration(4411) == "1h13m"
+    assert bm._compact_duration(605) == "10m05s"
+    assert bm._compact_duration(45) == "45s"
+    assert all(len(bm._compact_duration(s)) <= 7
+               for s in (0, 59, 60, 3599, 3600, 86399, 359999))
+
+
+def test_every_state_has_its_own_mark(bm):
+    """One glyph in a fixed position, replacing the second spinner: two spinners
+    turning in step for a single process said nothing the first had not."""
+    assert set(bm._STATE_GLYPHS) == {"running", "paused", "stopping"}
+    marks = [g for g in bm._STATE_GLYPHS.values()]
+    assert len(set(marks)) == 3, "the states must be distinguishable at a glance"
+
+
+def test_long_phase_names_are_shortened_rather_than_truncated(bm):
+    """Truncating "structure prediction" and "affinity prediction" to ten
+    characters yields "structure " and "affinity p" -- the word that tells them
+    apart is the one that gets cut."""
+    for full, short in bm._PHASE_SHORT.items():
+        assert len(short) <= bm._LABEL_WIDTH, f"{short} does not fit the label column"
+    assert bm._PHASE_SHORT["structure prediction"] != bm._PHASE_SHORT["affinity prediction"]

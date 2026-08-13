@@ -587,13 +587,18 @@ import psutil
 from rich import box as _rich_box
 from rich.console import Console
 from rich.table import Table
-from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn, TimeElapsedColumn, TimeRemainingColumn
+from rich.progress import Progress, BarColumn, TextColumn
+from rich.table import Column
 
 # marcdeller.com brand palette, for rich components (Table/Progress) that render
 # post-bootstrap -- matches the plain-ANSI _BLUE/_AMBER/_GREEN used pre-bootstrap above.
 _RICH_BLUE = "#1e73be"
 _RICH_AMBER = "#fcb900"
 _RICH_GREEN = "#00d084"
+# The brand's alert colour, matching --md-accent-red in the dashboard CSS. The
+# preflight table used a bare "red", which is the terminal's own red and does not
+# match anything else BoltzMaker draws.
+_RICH_RED = "#d81b8c"
 from openpyxl.styles import Font
 from openpyxl.utils import get_column_letter
 from openpyxl.formatting.rule import ColorScaleRule
@@ -1952,6 +1957,67 @@ def _historical_seconds_per_target(campaign_dir: Path, accelerator: str) -> tupl
     return median, len(per_target)
 
 
+# Wide enough for "structure prediction" abbreviated, narrow enough to leave the
+# bar room on an 80-column terminal.
+_LABEL_WIDTH = 10
+
+# One mark, always in the same place, replacing the second spinner: two spinners
+# turning in step for one process said nothing the first had not.
+_STATE_GLYPHS = {
+    "running": f"[{_RICH_GREEN}]\u25b6[/{_RICH_GREEN}]",
+    "paused": f"[{_RICH_AMBER}]\u23f8[/{_RICH_AMBER}]",
+    "stopping": f"[{_RICH_RED}]\u25a0[/{_RICH_RED}]",
+}
+
+# The phase names Boltz reports are too long for a 10-character column, and
+# truncation would lose the word that distinguishes them.
+_PHASE_SHORT = {
+    "structure prediction": "structure",
+    "affinity prediction": "affinity",
+    "MSA": "MSA",
+    "starting": "starting",
+}
+
+
+def _compact_duration(seconds: float) -> str:
+    """A duration for a fixed-width column: no spaces, no more precision than the
+    scale deserves. _format_duration renders "1h 13m 31s", which is eleven
+    characters of which the last three are noise on an hour-long estimate."""
+    seconds = int(max(0, seconds))
+    h, rem = divmod(seconds, 3600)
+    m, s = divmod(rem, 60)
+    if h:
+        return f"{h}h{m:02d}m"
+    if m:
+        return f"{m}m{s:02d}s"
+    return f"{s}s"
+
+
+def _memory_gauge(rss_gb: float, total_gb: float, width: int = 8) -> tuple:
+    """A small bar for memory, and the colour to draw it in.
+
+    Filled against the point where this machine starts to hurt, not against total
+    RAM. A 4-chain GPCR complex took ~65GB on a 64GB Mac and swap-thrashed for 20
+    minutes with no progress, which is the failure this gauge exists to make
+    visible -- and measured against 69GB of installed memory that run would have
+    shown a gauge that was merely "quite full" until the moment it died. The
+    threshold is the same one the thrash warning already uses, so the gauge turns
+    red at the point the log starts complaining rather than at some other number.
+    """
+    if total_gb <= 0:
+        return "", _RICH_GREEN
+    ceiling = MEMORY_THRASH_FRACTION * total_gb
+    fraction = max(0.0, min(rss_gb / ceiling, 1.0)) if ceiling else 0.0
+    filled = int(round(width * fraction))
+    if fraction >= 0.85:
+        colour = _RICH_RED
+    elif fraction >= 0.60:
+        colour = _RICH_AMBER
+    else:
+        colour = _RICH_GREEN
+    return ("\u2593" * filled) + ("\u2591" * (width - filled)), colour
+
+
 MEMORY_THRASH_FRACTION = 0.90  # fraction of total system RAM considered "at risk of thrashing"
 MEMORY_THRASH_SECONDS = 60  # how long sustained high memory must persist before warning
 
@@ -2367,11 +2433,17 @@ def _run_boltz_batch(pending: list, total_pending: int, manifest_len: int, compl
     # because a target count only moves when a target completes -- on a single-target
     # campaign it never moves at all until the end.
     history_per_target, history_runs = _historical_seconds_per_target(campaign_dir, accelerator)
+    # Short enough for a fixed-width column; where it came from is stated once here,
+    # rather than re-rendered on every frame as a sentence that changes width.
     if history_per_target:
-        eta_initial = (f"~{_format_duration(history_per_target * total)} left "
-                       f"(from {history_runs} past run{'s' if history_runs != 1 else ''})")
+        eta_initial = f"~{_format_duration(history_per_target * total)}"
+        _info(f"estimate: about {_format_duration(history_per_target * total)} for {total} "
+              f"target(s), from the median of {history_runs} past "
+              f"run{'s' if history_runs != 1 else ''} of this campaign on {accelerator}.")
     else:
-        eta_initial = "ETA unknown (no past runs to judge by)"
+        eta_initial = "ETA --"
+        _info("no past runs of this campaign to estimate from -- the ETA appears once the "
+              "first target finishes.")
     controls = _RunControls(proc).start()
     if controls.available:
         # _info is a plain print, not a rich Console, so rich markup would appear
@@ -2381,17 +2453,30 @@ def _run_boltz_batch(pending: list, total_pending: int, manifest_len: int, compl
     else:
         _info("run controls need a terminal -- not available when piped or under nohup.")
     try:
+        # Every measurable value is right-aligned in a fixed-width column, and only
+        # the bar is elastic. Previously each field simply followed the text before
+        # it, so a phase name changing length dragged the whole row sideways and no
+        # two numbers ever sat under each other. Two columns are also gone: the
+        # elapsed clock was rendered on both rows (identical, because both tasks
+        # start together) and the memory column printed "mem:" on the phase row,
+        # whose value is deliberately empty.
         with Progress(
-            SpinnerColumn(spinner_name="dots", style=f"bold {_RICH_BLUE}"),
-            TextColumn(f"[bold {_RICH_BLUE}]{{task.description}}[/bold {_RICH_BLUE}]"),
-            BarColumn(complete_style=_RICH_GREEN, finished_style=_RICH_GREEN, pulse_style=_RICH_AMBER),
-            TextColumn("{task.fields[count]}"), TimeElapsedColumn(),
-            TextColumn(f"[{_RICH_BLUE}]{{task.fields[eta]}}[/{_RICH_BLUE}]"),
-            TextColumn(f"[{_RICH_AMBER}]mem: {{task.fields[mem]}}[/{_RICH_AMBER}]"),
+            TextColumn("{task.fields[state]}", table_column=Column(width=1)),
+            TextColumn(f"[bold {_RICH_BLUE}]{{task.description}}[/bold {_RICH_BLUE}]",
+                        table_column=Column(width=_LABEL_WIDTH, no_wrap=True)),
+            BarColumn(complete_style=_RICH_GREEN, finished_style=_RICH_GREEN,
+                       pulse_style=_RICH_AMBER),
+            TextColumn("{task.fields[count]}", table_column=Column(width=6, justify="right")),
+            TextColumn(f"[{_RICH_GREEN}]{{task.fields[clock]}}[/{_RICH_GREEN}]",
+                        table_column=Column(width=8, justify="right")),
+            TextColumn("{task.fields[gauge]}", table_column=Column(width=9, justify="right")),
+            TextColumn("{task.fields[right]}", table_column=Column(width=13, justify="right")),
         ) as progress:
-            outer = progress.add_task("targets", total=total, mem="", eta=eta_initial,
-                                       count=f"0/{total}")
-            inner = progress.add_task("phase: starting", total=None, mem="", eta="", count="")
+            blank = {"state": "", "count": "", "clock": "", "gauge": "", "right": ""}
+            outer = progress.add_task("targets", total=total,
+                                       **{**blank, "state": _STATE_GLYPHS["running"],
+                                          "count": f"0/{total}", "right": eta_initial})
+            inner = progress.add_task("starting", total=None, **blank)
             first_done_at = None
             done_prev = 0
             while proc.poll() is None:
@@ -2410,44 +2495,57 @@ def _run_boltz_batch(pending: list, total_pending: int, manifest_len: int, compl
                 # Prefer what this run has actually measured over anything historical:
                 # once a target has finished here, that is this machine, this campaign,
                 # this configuration, today.
+                # The estimate is short and fixed-width: its provenance was a
+                # 38-character sentence in a column, which is why nothing lined up.
+                # Where it came from is said once, before the bars start.
                 if done > 0:
                     working = now - run_start - controls.paused_seconds - controls.paused_for()
                     measured = max(working, 1.0) / done
-                    eta_str = f"~{_format_duration(measured * (total - done))} left"
+                    eta_str = f"~{_compact_duration(measured * (total - done))}"
                 elif history_per_target:
-                    eta_str = (f"~{_format_duration(history_per_target * total)} left "
-                               f"(from {history_runs} past run{'s' if history_runs != 1 else ''})")
+                    eta_str = f"~{_compact_duration(history_per_target * total)}"
                 else:
-                    eta_str = "ETA unknown (no past runs to judge by)"
+                    eta_str = "ETA --"
 
-                mem_str = f"{mem_state['rss_gb']:.1f}/{total_ram_gb:.0f}GB"
                 if controls.paused:
-                    eta_str = f"PAUSED {_format_duration(controls.paused_for())} -- press p to resume"
-                progress.update(outer, completed=done, mem=mem_str, eta=eta_str,
+                    state = _STATE_GLYPHS["paused"]
+                    # Labelled: a bare duration in the estimate's column reads as an
+                    # estimate, and this is the opposite -- time the run is not working.
+                    right = (f"[{_RICH_AMBER}]held {_compact_duration(controls.paused_for())}"
+                             f"[/{_RICH_AMBER}]")
+                else:
+                    state = _STATE_GLYPHS["running"]
+                    right = eta_str
+
+                progress.update(outer, completed=done, state=state,
+                                description="paused" if controls.paused else "targets",
                                 count=f"{done}/{total}",
-                                description="targets (paused)" if controls.paused else "targets")
+                                clock=_compact_duration(now - run_start), right=right)
 
                 # Boltz's own rate string is only meaningful while it is still being
                 # refreshed. For a single target it is written once and never again, so
                 # showing it indefinitely presents a stale snapshot as live data.
                 fresh_rate = phase["rate"] and (now - phase["updated"]) < 60
-                in_phase = _format_duration(now - phase["since"])
-                suffix = f" [{phase['rate']}]" if fresh_rate else f" ({in_phase} in this phase)"
                 # total=None renders a pulsing bar. A determinate bar is only honest
                 # when Boltz is actually reporting items, which for one target it is not.
                 inner_total = phase["total"] if phase["total"] > 1 else None
-                inner_desc = (f"phase: {phase['name']} -- suspended, nothing is being recomputed"
-                              if controls.paused else f"phase: {phase['name']}{suffix}")
+                gauge, gauge_colour = _memory_gauge(mem_state["rss_gb"], total_ram_gb)
                 progress.update(
                     inner, completed=phase["done"], total=inner_total,
-                    description=inner_desc, mem="", eta="",
+                    description=_PHASE_SHORT.get(phase["name"], phase["name"])[:_LABEL_WIDTH],
                     count="" if inner_total is None else f"{phase['done']}/{inner_total}",
+                    clock=phase["rate"].split("<")[0].strip() if fresh_rate
+                          else _compact_duration(now - phase["since"]),
+                    gauge=f"[{gauge_colour}]{gauge}[/{gauge_colour}]",
+                    # One decimal: a 3.7GB working set rounds to 4 and a 0.4GB one to
+                    # zero, which reads as "no memory in use" rather than "barely any".
+                    right=f"[{gauge_colour}]{mem_state['rss_gb']:.1f}/{total_ram_gb:.0f}G[/{gauge_colour}]",
                 )
                 time.sleep(1)
             reader_thread.join(timeout=5)
             done = sum(1 for t in pending if _target_complete(pred_dir, t.stem, t.needs_affinity))
             progress.update(outer, completed=done, count=f"{done}/{total}",
-                            mem=f"{mem_state['rss_gb']:.1f}/{total_ram_gb:.0f}GB")
+                            clock=_compact_duration(time.time() - run_start))
     except KeyboardInterrupt:
         print()
         if controls.paused:
