@@ -360,3 +360,37 @@ def test_a_legend_with_no_title_is_left_alone():
         '<span class="legend-item"><svg><circle r="1"/></svg> a</span>'
         '</div></div></main>')
     assert "legend-group" not in panels[0].html
+
+
+# --- the charts are sized by explorer.js, so these read the file it ships ------
+
+def _explorer_js() -> str:
+    from pathlib import Path
+    return (Path(__file__).resolve().parents[1]
+            / "web" / "static" / "js" / "explorer.js").read_text()
+
+
+def test_every_chart_is_given_the_same_margins():
+    """Plot areas match only if the margins do. Reinstating Math.max here -- which
+    is what the code did before -- lets a chart with a long y label quietly grow a
+    bigger margin than its neighbours, and the axes stop lining up down the page."""
+    js = _explorer_js()
+    assert "var CHART_MARGIN = {" in js
+    assert "layout.margin = { t: CHART_MARGIN.t" in js
+    assert "Math.max(layout.margin" not in js
+
+
+def test_automargin_is_off():
+    """automargin sizes the margin to the labels, which is the one thing that makes
+    every plot area a different size. The labels are shortened to fit instead."""
+    js = _explorer_js()
+    assert "layout.xaxis.automargin = false;" in js
+    assert "layout.yaxis.automargin = false;" in js
+
+
+def test_the_right_margin_leaves_room_for_a_legend():
+    """The reserve has to hold the widest thing drawn outside a plot -- the binder
+    probability colourbar with its title -- or it lands on top of the axes."""
+    js = _explorer_js()
+    match = re.search(r"var CHART_MARGIN = \{[^}]*r:\s*(\d+)", js)
+    assert match and int(match.group(1)) >= 150

@@ -22,6 +22,10 @@ var BoltzExplorer = (function () {
   // inside it: the alternative, clipping the panel, removed the labels instead of
   // containing them.
   var CHART_HEIGHT = 420;
+  // One margin for every chart. b holds a rotated, shortened category label; l
+  // holds a y title plus tick labels, including a heatmap's row names; r holds a
+  // legend or colourbar. Every plot area is then the same box.
+  var CHART_MARGIN = { t: 20, b: 110, l: 120, r: 170 };
   var viewer = null;
   var current = null;
   var sortKey = "confidence";
@@ -418,22 +422,25 @@ var BoltzExplorer = (function () {
         var layout = spec.layout || {};
         layout.height = CHART_HEIGHT;
         layout.autosize = true;
-        // Never shrink what the report asked for. Overriding margin.b from the
-        // report's 100 down to 40 was what pushed the rotated labels out of the
-        // panel and across the card below -- the opposite of the intent.
-        layout.margin = layout.margin || {};
-        layout.margin.t = 20;
-        layout.margin.l = Math.max(layout.margin.l || 0, 60);
-        layout.margin.r = Math.max(layout.margin.r || 0, 20);
-        layout.margin.b = Math.max(layout.margin.b || 0, 80);
+        // Identical margins on every chart, which is what makes the plot AREAS the
+        // same size rather than merely the containers. The right margin is sized
+        // for the widest thing that sits outside a plot -- a colourbar with its
+        // title, on pIC50 vs binder probability -- and charts without a legend
+        // simply leave it empty, because a row of plots whose axes start and end
+        // at different x is harder to compare than one with some white space.
+        layout.margin = { t: CHART_MARGIN.t, b: CHART_MARGIN.b,
+                          l: CHART_MARGIN.l, r: CHART_MARGIN.r };
         // automargin on BOTH axes, and created if the report did not define them.
         // Guarding on `if (layout.xaxis)` left it off wherever the report had no
         // axis block, and the rotated category labels then ran straight out of
         // the panel and across the card below.
         layout.xaxis = layout.xaxis || {};
         layout.yaxis = layout.yaxis || {};
-        layout.xaxis.automargin = true;
-        layout.yaxis.automargin = true;
+        // automargin OFF, deliberately. It expands the margin to fit the labels,
+        // which is exactly what makes every plot area a different size; the labels
+        // are shortened below so they fit the fixed margin instead.
+        layout.xaxis.automargin = false;
+        layout.yaxis.automargin = false;
         shortenCategories(spec.data, layout);
         // -75 is almost vertical, which is what made short labels take so much
         // height. Shortened labels read fine at -45.
