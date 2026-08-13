@@ -114,30 +114,81 @@ def test_bad_pdb_ids_are_refused(raw):
         clean_pdb_id(raw)
 
 
-def test_a_missing_pdb_entry_is_reported_not_swallowed():
-    class NotFound:
-        def __call__(self, url, timeout=None):
+class _Response:
+    def __init__(self, body): self.body = body
+    def __enter__(self): return self
+    def __exit__(self, *a): return False
+    def read(self, n=None): return self.body
+
+
+class _Server:
+    """Serves only the formats it was given, 404s the rest -- like the real RCSB."""
+
+    def __init__(self, **bodies):
+        self.bodies = bodies
+        self.asked = []
+
+    def __call__(self, url, timeout=None):
+        extension = url.rsplit(".", 1)[1]
+        self.asked.append(extension)
+        if extension not in self.bodies:
             import urllib.error
             raise urllib.error.HTTPError(url, 404, "Not Found", {}, None)
+        return _Response(self.bodies[extension])
 
+
+def test_an_entry_published_only_as_mmcif_is_fetched():
+    """The bug this covers reported a real structure as nonexistent.
+
+    The legacy PDB format cannot represent a large modern entry, so the RCSB does
+    not publish a .pdb for many recent depositions. Asking only for .pdb gave a
+    404 and, from it, the flatly untrue message "the PDB has no entry 9LL9" --
+    9LL9 being a real cryo-EM 5-HT2A-Gq complex, mmCIF only.
+    """
+    server = _Server(cif=b"data_9LL9\n_entry.id 9LL9\n")
+    data, extension = apo.fetch("9LL9", opener=server)
+    assert extension == "cif"
+    assert data.startswith(b"data_")
+
+
+def test_mmcif_is_preferred_when_both_formats_exist():
+    """mmCIF is canonical and complete; the legacy file for a large entry can be
+    truncated or split. gemmi reads either, so there is no reason to prefer .pdb."""
+    server = _Server(cif=b"data_2RH1\n", pdb=b"HEADER    MEMBRANE PROTEIN\n")
+    _data, extension = apo.fetch("2RH1", opener=server)
+    assert extension == "cif"
+    assert server.asked == ["cif"], "the legacy file should not even be requested"
+
+
+def test_a_legacy_only_entry_still_works():
+    server = _Server(pdb=b"HEADER    OLD ENTRY\n")
+    data, extension = apo.fetch("1ABC", opener=server)
+    assert extension == "pdb"
+    assert data.startswith(b"HEADER")
+    assert server.asked == ["cif", "pdb"]
+
+
+def test_no_entry_is_only_claimed_when_neither_format_exists():
+    server = _Server()
     with pytest.raises(apo.ApoFetchError) as exc:
-        apo.fetch("9ZZZ", opener=NotFound())
+        apo.fetch("9ZZZ", opener=server)
     assert "no entry" in str(exc.value)
+    assert server.asked == ["cif", "pdb"], "both formats must be tried before saying that"
 
 
 def test_an_error_page_is_not_mistaken_for_a_structure():
     """A 200 carrying HTML would otherwise be shipped as a structure and fail
     inside the run, hours later."""
-    class HtmlPage:
-        def __call__(self, url, timeout=None):
-            return self
-        def __enter__(self): return self
-        def __exit__(self, *a): return False
-        def read(self, n=None): return b"<html><body>Service unavailable</body></html>"
-
+    server = _Server(cif=b"<html><body>Service unavailable</body></html>")
     with pytest.raises(apo.ApoFetchError) as exc:
-        apo.fetch("2RH1", opener=HtmlPage())
-    assert "does not look like a PDB file" in str(exc.value)
+        apo.fetch("2RH1", opener=server)
+    assert "does not look like a structure file" in str(exc.value)
+
+
+def test_the_reference_path_carries_the_format_actually_retrieved():
+    """gemmi infers the format from the filename, so a .cif named .pdb is a trap."""
+    assert apo.reference_path("9LL9", "cif") == "reference/9ll9.cif"
+    assert apo.reference_path("2RH1", "pdb") == "reference/2rh1.pdb"
 
 
 # ---- through the form -----------------------------------------------------

@@ -835,7 +835,7 @@ Each protein now gets an apo reference automatically:
 | Apo structure PDB id | What happens |
 |---|---|
 | left blank (default) | A ligand-free companion of that protein is predicted, as an extra target, and the holo families point at its CIF. This is the idiom the bundled 5HT2 example uses. |
-| a PDB id, e.g. `2RH1` | That experimental structure is fetched here, shipped inside the bundle, and used as the reference. No companion is predicted: measured beats predicted. |
+| a PDB id, e.g. `2RH1` or `9LL9` | That experimental structure is fetched here, shipped inside the bundle, and used as the reference. No companion is predicted: measured beats predicted. mmCIF is fetched in preference to legacy PDB, since many recent entries (large complexes, most cryo-EM) are published only as mmCIF. |
 
 It is not free. Each companion is another target: one protein with one ligand doubles the
 campaign, while one protein with six ligands adds a seventh. Ticking **Skip apo-vs-holo

@@ -152,10 +152,10 @@ def prepare():
             if not protein.apo_pdb:
                 continue
             try:
-                data = apo.fetch(protein.apo_pdb)
+                data, extension = apo.fetch(protein.apo_pdb)
             except apo.ApoFetchError as exc:
                 return _render_prepare(defaults=cfg, error=str(exc), form=request.form)
-            path = apo.reference_path(protein.apo_pdb)
+            path = apo.reference_path(protein.apo_pdb, extension)
             extra_files[path] = data
             apo_paths[protein.name] = path
 
