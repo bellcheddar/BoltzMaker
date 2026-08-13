@@ -196,7 +196,17 @@ img, canvas { max-width: 100%; height: auto; }
    header onto four lines. */
 .md-report-wide-table table { font-size: 11px; }
 .md-report-wide-table th, .md-report-wide-table td { padding: 4px 5px; }
+/* Images from the reports -- the selectivity heatmap and the ligand grid -- are
+   rendered by matplotlib at whatever aspect their data implies. A one-family,
+   one-ligand heatmap comes out as a wide letterbox with a rotated label longer
+   than the plot, so they are capped to the same height the charts use and left
+   to keep their aspect within it. */
 .md-report-panel img { max-width: 100%; height: auto; display: block; margin: 0 auto; }
+.md-report-plot img { max-height: 340px; width: auto; }
+.md-report-plot { display: flex; align-items: center; justify-content: center; min-height: 340px; }
+/* The plotly divs are given the same height in JS; this stops the container
+   collapsing before they draw, so the page does not jump as each one appears. */
+.md-report-plain .plotly-graph-div { min-height: 420px; }
 .md-report-panel .plotly-graph-div { width: 100% !important; }
 .md-report-panel > p:last-child { margin-bottom: 0; }
 

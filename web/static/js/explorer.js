@@ -17,6 +17,11 @@ var BoltzExplorer = (function () {
 
   var data = null;
   var token = null;
+  // Every report chart is drawn at this height, so the panels line up as a set.
+  // One height for every report chart. Tall enough that a rotated axis label fits
+  // inside it: the alternative, clipping the panel, removed the labels instead of
+  // containing them.
+  var CHART_HEIGHT = 420;
   var viewer = null;
   var current = null;
   var sortKey = "confidence";
@@ -64,7 +69,7 @@ var BoltzExplorer = (function () {
 
   function visibleTargets() {
     var text = (document.getElementById("filter-text").value || "").toLowerCase().trim();
-    var family = document.getElementById("filter-family").value;
+    var family = document.getElementById("filter-protein").value;
     var flaggedOnly = document.getElementById("filter-flagged").checked;
 
     return data.targets.filter(function (t) {
@@ -323,7 +328,7 @@ var BoltzExplorer = (function () {
     token = sessionToken;
     data = JSON.parse(document.getElementById("results-payload").textContent);
 
-    ["filter-text", "filter-family", "filter-flagged"].forEach(function (id) {
+    ["filter-text", "filter-protein", "filter-flagged"].forEach(function (id) {
       var el = document.getElementById(id);
       el.addEventListener(el.tagName === "INPUT" && el.type !== "checkbox" ? "input" : "change",
                           renderTable);
@@ -357,18 +362,85 @@ var BoltzExplorer = (function () {
     if (opening) select(opening.id, true);
   }
 
+  // A target name like "HTR2A_GNAI1+GNB1+GNG2_8NU" is 25 characters, and a dozen
+  // of them rotated at 45 degrees take more height than the plot itself. The axis
+  // is shortened and the full name kept on hover, which is where anyone reading a
+  // specific bar looks anyway.
+  var MAX_TICK = 16;
+
+  function shorten(value) {
+    return (typeof value === "string" && value.length > MAX_TICK)
+      ? value.slice(0, MAX_TICK - 1) + "\u2026" : value;
+  }
+
+  function shortenCategories(traces, layout) {
+    // The labels are NOT in the traces. These charts plot against numeric
+    // positions (x: [0]) and carry the names in layout.xaxis.ticktext, which is
+    // why a first attempt that read trace.x changed nothing at all.
+    var axis = layout.xaxis;
+    if (axis && Array.isArray(axis.ticktext)) {
+      axis.ticktext = axis.ticktext.map(shorten);
+    }
+    (traces || []).forEach(function (trace) {
+      if (Array.isArray(trace.x) && trace.x.some(function (v) { return typeof v === "string"; })) {
+        if (!trace.hovertext) trace.hovertext = trace.x.slice();
+        trace.x = trace.x.map(shorten);
+      }
+      // Heatmaps label both axes.
+      if (Array.isArray(trace.y) && trace.type === "heatmap") trace.y = trace.y.map(shorten);
+      if (Array.isArray(trace.x) && trace.type === "heatmap") trace.x = trace.x.map(shorten);
+    });
+  }
+
   function plotReportCharts(specs) {
     if (!window.Plotly || !Array.isArray(specs)) return;
     specs.forEach(function (spec) {
       var host = document.getElementById(spec.id);
       if (!host) return;      // its panel was dropped
+      // The report's own div carries an inline height (260px, sized to its own
+      // layout) and the sanitiser keeps style attributes, so plotting at a
+      // different height drew a 420px chart inside a 260px box, which spilled
+      // over the card below. The container is told the height too, not just Plotly.
+      host.style.height = CHART_HEIGHT + "px";
+      host.style.width = "100%";
       try {
         // Responsive is forced on: the reports were laid out for a full-width
         // page and these panels are narrower.
         var config = spec.config || {};
         config.responsive = true;
         config.displaylogo = false;
-        Plotly.newPlot(host, spec.data, spec.layout || {}, config);
+
+        // One height for every chart. The reports size each plot to its own
+        // content, so a thirteen-bar chart came out twice the height of a
+        // one-row heatmap and the panels read as a jumble of different objects.
+        // autosize lets width follow the panel; automargin keeps the rotated
+        // category labels inside the box rather than clipped by it.
+        var layout = spec.layout || {};
+        layout.height = CHART_HEIGHT;
+        layout.autosize = true;
+        // Never shrink what the report asked for. Overriding margin.b from the
+        // report's 100 down to 40 was what pushed the rotated labels out of the
+        // panel and across the card below -- the opposite of the intent.
+        layout.margin = layout.margin || {};
+        layout.margin.t = 20;
+        layout.margin.l = Math.max(layout.margin.l || 0, 60);
+        layout.margin.r = Math.max(layout.margin.r || 0, 20);
+        layout.margin.b = Math.max(layout.margin.b || 0, 80);
+        // automargin on BOTH axes, and created if the report did not define them.
+        // Guarding on `if (layout.xaxis)` left it off wherever the report had no
+        // axis block, and the rotated category labels then ran straight out of
+        // the panel and across the card below.
+        layout.xaxis = layout.xaxis || {};
+        layout.yaxis = layout.yaxis || {};
+        layout.xaxis.automargin = true;
+        layout.yaxis.automargin = true;
+        shortenCategories(spec.data, layout);
+        // -75 is almost vertical, which is what made short labels take so much
+        // height. Shortened labels read fine at -45.
+        if (layout.xaxis.tickangle === undefined || layout.xaxis.tickangle < -50) {
+          layout.xaxis.tickangle = -45;
+        }
+        Plotly.newPlot(host, spec.data, layout, config);
         // The report's own confidence-against-affinity scatter is the one kept, so
         // it takes over the job of opening a target.
         if (spec.id === "chart-scatter") wireScatterClicks(host);

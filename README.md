@@ -903,7 +903,7 @@ it is quick regardless of campaign size.
 
 | Panel | What you get |
 |---|---|
-| **Header** | Campaign name, target count, family count, how many targets are flagged, how many carry a structure. An explicit warning if targets are missing from the summary because the campaign did not fully complete. |
+| **Header** | Campaign name, how many predictions the campaign produced, how many are flagged, how many carry a structure. An explicit warning if targets are missing from the summary because the campaign did not fully complete. |
 | **Targets** | Sortable, filterable table: target, family, ligand, confidence, pIC50, interaction count and flags. Filter by free text, by family, or to flagged targets only. Click any row to open it. |
 | **Target detail** | Four equal panes: an interactive 3D pose viewer (cartoon, surface or spin, ligand always drawn as sticks), PLIP's labelled interaction diagram, the detected interactions by type, and the full metric set including pTM, ipTM, complex pLDDT, predicted affinity and pIC50 with its ensemble spread. Open on the first target from the start, rather than waiting for a click that on a one-target campaign there was nothing to make. |
 
@@ -945,11 +945,15 @@ is deliberately no horizontal affinity threshold line, because drawing one would
 cutoff the numbers do not support.
 
 An open target is deep-linkable -- the URL carries it, so a link to one target can be shared
-or reloaded. Sessions last **two hours**, after which the upload is deleted and you would
-upload the file again. The **Download summary CSV** button gives you the full summary table
-including every column not shown in the browser. The complete offline report your bundle also
-wrote (`boltz_dashboard.html`, with its ligand grids and compare-sse charts) stays on your own
-machine next to the campaign folder.
+or reloaded. **Sessions do not expire on a clock**: an analysis link keeps working, and uploads
+are removed only when the space set aside for them fills, least recently opened first. The
+**Download summary CSV** button gives you the full summary table including every column not
+shown in the browser.
+
+A note on vocabulary: BoltzMaker calls each `Protein:` block a **family**, and its own reports
+use that word throughout. A campaign with one receptor and an apo companion therefore has two
+families, which reads oddly, so this page says **protein** for the same thing and counts
+**predictions** rather than families.
 
 ### Stepwise Mode
 

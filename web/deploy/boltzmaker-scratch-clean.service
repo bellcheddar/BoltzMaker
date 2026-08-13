@@ -12,11 +12,8 @@ User=boltzmaker
 # real request (analyze's own 300s subprocess timeout plus upload time), so this
 # never races a genuinely in-flight request.
 ExecStart=/usr/bin/find /opt/boltzmaker/web/scratch -mindepth 1 -maxdepth 1 -mmin +15 -exec rm -rf {} +
-# Analysis sessions (Fully Automated Mode) are swept separately and far less
-# aggressively. They deliberately live OUTSIDE scratch/ because they are not
-# per-request temp dirs: the explorer serves a structure per target on demand, so
-# a session has to survive as long as someone is reading it. +150 is the app's own
-# 2-hour TTL (SESSION_TTL_SECONDS in views_auto.py) plus headroom, so this only
-# ever removes sessions the app already considers expired -- the app sweeps them
-# itself on each upload, and this is the backstop for a site that goes quiet.
-ExecStart=/usr/bin/find /opt/boltzmaker/web/sessions -mindepth 1 -maxdepth 1 -mmin +150 -exec rm -rf {} +
+# Analysis sessions are deliberately NOT swept here. They do not expire on a
+# clock: an analysis link should still work tomorrow, and this timer used to
+# delete one two hours after it was made. The app bounds them by space instead
+# (MAX_SESSIONS and MAX_SESSION_BYTES in views_auto.py), removing the least
+# recently opened only when the archive would otherwise outgrow the host.

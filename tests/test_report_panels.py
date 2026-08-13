@@ -222,3 +222,62 @@ def test_a_chart_panel_has_no_table_styling_applied():
         "<main><div class='md-card'><h2>Ranked confidence</h2>"
         "<div id='chart-confidence'></div></div></main>")
     assert panels[0].kind == "plain"
+
+
+# ===========================================================================
+#  Dimensions and icons
+# ===========================================================================
+
+def test_inline_dimensions_are_dropped():
+    """The report sizes its own containers for its own full-width page. Kept,
+    they win: a chart plotted at 420px sat inside a wrapper the report had pinned
+    to 260px and spilled across the card below. Every element measured correctly
+    except that one wrapper, which is why it took measuring the whole ancestor
+    chain to find."""
+    panels, _ = reports.extract(
+        "<main><div class='md-card'><h2>T</h2>"
+        "<div style='height:260px; width:100%; background:#fff'>"
+        "<div id='chart-x' style='height:260px'></div></div></div></main>")
+    html = panels[0].html
+    assert "height" not in html
+    assert "background:#fff" in html, "other declarations must survive"
+
+
+def test_the_confidence_and_affinity_icons_survive():
+    """Every confidence and affinity cell is marked with a small inline svg. They
+    were being dropped wholesale, which removed the column's entire visual
+    language and left a legend explaining symbols no longer on the page."""
+    panels, _ = reports.extract(
+        "<main><div class='md-card'><h2>Summary table</h2><table><tr><td>"
+        "<span style='color:#00d084'><svg width='14' height='14' viewBox='0 0 24 24'>"
+        "<circle cx='12' cy='12' r='9' stroke='currentColor' stroke-width='2'/>"
+        "<path d='M12 2 L20 6'/></svg></span></td></tr></table></div></main>")
+    html = panels[0].html
+    assert "<svg" in html and "<circle" in html and "<path" in html
+    assert 'viewBox="0 0 24 24"' in html or 'viewbox="0 0 24 24"' in html
+
+
+@pytest.mark.parametrize("hostile,banned", [
+    ("<svg onload='steal()'><circle r='5'/></svg>", "onload"),
+    ("<svg><foreignObject><b>escape</b></foreignObject></svg>", "escape"),
+    ("<svg><use href='//evil#x'/></svg>", "evil"),
+    ("<svg><animate onbegin='steal()'/></svg>", "onbegin"),
+    ("<svg><image href='//evil.png'/></svg>", "evil"),
+])
+def test_the_dangerous_half_of_svg_is_still_refused(hostile, banned):
+    """Allowing the drawing subset must not let the acting part back in:
+    foreignObject is how arbitrary HTML re-enters an svg, and use/image can pull
+    in an external document."""
+    panels, _ = reports.extract(f"<main><div class='md-card'><h2>T</h2>{hostile}</div></main>")
+    joined = " ".join(p.html for p in panels).lower()
+    assert banned.lower() not in joined
+
+
+def test_an_image_only_panel_is_marked_as_a_plot():
+    """Matplotlib heatmaps arrive as images at whatever aspect their data implies;
+    a one-family, one-ligand heatmap is a wide letterbox with a rotated label
+    longer than the plot."""
+    panels, _ = reports.extract(
+        "<main><div class='md-card'><h2>Family x ligand selectivity</h2>"
+        "<img src='data:image/png;base64,AAA'></div></main>")
+    assert panels[0].kind == "plot"

@@ -20,8 +20,7 @@
   {% endif %}
 
   <div class="md-stat-row">
-    <div class="md-stat"><span class="md-stat-value" id="stat-shown">{{ results.targets | length }}</span><span class="md-stat-label">shown</span></div>
-    <div class="md-stat"><span class="md-stat-value">{{ results.families | length }}</span><span class="md-stat-label">families</span></div>
+    <div class="md-stat"><span class="md-stat-value" id="stat-shown">{{ results.targets | length }}</span><span class="md-stat-label">predictions</span></div>
     <div class="md-stat"><span class="md-stat-value" id="stat-flagged">0</span><span class="md-stat-label">flagged</span></div>
     <div class="md-stat"><span class="md-stat-value" id="stat-structures">0</span><span class="md-stat-label">structures</span></div>
   </div>
@@ -31,8 +30,8 @@
     <a class="md-btn md-btn-secondary" href="/auto/prepare" style="margin-left:6px">Prepare another campaign</a>
   </p>
   <p class="md-hint" style="margin-top:10px">
-    This session expires after two hours. The full report your bundle also wrote is on your own
-    machine as <code>boltz_dashboard.html</code>, next to the campaign folder.
+    This link keeps working. Uploads are held until the space set aside for them runs out, and
+    then the least recently opened are removed first &mdash; nothing is deleted on a timer.
   </p>
 </div>
 
@@ -46,8 +45,12 @@
   <h2>Targets</h2>
   <div class="md-filter-row">
     <input type="search" id="filter-text" placeholder="Filter by target, ligand or family...">
-    <select id="filter-family">
-      <option value="">All families</option>
+    {#  BoltzMaker calls each `Protein:` block a family, and its own reports below
+        use that word. In this campaign the two are HTR2A and its apo companion, so
+        "2 families" read as though there were two protein families. "Protein" is
+        what a family actually is, so that is what this says.  #}
+    <select id="filter-protein">
+      <option value="">All proteins</option>
       {% for family in results.families %}<option value="{{ family }}">{{ family }}</option>{% endfor %}
     </select>
     <label class="md-inline-check"><input type="checkbox" id="filter-flagged"> Flagged only</label>
@@ -57,7 +60,7 @@
       <thead>
         <tr>
           <th data-sort="name">Target</th>
-          <th data-sort="family">Family</th>
+          <th data-sort="family">Protein</th>
           <th data-sort="ligand">Ligand</th>
           <th data-sort="confidence" class="num">Confidence</th>
           <th data-sort="pic50" class="num">pIC50</th>

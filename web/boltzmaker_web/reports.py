@@ -35,10 +35,26 @@ _ALLOWED_TAGS = {
     "div", "span", "p", "br", "hr", "h2", "h3", "h4", "b", "strong", "i", "em",
     "ul", "ol", "li", "table", "thead", "tbody", "tfoot", "tr", "th", "td",
     "img", "code", "pre", "small", "sup", "sub", "a",
+    # A drawing-only subset of SVG. The reports mark every confidence and affinity
+    # cell with a small inline icon -- a shield and a target -- and dropping svg
+    # wholesale silently removed the column's entire visual language, leaving a
+    # legend that explained symbols no longer on the page. What is NOT here is the
+    # part of SVG that can act: script, foreignObject, use, image, and the
+    # animation elements, all of which stay in _DANGEROUS_CONTENT_TAGS or are
+    # simply absent from this list.
+    "svg", "g", "path", "circle", "ellipse", "rect", "line", "polyline", "polygon",
 }
 # Attributes worth keeping. `style` is allowed because the report uses it for
 # table column widths; `on*` handlers never are.
-_ALLOWED_ATTRS = {"class", "id", "src", "alt", "title", "colspan", "rowspan", "style", "href"}
+_ALLOWED_ATTRS = {
+    "class", "id", "src", "alt", "title", "colspan", "rowspan", "style", "href",
+    # Geometry and paint for the icon subset above. None of these can execute; the
+    # attributes that can (every on*) are excluded by not being named here.
+    "width", "height", "viewbox", "fill", "stroke", "stroke-width", "stroke-linecap",
+    "stroke-linejoin", "stroke-dasharray", "d", "cx", "cy", "r", "rx", "ry",
+    "x", "y", "x1", "y1", "x2", "y2", "points", "transform", "opacity",
+    "fill-rule", "clip-rule", "aria-hidden",
+}
 
 _SCRIPT_RE = re.compile(r"<script\b.*?</script\s*>", re.S | re.I)
 _STYLE_RE = re.compile(r"<style\b.*?</style\s*>", re.S | re.I)
@@ -109,7 +125,13 @@ def ordered_slots(panels: list) -> list:
     return slots
 
 _VOID_TAGS = {"br", "hr", "img"}
-_DANGEROUS_CONTENT_TAGS = {"script", "style", "iframe", "object", "embed", "svg", "math"}
+# Dropped along with everything inside them. foreignObject is the way arbitrary
+# HTML re-enters an SVG, and use/image can pull in an external document, so both
+# are refused even though the drawing subset above is allowed.
+_DANGEROUS_CONTENT_TAGS = {
+    "script", "style", "iframe", "object", "embed", "math",
+    "foreignobject", "use", "image", "animate", "animatetransform", "set", "script",
+}
 
 
 @dataclass
@@ -122,6 +144,27 @@ class Panel:
     #: with every other script and style, so their class names arrive unstyled and
     #: this page has to dress them.
     kind: str = "plain"
+
+
+# Dimensions the report chose for its own full-width page. Kept, they win over
+# whatever this page decides: a chart plotted at 420px sat inside a container the
+# report had pinned to 260px and spilled over the card below it -- and because the
+# element measured correctly at every level except the one wrapper, the cause was
+# invisible until the whole chain was measured.
+_DIMENSION_PROPERTIES = ("height", "width", "min-height", "max-height",
+                         "min-width", "max-width")
+
+
+def _strip_dimensions(style: str) -> str:
+    kept = []
+    for declaration in style.split(";"):
+        if ":" not in declaration:
+            continue
+        prop = declaration.split(":", 1)[0].strip().lower()
+        if prop in _DIMENSION_PROPERTIES:
+            continue
+        kept.append(declaration.strip())
+    return "; ".join(kept)
 
 
 class _Sanitiser(HTMLParser):
@@ -157,6 +200,10 @@ class _Sanitiser(HTMLParser):
             if name in ("src", "href"):
                 probe = re.sub(r"\s", "", value).lower()
                 if probe.startswith(("javascript:", "vbscript:", "data:text/html")):
+                    continue
+            if name == "style":
+                value = _strip_dimensions(value)
+                if not value:
                     continue
             rendered.append(f'{name}="{escape(value, quote=True)}"')
         joined = (" " + " ".join(rendered)) if rendered else ""
@@ -272,6 +319,10 @@ def extract(html: str) -> tuple:
         html = _sanitise(body)
         if "lig-grid" in html:
             kind = "ligands"
+        elif "<img" in html and "<table" not in html:
+            # A rendered plot rather than a chart: matplotlib heatmaps arrive as
+            # images, at whatever aspect their data implies.
+            kind = "plot"
         elif re.search(r"<table", html) and len(re.findall(r"<th\b", html)) >= 12:
             # A wide table: the secondary-structure one runs to eighteen columns.
             kind = "wide-table"

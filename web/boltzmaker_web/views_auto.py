@@ -44,9 +44,17 @@ from .wizard import WizardValidationError, assemble_boltz_input_md
 
 bp = Blueprint("auto", __name__, url_prefix="/auto")
 
-# Long enough to actually read a campaign, short enough that the droplet's disk
-# is not a museum. The systemd cleaner sweeps this root on the same schedule.
-SESSION_TTL_SECONDS = 2 * 60 * 60
+# Sessions do not expire on a clock. An analysis link should still work tomorrow,
+# and a two-hour timer meant a link shared in the morning was dead by lunch for no
+# reason the reader could see. What bounds them is space: the oldest are removed
+# only when the archive would otherwise outgrow the host, which is a limit with a
+# cause rather than an arbitrary countdown.
+MAX_SESSIONS = 60
+MAX_SESSION_BYTES = 4 * 1024 * 1024 * 1024   # 4GB of extracted uploads
+
+# Still used as the cache lifetime on served session files: the contents of a
+# session never change, so this only says how long a browser may reuse them.
+SESSION_CACHE_SECONDS = 7 * 24 * 60 * 60
 
 # A token is only ever produced by secrets.token_urlsafe here, so anything not
 # matching this is a hand-crafted path, not a typo. Validated before it is ever
@@ -62,19 +70,45 @@ _TARGET_RE = re.compile(r"^[A-Za-z0-9._+-]{1,64}$")
 #  Sessions
 # ===========================================================================
 
-def _sweep_sessions(root: Path, ttl: int = SESSION_TTL_SECONDS) -> int:
-    """Delete sessions past their TTL. Opportunistic -- called on each upload
-    rather than on a schedule, so a busy site cleans itself and an idle one
-    leaves the systemd timer to do it."""
-    cutoff = time.time() - ttl
-    removed = 0
-    for child in root.iterdir():
+def _directory_bytes(path: Path) -> int:
+    total = 0
+    for item in path.rglob("*"):
         try:
-            if child.is_dir() and child.stat().st_mtime < cutoff:
-                shutil.rmtree(child, ignore_errors=True)
-                removed += 1
+            if item.is_file():
+                total += item.stat().st_size
         except OSError:
             continue
+    return total
+
+
+def _sweep_sessions(root: Path) -> int:
+    """Remove the oldest sessions, but only once the archive is over its limits.
+
+    Nothing is deleted for being old. A session is deleted because keeping it
+    would push the host past what it can hold, which is why the newest are the
+    ones kept: the limit is space, and the least recently opened is the least
+    likely to be missed.
+    """
+    try:
+        sessions = [child for child in root.iterdir() if child.is_dir()]
+    except OSError:
+        return 0
+
+    def touched(path: Path) -> float:
+        try:
+            return path.stat().st_mtime
+        except OSError:
+            return 0.0
+
+    sessions.sort(key=touched, reverse=True)      # newest first
+    sizes = {session: _directory_bytes(session) for session in sessions}
+
+    removed, running = 0, 0
+    for index, session in enumerate(sessions):
+        running += sizes[session]
+        if index >= MAX_SESSIONS or running > MAX_SESSION_BYTES:
+            shutil.rmtree(session, ignore_errors=True)
+            removed += 1
     return removed
 
 
@@ -89,9 +123,13 @@ def _session_dir(token: str) -> Path | None:
     # child of the session root.
     if path.parent != root.resolve() or not path.is_dir():
         return None
-    if path.stat().st_mtime < time.time() - SESSION_TTL_SECONDS:
-        shutil.rmtree(path, ignore_errors=True)
-        return None
+    # Touched so that "oldest" means least recently opened rather than least
+    # recently uploaded: a session someone keeps coming back to should be the last
+    # thing removed when space runs short.
+    try:
+        path.touch(exist_ok=True)
+    except OSError:
+        pass
     return path
 
 
@@ -426,7 +464,7 @@ def _session_asset(token: str, target: str, subdir: str, suffix: str, mimetype: 
         return Response("not found", status=404, mimetype="text/plain")
     # Immutable: a session's contents never change, and the token is already
     # unique per upload, so the URL is safe to cache for as long as it exists.
-    return send_file(path, mimetype=mimetype, max_age=SESSION_TTL_SECONDS)
+    return send_file(path, mimetype=mimetype, max_age=SESSION_CACHE_SECONDS)
 
 
 @bp.route("/analysis/<token>/structure/<target>")
@@ -466,7 +504,7 @@ def report(token: str, name: str):
     if path.parent != root or not path.is_file():
         return Response("not found", status=404, mimetype="text/plain")
 
-    response = send_file(path, mimetype="text/html", max_age=SESSION_TTL_SECONDS)
+    response = send_file(path, mimetype="text/html", max_age=SESSION_CACHE_SECONDS)
     # `sandbox` with no tokens: scripts are allowed by the frame's own sandbox
     # attribute, and this stops the document reaching anything of ours regardless.
     response.headers["Content-Security-Policy"] = "sandbox allow-scripts"
