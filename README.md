@@ -2,7 +2,7 @@
 
 > **BoltzMaker: Boltz2 campaign-scale structure and affinity prediction, binding analysis, and run control, orchestrated end to end from a single spec file.**
 
-[![live](https://img.shields.io/badge/live-boltzmaker.mdeller.com-00d084?logo=icloud&logoColor=white)](https://boltzmaker.mdeller.com) ![python](https://img.shields.io/badge/python-3.12.3-3776AB?logo=python&logoColor=white) ![flask](https://img.shields.io/badge/flask-3.1.3-000000?logo=flask&logoColor=white) ![gunicorn](https://img.shields.io/badge/gunicorn-26.0.0-499848?logo=gunicorn&logoColor=white) ![nginx](https://img.shields.io/badge/nginx-1.24.0-009639?logo=nginx&logoColor=white) ![boltz](https://img.shields.io/badge/boltz-2-00897B) ![rdkit](https://img.shields.io/badge/RDKit-2026.03-00d084) ![gemmi](https://img.shields.io/badge/gemmi-0.6.5-8a3ffc) ![biopython](https://img.shields.io/badge/Biopython-1.84-1a6b8f) ![plip](https://img.shields.io/badge/PLIP-2025-9b51e0) ![pymol](https://img.shields.io/badge/PyMOL-3.1-ff6900) ![plotly](https://img.shields.io/badge/Plotly.js-2.35.2-3F4F75?logo=plotly&logoColor=white) ![3dmoljs](https://img.shields.io/badge/3Dmol.js-3D%20viewer-fcb900) ![pytest](https://img.shields.io/badge/pytest-86%20passing-0A9EDC?logo=pytest&logoColor=white) ![data](https://img.shields.io/badge/data-GPCRdb%20%C2%B7%20KLIFS%20%C2%B7%20PDBe-467FF7) ![licence](https://img.shields.io/badge/licence-MIT-467FF7) ![author](https://img.shields.io/badge/author-Marc%20C.%20Deller%2C%20D.Phil.-1C244B)
+[![live](https://img.shields.io/badge/live-boltzmaker.mdeller.com-00d084?logo=icloud&logoColor=white)](https://boltzmaker.mdeller.com) ![python](https://img.shields.io/badge/python-3.12.3-3776AB?logo=python&logoColor=white) ![flask](https://img.shields.io/badge/flask-3.1.3-000000?logo=flask&logoColor=white) ![gunicorn](https://img.shields.io/badge/gunicorn-26.0.0-499848?logo=gunicorn&logoColor=white) ![nginx](https://img.shields.io/badge/nginx-1.24.0-009639?logo=nginx&logoColor=white) ![boltz](https://img.shields.io/badge/boltz-2-00897B) ![rdkit](https://img.shields.io/badge/RDKit-2026.03-00d084) ![gemmi](https://img.shields.io/badge/gemmi-0.6.5-8a3ffc) ![biopython](https://img.shields.io/badge/Biopython-1.84-1a6b8f) ![plip](https://img.shields.io/badge/PLIP-2025-9b51e0) ![pymol](https://img.shields.io/badge/PyMOL-3.1-ff6900) ![plotly](https://img.shields.io/badge/Plotly.js-2.35.2-3F4F75?logo=plotly&logoColor=white) ![3dmoljs](https://img.shields.io/badge/3Dmol.js-3D%20viewer-fcb900) ![pytest](https://img.shields.io/badge/pytest-91%20passing-0A9EDC?logo=pytest&logoColor=white) ![data](https://img.shields.io/badge/data-GPCRdb%20%C2%B7%20KLIFS%20%C2%B7%20PDBe-467FF7) ![licence](https://img.shields.io/badge/licence-MIT-467FF7) ![author](https://img.shields.io/badge/author-Marc%20C.%20Deller%2C%20D.Phil.-1C244B)
 
 <table>
 <tr>
@@ -90,7 +90,8 @@ end to end:
    spec, BoltzMaker itself, a pinned environment covering Boltz-2 and the whole analysis
    stack, and the scripts that run them.
 2. **Analysis.** Run that bundle on a machine with a GPU (double-click it on macOS, or
-   `bash <file>` anywhere) and it installs the environment, runs the whole pipeline, and
+   `sh ./boltzmaker_<campaign>.command` from a terminal) and it installs the environment,
+   runs the whole pipeline, and
    writes one `.bmz` results file. Upload that file back to the site to explore your campaign:
    a sortable table of every target, a confidence-versus-affinity triage plot, and per-target
    3D pose viewers with the protein-ligand interactions that were detected.
@@ -781,10 +782,23 @@ rather than an hour into a run on your machine) and downloads
 | `BoltzMaker.py` | The pipeline itself. |
 | `pixi.toml`, `pixi.lock` | The pinned environment, locked for macOS (Apple Silicon) and Linux (x86-64). |
 
-To run it, double-click on macOS or `bash boltzmaker_<campaign>.command` anywhere. It unpacks
-into a folder beside itself and starts immediately: it installs [pixi](https://pixi.sh) if you
-do not have it, solves the environment, then runs `generate` -> `preflight` -> `run` ->
-`analyze` and writes one `.bmz` file. **Boltz-2's model weights are not in the bundle** --
+To run it, move the downloaded file to the machine with the GPU, put it wherever you want the
+campaign to live, and either double-click it in Finder or run it from a terminal in that
+folder:
+
+```sh
+sh ./boltzmaker_<campaign>.command
+```
+
+`sh` is fine on any platform: the file re-execs itself under bash on its first line, so it
+behaves the same whether your `/bin/sh` is bash (macOS) or dash (most Linux distributions).
+`bash ./boltzmaker_<campaign>.command` and `./boltzmaker_<campaign>.command` (once executable)
+work equally well.
+
+It unpacks into a folder beside itself and starts immediately: it installs
+[pixi](https://pixi.sh) if you do not have it, solves the environment, then runs `generate` ->
+`preflight` -> `run` -> `analyze` and writes one `<campaign>.bmz` file in that same folder.
+Bring that one file back to the site for Step 2. **Boltz-2's model weights are not in the bundle** --
 they are large and versioned by Boltz itself, so they download on first use and are cached in
 your home directory, meaning a second campaign skips that step.
 
@@ -895,7 +909,7 @@ uncompressed-size and entry-count caps) before anything is extracted.
 .venv/bin/pytest tests/
 ```
 
-86 tests. The `compare-sse` annotators are covered against real fixture data (a real apo EGFR
+91 tests. The `compare-sse` annotators are covered against real fixture data (a real apo EGFR
 kinase-domain structure vs the `egfr_covalent` example's real holo prediction; a real
 apo beta2-adrenergic-receptor structure vs `adrb2_gs_panel`'s real holo predictions),
 with GPCRdb/KLIFS/PDBe network calls swapped for an injectable fake client seeded with
@@ -904,13 +918,15 @@ and CLI-resolution tests for the parser fields above, chain-resolution tests aga
 fusion-construct and kinase-domain-only apo structures, GPCRdb/KLIFS/Pfam annotator
 pipelines, and the dashboard's summary-stats and SSE-table column logic.
 
-The web app's own 45 tests cover Fully Automated Mode end to end. Rather than asserting
+The web app's own 50 tests cover Fully Automated Mode end to end. Rather than asserting
 against a hand-written `.bmz` fixture, they render the real `pack_results.py` out of a real
 bundle, run it over a synthetic campaign, and read the result back with the real reader --
 the packer and the reader are two halves of one contract living in different files and
 running on different machines, which is exactly the shape of thing that drifts silently.
-Also covered: the generated shell scripts are checked with `bash -n` (they only ever execute
-on someone else's machine), every run-setting flag is checked against `BoltzMaker.py all
+Also covered: the generated bundle is really executed under `sh`, `bash`, `dash`, `zsh` and
+`ksh` (with its final step stubbed) to prove the documented `sh ./<bundle>.command` works where
+`/bin/sh` is dash as well as where it is bash, the generated scripts are checked with `bash -n`
+(they only ever execute on someone else's machine), every run-setting flag is checked against `BoltzMaker.py all
 --help` so a typo cannot reach a user's overnight run, and the hostile-upload guards are
 exercised with real zip-slip, compression-bomb and malformed-manifest archives.
 

@@ -116,6 +116,7 @@ def build_context(campaign_name: str, cfg: dict[str, Any], target_count: int) ->
         "cli_args": opts.to_cli_args(cfg),
         "cli_lines": opts.to_cli_lines(cfg),
         "results_filename": f"{slug}.bmz",
+        "bundle_filename": f"boltzmaker_{slug}.command",
         "bmz_version": BMZ_VERSION,
     }
 
@@ -147,8 +148,19 @@ _EXTRACTOR = """#!/usr/bin/env bash
 # BoltzMaker campaign bundle: {campaign_name}
 # Prepared at {site_url} on {created}
 #
-# Self-extracting. Double-click it on macOS, or run `bash {filename}` anywhere.
+# Self-extracting. Double-click it on macOS, or run it from a terminal:
+#     sh ./{filename}
 # It unpacks into ./{slug}/ next to itself and starts the campaign.
+
+# Re-exec under bash when started by a shell that is not bash. This is what makes
+# `sh ./{filename}` work everywhere rather than only on macOS: macOS /bin/sh IS
+# bash, so it happens to work there, but on most Linux distributions /bin/sh is
+# dash, which has no `set -o pipefail` and no BASH_SOURCE -- the script would die
+# on its second line with "Illegal option -o pipefail". Everything above this
+# point must stay POSIX, so the guard uses [ ] and $0 rather than [[ ]].
+if [ -z "${{BASH_VERSION:-}}" ]; then
+  exec bash "$0" "$@"
+fi
 set -euo pipefail
 
 DIR="$(cd "$(dirname "${{BASH_SOURCE[0]}}")" && pwd)"
@@ -211,7 +223,7 @@ def build(campaign_name: str, md_text: str, cfg: dict[str, Any], target_count: i
 
     payload = base64.b64encode(_pack(files))
     slug = context["campaign_slug"]
-    filename = f"boltzmaker_{slug}.command"
+    filename = context["bundle_filename"]
 
     header = _EXTRACTOR.format(
         campaign_name=campaign_name, site_url=SITE_URL, created=context["created"],

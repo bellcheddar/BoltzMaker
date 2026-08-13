@@ -65,7 +65,32 @@
       The spec is validated and the target list generated before the bundle is written, so a
       problem with the campaign surfaces here rather than an hour into a run at your end.
     </p>
-    <button type="submit" class="md-btn">Download my bundle</button>
+
+    <h3 class="md-sub">Then, on the machine with the GPU</h3>
+    <ol class="md-steps-list">
+      <li>Move the downloaded <code>boltzmaker_&lt;campaign&gt;.command</code> file to that machine,
+          wherever you want the campaign to live. It unpacks into a folder beside itself.</li>
+      <li>Run it. Double-click it in Finder, or from a terminal in that folder:
+          <pre class="md-cmd">sh ./boltzmaker_&lt;campaign&gt;.command</pre>
+          It installs a pinned environment (a few GB the first time, cached afterwards), then
+          generates, preflights, predicts and analyses the whole campaign. Boltz-2's model
+          weights download on first use.</li>
+      <li>When it finishes it writes one <code>&lt;campaign&gt;.bmz</code> file in that folder.
+          Bring it back here for Step 2.</li>
+    </ol>
+    <p class="md-hint">
+      Safe to re-run: completed targets are skipped, so an interrupted campaign resumes rather
+      than starting over. If it stops early it still packs whatever finished.
+    </p>
+
+    <div class="md-button-row">
+      <button type="submit" class="md-btn">Download my bundle</button>
+      <a class="md-btn md-btn-secondary" href="/auto/analysis">Go to Step 2 &middot; Analysis &rarr;</a>
+    </div>
+    <p class="md-hint" style="margin-top:8px">
+      Step 2 is where you come back once your campaign has finished and you have a
+      <code>.bmz</code> file.
+    </p>
   </div>
 </form>
 {% endblock %}

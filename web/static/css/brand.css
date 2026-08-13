@@ -149,6 +149,16 @@ img, canvas { max-width: 100%; height: auto; }
 .md-alert-error pre { white-space: pre-wrap; word-break: break-word; margin: 6px 0 0; font-size: 12px; }
 .md-alert-success { background: #e6fbf3; border: 1px solid var(--md-accent-green); color: #0a6b4c; }
 
+/* ---- prepare: run instructions ---- */
+.md-steps-list { font-size: 13px; padding-left: 20px; margin: 0 0 12px; }
+.md-steps-list li { margin-bottom: 10px; }
+.md-cmd {
+  background: var(--md-text); color: #eaf2fb; border-radius: var(--md-radius);
+  padding: 10px 14px; margin: 8px 0; font-family: 'Roboto Mono', monospace; font-size: 12.5px;
+  overflow-x: auto; white-space: pre;
+}
+.md-button-row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+
 /* ---- analysis explorer ---- */
 .md-stat-row { display: flex; gap: 28px; flex-wrap: wrap; margin-top: 14px; }
 .md-stat { display: flex; flex-direction: column; }

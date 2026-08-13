@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import io
 import json
+import shutil
 import subprocess
 import sys
 import zipfile
@@ -171,6 +172,34 @@ def test_generated_shell_scripts_are_valid_bash(tmp_path, built_bundle):
         path.write_bytes(source)
         proc = subprocess.run(["bash", "-n", str(path)], capture_output=True, text=True)
         assert proc.returncode == 0, f"{name} is not valid bash:\n{proc.stderr}"
+
+
+@pytest.mark.parametrize("shell", ["sh", "bash", "dash", "zsh", "ksh"])
+def test_bundle_extracts_under_any_shell(tmp_path, built_bundle, shell):
+    """`sh ./bundle.command` is the documented invocation, so it has to work where
+    /bin/sh is dash as well as where it is bash.
+
+    Before the re-exec guard this passed on macOS and died on the second line of
+    any Linux box with "Illegal option -o pipefail", which is exactly the failure
+    a Mac-only test run would never see. The final `exec` is stubbed out so the
+    test extracts the payload without starting a real multi-hour campaign.
+    """
+    if shutil.which(shell) is None:
+        pytest.skip(f"{shell} not installed")
+
+    script = tmp_path / "bundle.command"
+    source = built_bundle.content.decode("utf-8", errors="surrogateescape")
+    script.write_text(
+        source.replace('exec bash "$TARGET/run_campaign.sh"', 'exit 0'),
+        errors="surrogateescape",
+    )
+    proc = subprocess.run([shell, str(script)], cwd=tmp_path, capture_output=True, text=True)
+    assert proc.returncode == 0, f"{shell} failed:\n{proc.stdout}\n{proc.stderr}"
+
+    unpacked = tmp_path / "Test_campaign"
+    assert unpacked.is_dir(), f"{shell} did not unpack: {proc.stdout}"
+    assert (unpacked / "run_campaign.sh").is_file()
+    assert (unpacked / "BoltzMaker.py").is_file()
 
 
 def test_generated_packer_is_valid_python(built_bundle):

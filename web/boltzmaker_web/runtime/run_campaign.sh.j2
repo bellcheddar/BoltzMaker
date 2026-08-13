@@ -7,6 +7,12 @@
 #
 # Safe to re-run. `run` is idempotent -- targets that already have a complete
 # prediction are skipped, so an interrupted campaign resumes where it stopped.
+
+# Same guard as the bundle that unpacked this: someone running `sh ./run_campaign.sh`
+# on a Linux box would otherwise hit dash and fail on the next line.
+if [ -z "${BASH_VERSION:-}" ]; then
+  exec bash "$0" "$@"
+fi
 set -euo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")"
