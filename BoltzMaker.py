@@ -1871,7 +1871,9 @@ def _historical_seconds_per_target(campaign_dir: Path, accelerator: str) -> tupl
             except json.JSONDecodeError:
                 continue
             completed = record.get("targets_completed") or 0
-            duration = record.get("duration_seconds") or 0
+            # working_seconds excludes time the run spent suspended; older records
+            # predate it and only have wall clock, which is the best they can offer.
+            duration = record.get("working_seconds") or record.get("duration_seconds") or 0
             if completed > 0 and duration > 0 and record.get("accelerator") == accelerator:
                 per_target.append(duration / completed)
     except OSError:
@@ -1889,6 +1891,175 @@ def _historical_seconds_per_target(campaign_dir: Path, accelerator: str) -> tupl
 
 MEMORY_THRASH_FRACTION = 0.90  # fraction of total system RAM considered "at risk of thrashing"
 MEMORY_THRASH_SECONDS = 60  # how long sustained high memory must persist before warning
+
+
+class _RunControls:
+    """Single-keypress QUIT and PAUSE/RESUME while `boltz predict` runs.
+
+    Pause is a real SIGSTOP of the whole Boltz process tree, not a soft flag.
+    Nothing is discarded and nothing is recomputed: the process is frozen exactly
+    where it stood and SIGCONT resumes it mid-diffusion. The alternative -- kill
+    now, rely on `run` being idempotent, restart later -- only resumes at target
+    granularity, so pausing an hour into a target would throw that hour away.
+
+    The cost of a real stop is that a paused run keeps everything it holds: RAM,
+    and the GPU allocations with it. That is the right trade for "pause while I
+    need the machine for something else", and the wrong one for "pause for the
+    weekend" -- so the message says which it is.
+
+    Children are stopped before the parent and resumed in the opposite order. A
+    dataloader worker that keeps running against a stopped parent can fill a pipe
+    and wedge; resuming the parent first gives it somewhere to write.
+
+    Controls are only offered on a real terminal. Under nohup, a CI log or a pipe
+    there is no keyboard to read, and putting a non-tty into cbreak mode fails.
+    """
+
+    def __init__(self, proc):
+        self.proc = proc
+        self.paused = False
+        self.quit_requested = False
+        self.paused_seconds = 0.0
+        self._paused_at = None
+        self._stop = threading.Event()
+        self._thread = None
+        self._fd = None
+        self._saved_termios = None
+
+    @property
+    def available(self) -> bool:
+        try:
+            return sys.stdin.isatty()
+        except (ValueError, AttributeError):
+            return False
+
+    def start(self):
+        if not self.available:
+            return self
+        import termios, tty
+        self._fd = sys.stdin.fileno()
+        try:
+            self._saved_termios = termios.tcgetattr(self._fd)
+            tty.setcbreak(self._fd)
+        except termios.error:
+            self._saved_termios = None
+            return self
+        self._thread = threading.Thread(target=self._read_keys, daemon=True)
+        self._thread.start()
+        return self
+
+    def stop(self):
+        self._stop.set()
+        if self._saved_termios is not None:
+            import termios
+            try:
+                termios.tcsetattr(self._fd, termios.TCSADRAIN, self._saved_termios)
+            except termios.error:
+                pass
+            self._saved_termios = None
+
+    def _read_keys(self):
+        import select
+        while not self._stop.is_set():
+            try:
+                ready, _, _ = select.select([sys.stdin], [], [], 0.25)
+            except (ValueError, OSError):
+                return
+            if not ready:
+                continue
+            try:
+                key = sys.stdin.read(1)
+            except (ValueError, OSError):
+                return
+            if not key:
+                continue
+            key = key.lower()
+            if key == "q":
+                self.quit_requested = True
+                return
+            if key == "p":
+                self.toggle_pause()
+
+    def _tree(self):
+        """The Boltz process and its children, parents last."""
+        try:
+            parent = psutil.Process(self.proc.pid)
+        except psutil.NoSuchProcess:
+            return []
+        try:
+            children = parent.children(recursive=True)
+        except psutil.NoSuchProcess:
+            children = []
+        return children + [parent]
+
+    def toggle_pause(self):
+        if self.paused:
+            self.resume()
+        else:
+            self.pause()
+
+    def pause(self):
+        if self.paused or self.proc.poll() is not None:
+            return
+        for process in self._tree():          # children first, parent last
+            try:
+                process.suspend()
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                pass
+        self.paused = True
+        self._paused_at = time.time()
+
+    def resume(self):
+        if not self.paused:
+            return
+        for process in reversed(self._tree()):  # parent first, then children
+            try:
+                process.resume()
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                pass
+        self.paused = False
+        if self._paused_at is not None:
+            # Paused time is real time but not work time. Counting it would make the
+            # measured seconds-per-target -- and so every future ETA -- wrong for
+            # every run after the one that happened to be paused.
+            self.paused_seconds += time.time() - self._paused_at
+            self._paused_at = None
+
+    def paused_for(self) -> float:
+        return time.time() - self._paused_at if self._paused_at else 0.0
+
+    def terminate_tree(self, timeout: float = 15.0) -> list:
+        """Stop Boltz and everything it started. Returns any survivors.
+
+        proc.terminate() signals only the process Popen started. Boltz runs
+        dataloader workers as children, and with --workers 2 a plain terminate
+        left them alive holding their share of RAM and the GPU -- verified
+        directly: a two-process tree with the parent terminated left one child
+        running. Nothing tore them down afterwards, so they leaked for the life
+        of the shell.
+
+        The child list is taken BEFORE the parent is signalled. Once the parent
+        dies its children are reparented to init and are no longer reachable
+        from its pid, so collecting them afterwards finds nothing.
+        """
+        tree = self._tree()                     # children first, parent last
+        if self.paused:
+            # SIGTERM is queued but not acted on by a stopped process; resume so
+            # each one can actually run its handler and exit.
+            self.resume()
+        for process in tree:
+            try:
+                process.terminate()
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                pass
+        _gone, alive = psutil.wait_procs(tree, timeout=timeout)
+        for process in alive:
+            try:
+                process.kill()
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                pass
+        _gone2, still_alive = psutil.wait_procs(alive, timeout=5)
+        return still_alive
 
 
 def run_boltz(yaml_dir: Path, out_dir: Path, manifest: list, workers: int, accelerator: str,
@@ -2039,8 +2210,12 @@ def _run_boltz_batch(pending: list, total_pending: int, manifest_len: int, compl
     _info(f"log -> {log_path}")
 
     run_start = time.time()
+    # stdin=DEVNULL so the terminal belongs to the keypress reader below. Boltz does
+    # not read stdin, but an inherited terminal in cbreak mode is shared state, and
+    # a child that decides to read from it would swallow the control keys.
     proc = subprocess.Popen(cmd, cwd=str(yaml_dir), env=env, stdout=subprocess.PIPE,
-                             stderr=subprocess.STDOUT, text=True, bufsize=1)
+                             stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
+                             text=True, bufsize=1)
 
     # macOS idle/system sleep can interrupt an in-flight Metal/MPS GPU kernel mid-
     # execution and wedge the process in an uninterruptible kernel wait, unkillable by
@@ -2134,6 +2309,14 @@ def _run_boltz_batch(pending: list, total_pending: int, manifest_len: int, compl
                        f"(from {history_runs} past run{'s' if history_runs != 1 else ''})")
     else:
         eta_initial = "ETA unknown (no past runs to judge by)"
+    controls = _RunControls(proc).start()
+    if controls.available:
+        # _info is a plain print, not a rich Console, so rich markup would appear
+        # literally as "[bold]q[/bold]". ANSI directly, matching the other messages.
+        _info(f"controls:  {_BOLD}q{_RESET} quit (stops boltz and exits cleanly)   "
+              f"{_BOLD}p{_RESET} pause / resume")
+    else:
+        _info("run controls need a terminal -- not available when piped or under nohup.")
     try:
         with Progress(
             SpinnerColumn(spinner_name="dots", style=f"bold {_RICH_BLUE}"),
@@ -2150,6 +2333,9 @@ def _run_boltz_batch(pending: list, total_pending: int, manifest_len: int, compl
             done_prev = 0
             while proc.poll() is None:
                 now = time.time()
+                if controls.quit_requested:
+                    # Same shutdown as Ctrl-C, deliberately: one path to get right.
+                    raise KeyboardInterrupt
                 done = sum(1 for t in pending if _target_complete(pred_dir, t.stem, t.needs_affinity))
                 if done > done_prev:
                     # Timestamp of the first completion, so the in-run rate below
@@ -2162,7 +2348,8 @@ def _run_boltz_batch(pending: list, total_pending: int, manifest_len: int, compl
                 # once a target has finished here, that is this machine, this campaign,
                 # this configuration, today.
                 if done > 0:
-                    measured = (now - run_start) / done
+                    working = now - run_start - controls.paused_seconds - controls.paused_for()
+                    measured = max(working, 1.0) / done
                     eta_str = f"~{_format_duration(measured * (total - done))} left"
                 elif history_per_target:
                     eta_str = (f"~{_format_duration(history_per_target * total)} left "
@@ -2171,8 +2358,11 @@ def _run_boltz_batch(pending: list, total_pending: int, manifest_len: int, compl
                     eta_str = "ETA unknown (no past runs to judge by)"
 
                 mem_str = f"{mem_state['rss_gb']:.1f}/{total_ram_gb:.0f}GB"
+                if controls.paused:
+                    eta_str = f"PAUSED {_format_duration(controls.paused_for())} -- press p to resume"
                 progress.update(outer, completed=done, mem=mem_str, eta=eta_str,
-                                count=f"{done}/{total}")
+                                count=f"{done}/{total}",
+                                description="targets (paused)" if controls.paused else "targets")
 
                 # Boltz's own rate string is only meaningful while it is still being
                 # refreshed. For a single target it is written once and never again, so
@@ -2183,9 +2373,11 @@ def _run_boltz_batch(pending: list, total_pending: int, manifest_len: int, compl
                 # total=None renders a pulsing bar. A determinate bar is only honest
                 # when Boltz is actually reporting items, which for one target it is not.
                 inner_total = phase["total"] if phase["total"] > 1 else None
+                inner_desc = (f"phase: {phase['name']} -- suspended, nothing is being recomputed"
+                              if controls.paused else f"phase: {phase['name']}{suffix}")
                 progress.update(
                     inner, completed=phase["done"], total=inner_total,
-                    description=f"phase: {phase['name']}{suffix}", mem="", eta="",
+                    description=inner_desc, mem="", eta="",
                     count="" if inner_total is None else f"{phase['done']}/{inner_total}",
                 )
                 time.sleep(1)
@@ -2195,16 +2387,22 @@ def _run_boltz_batch(pending: list, total_pending: int, manifest_len: int, compl
                             mem=f"{mem_state['rss_gb']:.1f}/{total_ram_gb:.0f}GB")
     except KeyboardInterrupt:
         print()
-        _warn("interrupted -- terminating boltz predict...")
-        proc.terminate()
+        if controls.paused:
+            _info("resuming the paused run so it can shut down cleanly...")
+        _warn("stopping boltz predict and its worker processes...")
+        survivors = controls.terminate_tree()
         try:
-            proc.wait(timeout=15)
+            proc.wait(timeout=5)
         except subprocess.TimeoutExpired:
-            _warn("boltz predict did not exit within 15s -- sending SIGKILL.")
-            proc.kill()
-            proc.wait(timeout=30)
+            pass
+        if survivors:
+            _warn(f"{len(survivors)} boltz process(es) could not be stopped: "
+                  f"{[p.pid for p in survivors]}")
+        else:
+            _ok("boltz predict stopped; no worker processes left behind.")
         raise
     finally:
+        controls.stop()
         stop_monitor.set()
         run_end = time.time()
         elapsed = time.strftime('%a %b %d %H:%M:%S %Y')
@@ -2218,6 +2416,12 @@ def _run_boltz_batch(pending: list, total_pending: int, manifest_len: int, compl
             "started_at": time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(run_start)),
             "finished_at": time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(run_end)),
             "duration_seconds": round(run_end - run_start, 1),
+            # Wall clock minus any time spent suspended. duration_seconds stays
+            # honest about how long the run occupied the machine; this is the one
+            # the ETA model reads, because a run that was paused for lunch is not
+            # evidence that targets take an extra hour.
+            "working_seconds": round(run_end - run_start - controls.paused_seconds, 1),
+            "paused_seconds": round(controls.paused_seconds, 1),
             "workers": workers, "accelerator": accelerator, "mps_watermark": mps_watermark,
             "max_parallel_samples": max_parallel_samples, "recycling_steps": recycling_steps,
             "sampling_steps": sampling_steps, "diffusion_samples_affinity": diffusion_samples_affinity,

@@ -562,6 +562,30 @@ Sizing a first run on new hardware is therefore genuinely unknown until one targ
 `--limit 1` is the cheapest way to find out: it runs a single target, which both gives you
 a real number and writes the history entry every later run estimates from.
 
+### Controls while a run is going
+
+On a real terminal, `run` takes two single keypresses. (Under `nohup`, a pipe or CI there is
+no keyboard to read, and it says so rather than appearing to offer them.)
+
+| Key | What it does |
+|---|---|
+| `p` | **Pause / resume.** A real `SIGSTOP` of Boltz and every worker it started, not a soft flag: the processes are frozen exactly where they stood and `p` again continues them mid-diffusion. Nothing is discarded and nothing is recomputed. |
+| `q` | **Quit.** Stops Boltz and all its worker processes, writes the run-history entry, and exits cleanly. Identical to Ctrl-C, which takes the same path. |
+
+Two things worth knowing about pause. A paused run **keeps everything it holds** -- RAM, and
+the GPU allocations with it -- because that is what makes it resumable in place. It is the
+right tool for "I need the machine for ten minutes", and the wrong one for "pause this until
+tomorrow"; for that, quit and re-run, since `run` skips targets that already completed.
+
+Paused time is also excluded from the ETA and recorded separately in the run history
+(`working_seconds` alongside `duration_seconds`), so a run paused over lunch does not teach
+every later run that targets take an extra hour.
+
+Quitting tears down the **whole process tree**, not just the process BoltzMaker launched.
+Boltz runs its dataloader workers as children, and terminating only the parent left them
+alive holding their share of RAM and the GPU -- measured on a real two-worker tree, and now
+covered by a test.
+
 ## 📊 Outputs
 
 Written next to `boltz_input.md`:

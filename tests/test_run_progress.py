@@ -103,3 +103,129 @@ def test_duration_formatting_is_readable(bm):
     assert bm._format_duration(45) == "45s"
     assert bm._format_duration(605).startswith("10m")
     assert bm._format_duration(4411).startswith("1h")
+
+
+# ===========================================================================
+#  Run controls: quit, pause, resume
+# ===========================================================================
+
+@pytest.fixture
+def tree(tmp_path):
+    """A parent with two children, standing in for boltz and its dataloader workers."""
+    import subprocess, sys as _sys, textwrap, time
+    child = tmp_path / "child.py"
+    child.write_text("import time\nwhile True: time.sleep(0.05)\n")
+    parent = tmp_path / "parent.py"
+    parent.write_text(textwrap.dedent(f"""
+        import subprocess, sys, time
+        subprocess.Popen([sys.executable, r"{child}"])
+        subprocess.Popen([sys.executable, r"{child}"])
+        while True: time.sleep(0.05)
+    """))
+    proc = subprocess.Popen([_sys.executable, str(parent)], stdin=subprocess.DEVNULL)
+    time.sleep(0.8)
+    yield proc, child
+    import psutil
+    for process in psutil.process_iter(["cmdline"]):
+        line = " ".join(process.info["cmdline"] or [])
+        if str(child) in line or str(parent) in line:
+            try:
+                process.kill()
+            except psutil.Error:
+                pass
+
+
+def _living_children(child_path) -> int:
+    import psutil
+    return sum(1 for p in psutil.process_iter(["cmdline"])
+               if p.info["cmdline"] and str(child_path) in " ".join(p.info["cmdline"]))
+
+
+def test_quit_leaves_no_worker_processes_behind(bm, tree):
+    """proc.terminate() signals only the process Popen started. Boltz's dataloader
+    workers are children, and terminating just the parent left them alive holding
+    their share of RAM and the GPU -- measured, not assumed."""
+    proc, child = tree
+    assert _living_children(child) == 2, "fixture did not start its workers"
+
+    controls = bm._RunControls(proc)
+    survivors = controls.terminate_tree(timeout=10)
+
+    import time
+    time.sleep(0.4)
+    assert survivors == []
+    assert _living_children(child) == 0
+
+
+def test_pause_freezes_the_tree_and_resume_continues_it(bm, tree, tmp_path):
+    """Pause must be a real SIGSTOP, not a flag: the point is that an hour of
+    diffusion is not thrown away and not recomputed."""
+    import time
+    proc, child = tree
+    controls = bm._RunControls(proc)
+
+    import psutil
+    processes = [psutil.Process(proc.pid)] + psutil.Process(proc.pid).children(recursive=True)
+
+    controls.pause()
+    time.sleep(0.4)
+    statuses = []
+    for process in processes:
+        try:
+            statuses.append(process.status())
+        except psutil.NoSuchProcess:
+            pass
+    assert statuses, "no processes to inspect"
+    assert all(s == psutil.STATUS_STOPPED for s in statuses), statuses
+    assert controls.paused
+
+    controls.resume()
+    time.sleep(0.3)
+    resumed = []
+    for process in processes:
+        try:
+            resumed.append(process.status())
+        except psutil.NoSuchProcess:
+            pass
+    assert all(s != psutil.STATUS_STOPPED for s in resumed), resumed
+    assert not controls.paused
+    assert controls.paused_seconds > 0
+
+
+def test_quitting_while_paused_still_shuts_down(bm, tree):
+    """A stopped process cannot act on SIGTERM. Without resuming first, quitting a
+    paused run would stall until the timeout escalated to SIGKILL."""
+    import time
+    proc, child = tree
+    controls = bm._RunControls(proc)
+    controls.pause()
+    time.sleep(0.3)
+
+    survivors = controls.terminate_tree(timeout=10)
+    time.sleep(0.4)
+    assert survivors == []
+    assert _living_children(child) == 0
+
+
+def test_paused_time_is_excluded_from_the_measured_rate(bm, tree):
+    """A run paused over lunch is not evidence that targets take an extra hour --
+    and the run history feeds every later ETA."""
+    import time
+    proc, _ = tree
+    controls = bm._RunControls(proc)
+    controls.pause()
+    time.sleep(0.5)
+    assert controls.paused_for() >= 0.4      # counted while still paused
+    controls.resume()
+    assert controls.paused_seconds >= 0.4
+    assert controls.paused_for() == 0.0      # and not double-counted afterwards
+
+
+def test_controls_are_unavailable_without_a_terminal(bm, tree):
+    """Under nohup, a pipe or CI there is no keyboard, and putting a non-tty into
+    cbreak mode fails -- so the run says so instead of appearing to offer keys."""
+    proc, _ = tree
+    controls = bm._RunControls(proc)
+    assert controls.available is False       # pytest captures stdin
+    controls.start()                          # must be a no-op, not an error
+    controls.stop()
