@@ -95,6 +95,17 @@ def _parse_form() -> tuple[bool, list[ProteinInput], list[PartnerInput], list[Li
     ligand_kinds = request.form.getlist("ligand_kind[]")
     ligand_values = request.form.getlist("ligand_value[]")
     ligands: list[LigandInput] = []
+    # zip() over parallel arrays truncates to the shortest, which is how a form bug
+    # that posted one ligand_kind for several rows silently dropped every ligand after
+    # the first. The form should now always send one of each per row; if it ever does
+    # not again, say so instead of quietly building a smaller campaign than was asked
+    # for. Trailing blank rows are stripped below, so a mismatch here is structural.
+    if not (len(ligand_names_raw) == len(ligand_kinds) == len(ligand_values)):
+        raise WizardValidationError(
+            f"Ligand fields arrived unevenly ({len(ligand_names_raw)} names, "
+            f"{len(ligand_kinds)} types, {len(ligand_values)} values) -- please report this.",
+            field="ligand_name",
+        )
     for raw_name, kind, value in zip(ligand_names_raw, ligand_kinds, ligand_values):
         if not raw_name.strip() and not value.strip():
             continue

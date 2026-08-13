@@ -85,11 +85,19 @@
   <div class="md-repeat-block">
     <button type="button" class="md-remove-row" title="Remove">&times;</button>
     <div class="md-field"><label>Short name (max 5 letters)</label><input type="text" name="ligand_name[]" maxlength="5"></div>
+    {#  A <select>, not the radio pair this used to be. Radios sharing a name form ONE
+        group across the whole form, so every ligand row was competing for a single
+        selection: picking CCD in the second row silently unpicked the first, the browser
+        then posted one ligand_kind[] for N rows, and the server's zip() over the three
+        parallel arrays truncated to the shortest -- dropping every ligand after the first
+        with no error anywhere. A select gives each row its own value under the same field
+        name, which is exactly what getlist() expects.  #}
     <div class="md-field">
-      <div class="md-radio-row">
-        <label><input type="radio" name="ligand_kind[]" value="smiles" checked> SMILES</label>
-        <label><input type="radio" name="ligand_kind[]" value="ccd"> CCD code</label>
-      </div>
+      <label>Identifier type</label>
+      <select name="ligand_kind[]">
+        <option value="smiles" selected>SMILES</option>
+        <option value="ccd">CCD code</option>
+      </select>
     </div>
     <div class="md-field"><label>Value</label><input type="text" name="ligand_value[]" placeholder="SMILES string or CCD code"></div>
   </div>

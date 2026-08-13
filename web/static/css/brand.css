@@ -159,6 +159,9 @@ img, canvas { max-width: 100%; height: auto; }
 }
 .md-button-row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
 
+.md-status-ok { color: var(--md-accent-green); font-weight: 600; }
+.md-status-bad { color: var(--md-accent-red); font-weight: 600; }
+
 /* ---- analysis explorer ---- */
 .md-stat-row { display: flex; gap: 28px; flex-wrap: wrap; margin-top: 14px; }
 .md-stat { display: flex; flex-direction: column; }

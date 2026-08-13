@@ -1,0 +1,251 @@
+/* Save, restore and transport everything typed into the Prepare form.
+ *
+ * One state representation with three sinks, deliberately: localStorage (so the
+ * form survives downloading a bundle, wandering off to Step 2, a reload, or a
+ * validation error), a downloaded .json file ("Save page"), and an uploaded one
+ * ("Upload page"). Writing those as three separate serialisers is how they end
+ * up disagreeing about which fields exist.
+ *
+ * Nothing here talks to the server. A campaign spec is not built from this file;
+ * it is built from the form POST exactly as before, so an uploaded state file can
+ * do nothing worse than fill in form fields you can see and edit.
+ */
+var BoltzFormState = (function () {
+  "use strict";
+
+  var STORAGE_KEY = "boltzmaker.prepare.v1";
+  var STATE_VERSION = 1;
+  var form = null;
+  var statusEl = null;
+
+  function scalarInputs() {
+    // Everything that is not part of a repeating row. Row fields all end in "[]",
+    // which is also what tells the server they are parallel arrays.
+    return Array.prototype.filter.call(
+      form.querySelectorAll("input[name], select[name], textarea[name]"),
+      function (el) { return el.name.slice(-2) !== "[]" && el.type !== "file"; }
+    );
+  }
+
+  function rowFields(rowEl) {
+    return rowEl.querySelectorAll("input[name], select[name], textarea[name]");
+  }
+
+  // ---- collect -------------------------------------------------------------
+
+  function collect() {
+    var state = { version: STATE_VERSION, scalars: {}, groups: {} };
+
+    scalarInputs().forEach(function (el) {
+      state.scalars[el.name] = (el.type === "checkbox") ? !!el.checked : el.value;
+    });
+
+    BoltzWizard.GROUPS.forEach(function (group) {
+      var container = document.getElementById(group.container);
+      if (!container) return;
+      var rows = [];
+      Array.prototype.forEach.call(container.querySelectorAll(".md-repeat-block"), function (rowEl) {
+        var row = {};
+        Array.prototype.forEach.call(rowFields(rowEl), function (el) {
+          row[el.name] = (el.type === "checkbox") ? !!el.checked : el.value;
+        });
+        rows.push(row);
+      });
+      state.groups[group.key] = rows;
+    });
+
+    return state;
+  }
+
+  function isEmpty(state) {
+    var typed = Object.keys(state.scalars).some(function (k) {
+      var v = state.scalars[k];
+      return v !== "" && v !== false;
+    });
+    if (typed) return false;
+    return !Object.keys(state.groups).some(function (key) {
+      return state.groups[key].some(function (row) {
+        return Object.keys(row).some(function (f) { return row[f] !== "" && row[f] !== false; });
+      });
+    });
+  }
+
+  // ---- apply ---------------------------------------------------------------
+
+  function setValue(el, value) {
+    if (value === undefined || value === null) return;
+    if (el.type === "checkbox") { el.checked = !!value; return; }
+    el.value = value;
+  }
+
+  function apply(state) {
+    if (!state || typeof state !== "object" || !state.scalars || !state.groups) {
+      throw new Error("that file does not look like a saved BoltzMaker page");
+    }
+
+    scalarInputs().forEach(function (el) {
+      if (Object.prototype.hasOwnProperty.call(state.scalars, el.name)) {
+        setValue(el, state.scalars[el.name]);
+      }
+    });
+
+    BoltzWizard.GROUPS.forEach(function (group) {
+      var rows = state.groups[group.key];
+      if (!Array.isArray(rows)) return;
+      BoltzWizard.clearRows(group.key);
+      rows.forEach(function (row) {
+        var rowEl = BoltzWizard.addRowFor(group.key);
+        if (!rowEl) return;
+        Array.prototype.forEach.call(rowFields(rowEl), function (el) {
+          if (Object.prototype.hasOwnProperty.call(row, el.name)) setValue(el, row[el.name]);
+        });
+      });
+    });
+  }
+
+  // ---- persistence ---------------------------------------------------------
+
+  function save() {
+    try {
+      var state = collect();
+      if (isEmpty(state)) {
+        window.localStorage.removeItem(STORAGE_KEY);
+      } else {
+        window.localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+      }
+    } catch (err) {
+      // Private browsing, a full quota, or storage disabled entirely. Losing
+      // autosave is not worth breaking the form over -- Save page still works.
+    }
+  }
+
+  function restore() {
+    var raw;
+    try {
+      raw = window.localStorage.getItem(STORAGE_KEY);
+    } catch (err) {
+      return false;
+    }
+    if (!raw) return false;
+    try {
+      apply(JSON.parse(raw));
+      return true;
+    } catch (err) {
+      // A state file from an older layout, or corrupt. Drop it rather than
+      // leaving a half-filled form the user cannot explain.
+      try { window.localStorage.removeItem(STORAGE_KEY); } catch (e) {}
+      return false;
+    }
+  }
+
+  function clear() {
+    try { window.localStorage.removeItem(STORAGE_KEY); } catch (err) {}
+  }
+
+  // ---- status line ---------------------------------------------------------
+
+  function status(message, tone) {
+    if (!statusEl) return;
+    statusEl.textContent = message;
+    statusEl.className = "md-hint" + (tone ? " md-status-" + tone : "");
+    if (message) {
+      window.clearTimeout(status._timer);
+      status._timer = window.setTimeout(function () {
+        statusEl.textContent = "";
+        statusEl.className = "md-hint";
+      }, 6000);
+    }
+  }
+
+  // ---- save / upload to disk ----------------------------------------------
+
+  function fileStem() {
+    var el = document.getElementById("campaign_name");
+    var name = (el && el.value ? el.value : "boltzmaker_page").trim();
+    return name.replace(/[^A-Za-z0-9._-]+/g, "_").replace(/^[._-]+|[._-]+$/g, "") || "boltzmaker_page";
+  }
+
+  function saveToDisk() {
+    var blob = new Blob([JSON.stringify(collect(), null, 2)], { type: "application/json" });
+    var url = URL.createObjectURL(blob);
+    var link = document.createElement("a");
+    link.href = url;
+    link.download = fileStem() + ".boltzpage.json";
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    // Revoking immediately can cancel the download in some browsers; a tick is enough.
+    window.setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
+    status("Saved " + link.download + " to your downloads.", "ok");
+  }
+
+  function loadFromDisk(file) {
+    var reader = new FileReader();
+    reader.onload = function () {
+      var parsed;
+      try {
+        parsed = JSON.parse(reader.result);
+      } catch (err) {
+        status("That file is not valid JSON.", "bad");
+        return;
+      }
+      try {
+        apply(parsed);
+      } catch (err) {
+        status(err.message, "bad");
+        return;
+      }
+      save();
+      status("Loaded " + file.name + ".", "ok");
+    };
+    reader.onerror = function () { status("Could not read that file.", "bad"); };
+    reader.readAsText(file);
+  }
+
+  // ---- wiring --------------------------------------------------------------
+
+  function init() {
+    form = document.getElementById("wizard-form");
+    if (!form || typeof BoltzWizard === "undefined") return;
+    statusEl = document.getElementById("state-status");
+
+    if (restore()) status("Restored what you last entered on this browser.", "ok");
+
+    // Autosave. "input" covers typing, "change" covers selects, checkboxes and the
+    // add/remove-row event below, which fires after the DOM has settled.
+    form.addEventListener("input", save);
+    form.addEventListener("change", save);
+    document.addEventListener("boltz:form-changed", save);
+    // Submitting downloads a file and leaves the page in place, so this is not a
+    // navigation -- but saving here means the state is written even if the user
+    // typed nothing since the last event.
+    form.addEventListener("submit", save);
+
+    var saveBtn = document.getElementById("save-page");
+    if (saveBtn) saveBtn.addEventListener("click", saveToDisk);
+
+    var uploadBtn = document.getElementById("upload-page");
+    var uploadInput = document.getElementById("upload-page-file");
+    if (uploadBtn && uploadInput) {
+      uploadBtn.addEventListener("click", function () { uploadInput.click(); });
+      uploadInput.addEventListener("change", function () {
+        if (uploadInput.files && uploadInput.files[0]) loadFromDisk(uploadInput.files[0]);
+        // Reset so choosing the same file twice still fires a change event.
+        uploadInput.value = "";
+      });
+    }
+
+    var clearBtn = document.getElementById("clear-page");
+    if (clearBtn) {
+      clearBtn.addEventListener("click", function () {
+        if (!window.confirm("Clear everything you have entered on this page?")) return;
+        clear();
+        window.location.reload();
+      });
+    }
+  }
+
+  document.addEventListener("boltz:wizard-ready", init);
+
+  return { collect: collect, apply: apply, save: save, restore: restore, clear: clear };
+})();

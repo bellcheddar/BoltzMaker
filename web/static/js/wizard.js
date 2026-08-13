@@ -2,12 +2,27 @@
 // constraints, ligands). No build step, no framework -- clones a <template>, appends
 // it, wires up its own remove button. All real validation happens server-side
 // (wizard.py/views_new.py); this only makes the form usable.
-(function () {
+//
+// Exposes BoltzWizard so the Prepare page's save/restore layer (form_state.js) can
+// rebuild rows without duplicating the template ids or the remove-button wiring.
+var BoltzWizard = (function () {
+  "use strict";
+
+  // One entry per repeating block. form_state.js reads this rather than keeping its
+  // own copy: two lists of template ids that must agree is one list too many.
+  var GROUPS = [
+    { key: "protein", button: "add-protein", template: "tpl-protein", container: "protein-rows", seed: true },
+    { key: "partner", button: "add-partner", template: "tpl-partner", container: "partner-rows", seed: false },
+    { key: "constraint", button: "add-constraint", template: "tpl-constraint", container: "constraint-rows", seed: false },
+    { key: "ligand", button: "add-ligand", template: "tpl-ligand", container: "ligand-rows", seed: true }
+  ];
+
   function wireRemove(rowEl) {
     var btn = rowEl.querySelector(".md-remove-row");
     if (btn) {
       btn.addEventListener("click", function () {
         rowEl.remove();
+        document.dispatchEvent(new CustomEvent("boltz:form-changed"));
       });
     }
   }
@@ -15,28 +30,49 @@
   function addRow(templateId, containerId) {
     var tpl = document.getElementById(templateId);
     var container = document.getElementById(containerId);
-    if (!tpl || !container) return;
-    var clone = tpl.content.cloneNode(true);
-    var rowEl = clone.querySelector(".md-repeat-block");
-    container.appendChild(clone);
-    // rowEl was detached from the fragment by appendChild's move; re-query the
-    // just-appended last child instead, which is the actual attached row.
-    wireRemove(container.lastElementChild);
+    if (!tpl || !container) return null;
+    container.appendChild(tpl.content.cloneNode(true));
+    // The fragment's nodes were moved by appendChild, so re-query the attached row.
+    var rowEl = container.lastElementChild;
+    wireRemove(rowEl);
+    return rowEl;
   }
 
-  function wireAdd(buttonId, templateId, containerId, seedOne) {
-    var btn = document.getElementById(buttonId);
+  function groupFor(key) {
+    for (var i = 0; i < GROUPS.length; i++) {
+      if (GROUPS[i].key === key) return GROUPS[i];
+    }
+    return null;
+  }
+
+  function addRowFor(key) {
+    var group = groupFor(key);
+    return group ? addRow(group.template, group.container) : null;
+  }
+
+  function clearRows(key) {
+    var group = groupFor(key);
+    if (!group) return;
+    var container = document.getElementById(group.container);
+    if (container) container.innerHTML = "";
+  }
+
+  function wireAdd(group) {
+    var btn = document.getElementById(group.button);
     if (!btn) return;
     btn.addEventListener("click", function () {
-      addRow(templateId, containerId);
+      addRow(group.template, group.container);
+      document.dispatchEvent(new CustomEvent("boltz:form-changed"));
     });
-    if (seedOne) addRow(templateId, containerId);
+    if (group.seed) addRow(group.template, group.container);
   }
 
   document.addEventListener("DOMContentLoaded", function () {
-    wireAdd("add-partner", "tpl-partner", "partner-rows", false);
-    wireAdd("add-protein", "tpl-protein", "protein-rows", true);
-    wireAdd("add-constraint", "tpl-constraint", "constraint-rows", false);
-    wireAdd("add-ligand", "tpl-ligand", "ligand-rows", true);
+    GROUPS.forEach(wireAdd);
+    // Announce that the default rows exist, so anything restoring saved state knows
+    // the DOM it is about to replace is ready.
+    document.dispatchEvent(new CustomEvent("boltz:wizard-ready"));
   });
+
+  return { GROUPS: GROUPS, addRowFor: addRowFor, clearRows: clearRows };
 })();

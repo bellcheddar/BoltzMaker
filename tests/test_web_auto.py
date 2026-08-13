@@ -21,6 +21,7 @@ import zipfile
 from pathlib import Path
 
 import pytest
+from werkzeug.datastructures import MultiDict
 
 from boltzmaker_web import bundle, options, results as bmz
 from boltzmaker_web.app import create_app
@@ -423,6 +424,60 @@ def test_prepare_builds_a_bundle_from_the_wizard(client):
     assert response.headers["Content-Disposition"].endswith('"boltzmaker_Route_test.command"')
     members = bundle.unpack(response.data)
     assert "--accelerator cpu" in members["run_campaign.sh"].decode()
+
+
+def test_every_ligand_row_carries_its_own_identifier_type(client):
+    """Two ligands must produce two ligands.
+
+    The form used a radio pair per row, all sharing name="ligand_kind[]" -- which
+    makes every row part of ONE radio group, so only one row could hold a
+    selection. The browser then posted a single ligand_kind for N rows and the
+    server's zip() over the three parallel arrays truncated to the shortest,
+    dropping every ligand after the first with no error anywhere. A real campaign
+    would have been built and run missing its ligands.
+    """
+    form = MultiDict([
+        ("campaign_name", "Two ligands"),
+        ("protein_name[]", "P1"), ("protein_sequence[]", "MKVLAAGIVGLNLGGK"),
+        ("protein_partners[]", ""),
+        ("ligand_name[]", "LG1"), ("ligand_name[]", "LG2"),
+        ("ligand_kind[]", "smiles"), ("ligand_kind[]", "ccd"),
+        ("ligand_value[]", "c1ccccc1"), ("ligand_value[]", "ATP"),
+    ])
+    response = client.post("/auto/prepare", data=form)
+    assert response.status_code == 200, response.data[:400]
+    md = bundle.unpack(response.data)["boltz_input.md"].decode()
+    assert [line.split(":", 1)[1].strip()
+            for line in md.splitlines() if line.startswith("Ligand:")] == ["LG1", "LG2"]
+    assert "SMILES: c1ccccc1" in md
+    assert "CCD: ATP" in md
+
+
+def test_the_ligand_type_field_is_not_a_shared_radio_group(client):
+    """Guards the shape, not just the behaviour: a radio pair per row would
+    reintroduce the bug above while every server-side test still passed, because
+    the server never sees the markup that produced the truncated post."""
+    html = client.get("/auto/prepare").data.decode()
+    ligand_template = html[html.index('id="tpl-ligand"'):]
+    ligand_template = ligand_template[:ligand_template.index("</template>")]
+    assert 'type="radio"' not in ligand_template
+    assert 'name="ligand_kind[]"' in ligand_template
+
+
+def test_uneven_ligand_arrays_are_reported_not_truncated(client):
+    """Defence in depth for the same failure: if the form ever posts ragged
+    arrays again, say so rather than silently building a smaller campaign."""
+    form = MultiDict([
+        ("campaign_name", "Ragged"),
+        ("protein_name[]", "P1"), ("protein_sequence[]", "MKVLAAGIVGLNLGGK"),
+        ("protein_partners[]", ""),
+        ("ligand_name[]", "LG1"), ("ligand_name[]", "LG2"),
+        ("ligand_kind[]", "smiles"),                      # one type for two rows
+        ("ligand_value[]", "c1ccccc1"), ("ligand_value[]", "ATP"),
+    ])
+    response = client.post("/auto/prepare", data=form)
+    assert response.headers.get("Content-Disposition") is None
+    assert "arrived unevenly" in response.data.decode()
 
 
 def test_prepare_reports_a_bad_spec_instead_of_shipping_it(client):
