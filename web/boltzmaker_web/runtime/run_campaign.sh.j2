@@ -71,6 +71,16 @@ pixi install
 # plip/pdb-tools are installed separately rather than in the main solve -- see
 # the comment on the postinstall task in pixi.toml for why.
 pixi run postinstall
+
+# Warm the boltz CLI before the campaign starts. The first invocation in a freshly
+# solved environment imports and byte-compiles the whole torch stack against a cold
+# page cache, which takes minutes on some machines -- and preflight's own boltz_cli
+# check has to put a timeout on that call. Paying the cost here means the campaign's
+# first timed operation is not also the environment's first import, and the user sees
+# a labelled pause rather than an unexplained one. `|| true` because this is a warm-up,
+# not a test: preflight is the thing that reports on boltz, a few lines further down.
+info "warming the boltz CLI (first import compiles the torch stack -- slow once, fast after)"
+pixi run boltz --help >/dev/null 2>&1 || true
 ok "environment ready"
 
 # ---------------------------------------------------------------------------

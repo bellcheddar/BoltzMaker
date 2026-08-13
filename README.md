@@ -864,6 +864,7 @@ Automated when you want the whole pipeline handled.
 | "No manifest.json in the upload" | A campaign folder was uploaded instead of the `.bmz`. Either upload the `.bmz` the bundle wrote, or use Stepwise Mode's **Analyze**, which is the tool that takes a campaign folder. |
 | Some targets have no pose viewer | Those structures were dropped to stay under the size limit, or the target failed. `manifest.json` inside the `.bmz` records which, and why. They are still in `boltz_cif/` on your own machine. |
 | The 3D viewer says WebGL is unavailable | The browser has WebGL disabled or unsupported. Everything else on the page is unaffected. |
+| Preflight warns `boltz_cli` did not answer `--help` in time | A cold first import, not a broken install: `boltz --help` loads the whole torch stack, and a freshly solved environment byte-compiles it too. The bundle warms it before the campaign, and it is a warning that does not stop the run. |
 | The interactions panel is empty | PLIP either did not run for that target, or found nothing. If you switched **Skip PLIP interaction analysis** on when preparing, that is the cause. |
 | A session link stops working | Sessions expire after two hours. Upload the file again; nothing is lost, since the `.bmz` is on your own disk. |
 

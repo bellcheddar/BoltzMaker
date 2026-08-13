@@ -1426,10 +1426,27 @@ def check_boltz_cli() -> CheckResult:
             fix = "the environment looks incomplete -- re-run the offline installer"
         return CheckResult("boltz_cli", "FAIL", f"{boltz_path} not found -- {fix}")
     try:
-        out = subprocess.run([str(boltz_path), "--help"], capture_output=True, text=True, timeout=20)
+        out = subprocess.run([str(boltz_path), "--help"], capture_output=True, text=True,
+                             timeout=BOLTZ_CLI_HELP_TIMEOUT)
         ok = out.returncode == 0
         return CheckResult("boltz_cli", "PASS" if ok else "WARN",
                             f"{boltz_path} {'reachable' if ok else f'exited {out.returncode} on --help'}")
+    except subprocess.TimeoutExpired:
+        # Deliberately WARN, not FAIL. The binary exists -- that was checked above --
+        # so a slow `--help` is evidence about how long an import took, not about
+        # whether boltz works. `boltz --help` imports the entire torch stack, and the
+        # very first invocation in a freshly-solved environment also byte-compiles it
+        # with a cold page cache; on an iCloud-backed directory that alone can run to
+        # minutes. Failing here aborted whole campaigns before any GPU work on nothing
+        # more than a cold start, which is the wrong trade: if boltz really is broken,
+        # `run` says so immediately and loudly. --strict still promotes this to FAIL
+        # for anyone who wants the cautious behaviour.
+        return CheckResult(
+            "boltz_cli", "WARN",
+            f"{boltz_path} exists but did not answer --help within {BOLTZ_CLI_HELP_TIMEOUT}s "
+            "-- usually just a cold first import (torch is large); the run itself will "
+            "confirm. Re-run preflight once it has warmed up to clear this.",
+        )
     except Exception as e:
         return CheckResult("boltz_cli", "FAIL", f"error invoking {boltz_path}: {e}")
 
@@ -2184,6 +2201,13 @@ _FLAG_TEMPLATES = {
     "LOW_CONFIDENCE_STRONG_AFFINITY": "strong predicted affinity but low structural confidence -- verify pose before trusting.",
     "LOW_POCKET_PLDDT": "low pLDDT near the specified pocket (approximate, complex-level proxy).",
 }
+
+# `boltz --help` imports the whole torch stack. Warm, that is well under a second;
+# cold, in a just-installed environment that still has to byte-compile it, it has
+# been measured at over 20s -- which is what the old timeout was, so a first run
+# failed its own preflight. Generous on purpose: the check only costs this long in
+# the one case where it was previously wrong.
+BOLTZ_CLI_HELP_TIMEOUT = 120
 
 LOW_CONFIDENCE_THRESHOLD = 0.5
 POCKET_PLDDT_THRESHOLD = 0.7

@@ -56,6 +56,7 @@ The script stops on the first error and tells you which stage failed. A few comm
 | `pixi: command not found` after install | pixi went onto your PATH for future shells only. Run `source ~/.zshrc` or open a new terminal, then re-run. |
 | Killed during prediction, no error | Out of memory. Lower **Parallel diffusion samples** or **Max MSA sequences**, or run fewer targets at once with **Only run the first N targets**. |
 | A preflight check fails | The campaign spec has a real problem: an unparseable SMILES, a chain id over 5 characters, a missing referenced file. Fix `boltz_input.md` and re-run. |
+| `boltz_cli` warns that `--help` did not answer in time | A cold first import, not a broken install. `boltz --help` loads the whole torch stack, and the first run in a new environment also byte-compiles it. This script warms it beforehand, so it should be rare. It is a warning and does not stop the run. |
 | Some targets missing from the results | Those targets failed after their retries. The results file still carries everything that succeeded, and records the shortfall in its manifest. |
 
 Full documentation: <https://github.com/bellcheddar/BoltzMaker>
