@@ -27,6 +27,7 @@ difference that makes a result impossible to reproduce later.
 from __future__ import annotations
 
 import base64
+import gzip
 import io
 import re
 import tarfile
@@ -158,24 +159,29 @@ def _pack(files: dict[str, bytes]) -> bytes:
     manifest worth anything and lets the tests compare builds directly.
     """
     buf = io.BytesIO()
-    with tarfile.open(fileobj=buf, mode="w:gz", compresslevel=9) as tar:
-        for name in sorted(files):
-            data = files[name]
-            info = tarfile.TarInfo(name=name)
-            info.size = len(data)
-            # 1980-01-01, not 0. A fixed timestamp is what makes two builds of the
-            # same inputs byte-identical, but the epoch is before the earliest date
-            # a zip can represent -- and the campaign's own pack_results.py zips
-            # these very files at the end of a run, so epoch-dated members made it
-            # die with "ZIP does not support timestamps before 1980" after the
-            # compute was already done.
-            info.mtime = _ZIP_SAFE_EPOCH
-            info.uid = info.gid = 0
-            info.uname = info.gname = ""
-            # The two scripts must arrive executable; the user is told to run
-            # ./run_campaign.sh directly, and a 0644 script would stop that.
-            info.mode = 0o755 if name.endswith((".sh", ".py")) else 0o644
-            tar.addfile(info, io.BytesIO(data))
+    # gzip, explicitly, with mtime=0. tarfile's own "w:gz" writes a gzip header
+    # containing the current time, so two builds a second apart differed in their
+    # first bytes however carefully the tar members were normalised -- which made
+    # the determinism this function claims quietly untrue.
+    with gzip.GzipFile(fileobj=buf, mode="wb", compresslevel=9, mtime=0) as gz:
+      with tarfile.open(fileobj=gz, mode="w") as tar:
+          for name in sorted(files):
+              data = files[name]
+              info = tarfile.TarInfo(name=name)
+              info.size = len(data)
+              # 1980-01-01, not 0. A fixed timestamp is what makes two builds of the
+              # same inputs byte-identical, but the epoch is before the earliest date
+              # a zip can represent -- and the campaign's own pack_results.py zips
+              # these very files at the end of a run, so epoch-dated members made it
+              # die with "ZIP does not support timestamps before 1980" after the
+              # compute was already done.
+              info.mtime = _ZIP_SAFE_EPOCH
+              info.uid = info.gid = 0
+              info.uname = info.gname = ""
+              # The two scripts must arrive executable; the user is told to run
+              # ./run_campaign.sh directly, and a 0644 script would stop that.
+              info.mode = 0o755 if name.endswith((".sh", ".py")) else 0o644
+              tar.addfile(info, io.BytesIO(data))
     return buf.getvalue()
 
 

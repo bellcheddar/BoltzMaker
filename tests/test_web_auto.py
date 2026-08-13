@@ -272,8 +272,20 @@ def test_generated_packer_is_valid_python(built_bundle):
     ast.parse(bundle.unpack(built_bundle.content)["pack_results.py"].decode())
 
 
-def test_bundle_is_deterministic():
-    """Same inputs, byte-identical output -- what makes the payload checksummable."""
+def test_bundle_is_deterministic(monkeypatch):
+    """Same inputs and same build time, byte-identical output.
+
+    Tar members carry a fixed mtime and uid/gid precisely so this holds. The one
+    thing that legitimately varies is the build timestamp the bundle records for
+    the user, which has minute resolution -- so an unfrozen version of this test
+    passes all minute and fails on the boundary, which is how it was found.
+    """
+    class FixedClock(bundle.datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return bundle.datetime(2026, 8, 13, 12, 0, 0, tzinfo=tz)
+
+    monkeypatch.setattr(bundle, "datetime", FixedClock)
     args = ("Test campaign", "Settings:\n", options.defaults(), 2, "{}")
     assert bundle.build(*args).content == bundle.build(*args).content
 
