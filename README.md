@@ -823,50 +823,8 @@ written literally into the generated script so you can read exactly what will ru
 | Setting | Flag | Default | What it does |
 |---|---|---|---|
 | Skip PLIP interaction analysis | `--skip-interactions` | off | Leave off. PLIP is what produces the per-target interaction fingerprints the Analysis step shows; skipping it saves minutes but empties that panel. |
-| Skip apo-vs-holo compare-sse | `--skip-sse` | off | Only does anything for families with an 'Apo structure:' set. Skipping it drops the secondary-structure comparison from the results. |
-
-**The apo-vs-holo comparison now works out of the box.** compare-sse compares a holo
-prediction against an apo structure, and only runs for families that name one. Nothing on
-this form used to emit an `Apo structure:` line at all, so a campaign built here could never
-produce a secondary-structure comparison, and the skip option had nothing to skip.
-
-Each protein now gets an apo reference automatically:
-
-Each protein row carries an optional **Apo structure PDB id** and an **Also predict a
-ligand-free structure** box, ticked by default. They are independent:
-
-| PDB id | Predict box | What happens |
-|---|---|---|
-| blank | **on** (default) | A ligand-free companion of that protein is predicted as an extra target, and the holo families point at its CIF. This is the idiom the bundled 5HT2 example uses. |
-| `2RH1`, `9LL9`, … | **on** (default) | The experimental structure is fetched, shipped in the bundle, and used as the reference, **and** a companion is predicted alongside it as its own target. The deposited entry is usually a different construct (another species, a fusion partner, a thermostabilising mutation), so a predicted apo of your own sequence is worth having next to it. |
-| `2RH1`, `9LL9`, … | off | Only the experimental structure. Nothing extra is computed. |
-| blank | off | That protein has no apo reference, so the comparison skips it. |
-
-A family can name exactly one `Apo structure:`, so when both exist the experimental one is
-what compare-sse measures against: it is a measurement and the other is a prediction. mmCIF
-is fetched in preference to legacy PDB, since many recent entries (large complexes, most
-cryo-EM) are published only as mmCIF.
-
-It is not free. Each companion is another target: one protein with one ligand doubles the
-campaign, while one protein with six ligands adds a seventh. Ticking **Skip apo-vs-holo
-compare-sse** turns the whole arrangement off and predicts nothing extra.
-
-A named PDB id is fetched while you are still looking at the form, so a wrong id is a message
-on the page rather than a missing comparison discovered hours later, and the run itself never
-stops to ask the network for something that could have been checked in advance.
-
-One of those settings is **Keep private**, which is about this site rather than the campaign:
-
-| Keep private | What happens |
-|---|---|
-| **off** (default) | The bundle is archived here, and so is the results file when you upload it. Both appear under **Runs**, where you can download either again or re-open the analysis without re-uploading. |
-| **on** | Nothing about the run is written to the server. The bundle is streamed to you and not kept; the results file you upload later carries a flag saying so, is read and then deleted, and never appears under Runs. |
-
-The flag travels **in your own files** -- the bundle records it, and the packer copies it into
-the results manifest -- so the site honours a private results file without consulting any
-record of its own. That is the point: a private run leaves nothing behind that could later be
-listed. Every bundle also carries a `run_key`, private or not, which is what lets a results
-file uploaded weeks later join the bundle it came from as one row rather than two.
+| Skip apo-vs-holo compare-sse | `--skip-sse` | off | Left off, every protein gets an apo reference so the comparison can run: an experimental structure if you gave a PDB id above, otherwise an extra ligand-free prediction of that protein. Those extra targets cost GPU time -- one more target per protein. Tick this to skip the comparison and predict nothing extra. |
+| Keep private | _(this site only)_ | off | Nothing about this run is kept on the server: the bundle is not archived, and the results file you upload later is recognised as private and not archived either. Leave it off and the run is listed under Runs, where you can download the bundle and results again later. |
 
 Submitting validates the spec (`format`, then `generate`, so a broken campaign fails here
 rather than an hour into a run on your machine) and downloads
@@ -983,7 +941,7 @@ slow-motion disk-full outage.
 | The 3D viewer says WebGL is unavailable | The browser has WebGL disabled or unsupported. Everything else on the page is unaffected. |
 | Preflight fails on `sse_comparison` or `result_packer` | The bundle is incomplete -- re-download it. Both are checked before any GPU time is spent precisely because `analyze` imports them only at the end, so a missing file used to surface after the prediction had already finished. |
 | Preflight warns on `vendor_assets` | Plotly or 3Dmol is missing from `vendor/`, so the dashboard will reach for a CDN and will not render offline. The run itself is unaffected. |
-| Preflight warns `boltz_cli` did not answer `--help` in time | A cold first import, not a broken install: `boltz --help` loads the whole torch stack, and a freshly solved environment byte-compiles it too. The bundle warms it before the campaign, and it is a warning that does not stop the run. |
+| Preflight warns `boltz_cli` did not answer `--help` in 120s | A cold first import, not a broken install: `boltz --help` loads the whole torch stack, and a freshly solved environment byte-compiles it too. The bundle warms it before the campaign, and it is a warning that does not stop the run. |
 | The interactions panel is empty | PLIP either did not run for that target, or found nothing. If you switched **Skip PLIP interaction analysis** on when preparing, that is the cause. |
 | A session link stops working | Sessions expire after two hours. Upload the file again; nothing is lost, since the `.bmz` is on your own disk. |
 
@@ -1072,6 +1030,13 @@ example campaigns.
 
 ## 📋 To do
 
+- [x] Give every protein an apo reference so compare-sse can actually run from the web form: a predicted ligand-free companion by default, an experimental PDB entry when one is named (mmCIF preferred, since most recent cryo-EM entries have no legacy file), or both. Previously the form emitted no `Apo structure:` at all, so the comparison never ran and its skip option had nothing to skip
+- [x] Add **Keep private** and a **Runs** tab: the decision travels in the user's own files (the bundle records it, the packer copies it into the results manifest) so a private run leaves nothing on the server to list, while everything else is archived with its bundle and results under a capped, self-pruning archive
+- [x] Add single-keypress run controls: `p` pauses and resumes via a real SIGSTOP of the whole Boltz process tree, so an interrupted target is neither discarded nor recomputed, and `q` stops the run and all its workers cleanly. Fixed a leak found on the way: terminating only the parent left dataloader workers alive holding RAM and the GPU
+- [x] Replace the run's dead `-:--:--` with an ETA that says where it came from -- measured from this run once a target completes, otherwise the median seconds-per-target of past runs of the same campaign on the same accelerator -- and make the phase row honest about the fact that Boltz reports nothing between dataloader items
+- [x] Preflight the bundle's own contents (`sse_comparison`, the vendored dashboard assets, the results packer), since all three are read only after the prediction finishes and a missing one used to cost the whole run before announcing itself
+- [x] Keep everything typed into the Prepare form across a download, a visit to Analysis or a reload, and let it be saved to and loaded from a small `.json` file
+- [ ] Run one real GPU campaign end to end as part of the release check. Four separate bundle defects (a preflight timeout, missing packages, unrepresentable zip timestamps, `sh` portability) reached a user because everything up to the campaign is verified automatically and the `pixi install` -> `boltz predict` -> `analyze` path is not
 - [x] Split the hosted site into two modes: a **Fully Automated** two-step flow (configure a campaign, download one self-extracting bundle carrying the software, environment and scripts; run it locally; upload the single `.bmz` results file it writes) and the original **Stepwise** four-tool flow, chosen from a two-panel landing page
 - [x] Give the Analysis step real exploration rather than an embedded report: a sortable, filterable target table, a confidence-versus-affinity triage plot coloured by BoltzMaker's own flags, and a per-target 3Dmol.js pose viewer with the detected PLIP interactions beside it -- which also lands the cross-target selectivity/triage view below
 - [x] Host the non-GPU stages (`new` wizard, `generate`, `preflight`, full `analyze` including PLIP and compare-sse) as a Flask app at [boltzmaker.mdeller.com](https://boltzmaker.mdeller.com), so the pipeline can be tried with no local install -- the GPU `run` step stays on your own hardware by design
