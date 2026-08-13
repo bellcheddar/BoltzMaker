@@ -417,8 +417,8 @@ var BoltzExplorer = (function () {
         // One height for every chart. The reports size each plot to its own
         // content, so a thirteen-bar chart came out twice the height of a
         // one-row heatmap and the panels read as a jumble of different objects.
-        // autosize lets width follow the panel; automargin keeps the rotated
-        // category labels inside the box rather than clipped by it.
+        // autosize lets width follow the panel, and since every panel is the same
+        // width and every margin below is the same, every plot area matches too.
         var layout = spec.layout || {};
         layout.height = CHART_HEIGHT;
         layout.autosize = true;
@@ -430,10 +430,9 @@ var BoltzExplorer = (function () {
         // at different x is harder to compare than one with some white space.
         layout.margin = { t: CHART_MARGIN.t, b: CHART_MARGIN.b,
                           l: CHART_MARGIN.l, r: CHART_MARGIN.r };
-        // automargin on BOTH axes, and created if the report did not define them.
-        // Guarding on `if (layout.xaxis)` left it off wherever the report had no
-        // axis block, and the rotated category labels then ran straight out of
-        // the panel and across the card below.
+        // Created if the report did not define them: guarding on `if (layout.xaxis)`
+        // used to leave the settings below unapplied wherever a report had no axis
+        // block, and those charts then sized themselves however they liked.
         layout.xaxis = layout.xaxis || {};
         layout.yaxis = layout.yaxis || {};
         // automargin OFF, deliberately. It expands the margin to fit the labels,
