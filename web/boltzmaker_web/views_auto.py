@@ -26,6 +26,7 @@ would delete a session out from under someone still reading it.
 from __future__ import annotations
 
 import json
+import math
 import re
 import secrets
 import shutil
@@ -557,6 +558,29 @@ def _sequence_payload(session: Path, loaded: bmz.Results, target: str) -> dict:
     }
 
 
+def _rmsd_over(fit: dict, core: set, rotation: list, centres: list):
+    """This target's RMSD to the reference over the shared region."""
+    centre_m, centre_f = centres
+    total, count = 0.0, 0
+    for index, (_, ref_number) in enumerate(fit["pairs"]):
+        if ref_number not in core or index >= len(fit["mobile"]):
+            continue
+        point = [fit["mobile"][index][i] - centre_m[i] for i in range(3)]
+        moved = [sum(rotation[i][j] * point[j] for j in range(3)) + centre_f[i]
+                 for i in range(3)]
+        target = fit["fixed"][index]
+        total += sum((moved[i] - target[i]) ** 2 for i in range(3))
+        count += 1
+    return math.sqrt(total / count) if count else None
+
+
+def _as_int(raw: str):
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return None
+
+
 def _receptor_of(chains: list, target) -> dict | None:
     proteins = [c for c in chains if c["kind"] == "protein"]
     return next((c for c in proteins if target and c["id"] == target.family_id),
@@ -574,6 +598,15 @@ def _overlay_payload(session: Path, loaded: bmz.Results) -> dict:
 
     The reference is the first target that has a structure, so it is the same for
     everyone looking at this campaign and the RMSDs are comparable to each other.
+
+    Every trace is the SAME region of the protein, not each target's own best-
+    fitting part. Drawing whole chains put a correctly superposed core inside a
+    haze of the parts that were never fitted -- a 5-HT2A N-terminus and ICL3 are
+    long, disordered, differ between predictions, and take the picture from 0.8A
+    of agreement to 9.8A of spray. Drawing each target's own core instead would
+    have every trace covering a different stretch, which is a different way of not
+    being comparable. So the region is decided once, in the reference's numbering:
+    the residues that most of the fits agreed on.
     """
     cache = session / "overlay.json"
     if cache.is_file():
@@ -584,7 +617,7 @@ def _overlay_payload(session: Path, loaded: bmz.Results) -> dict:
 
     structures = session / "campaign" / "structures"
     reference = None
-    rows = []
+    fits = []
     for target in loaded.targets:
         path = structures / f"{target.target_id}.cif"
         if not path.is_file():
@@ -596,24 +629,61 @@ def _overlay_payload(session: Path, loaded: bmz.Results) -> dict:
         if reference is None:
             reference = {"id": target.target_id, "chain": receptor}
 
-        mobile, fixed = sequences.paired_ca(reference["chain"], receptor)
+        mobile, fixed, pairs = sequences.paired_ca(reference["chain"], receptor)
         try:
-            rotation, centres, rmsd, core = alphafold.superpose_core(mobile, fixed)
+            rotation, centres, rmsd, kept = alphafold.superpose_core(mobile, fixed)
         except alphafold.AlphaFoldError:
-            # Too little in common to place it in the same frame. Listed with no
-            # RMSD rather than dropped, so a target never silently disappears.
-            rows.append({"id": target.target_id, "name": target.display_name,
-                         "ligand": target.ligand_id, "rmsd": None, "matched": len(mobile)})
+            fits.append({"target": target, "chains": chains, "path": path,
+                         "receptor": receptor, "pairs": pairs, "rmsd": None,
+                         "kept": [], "matched": len(mobile), "transform": None})
             continue
+        fits.append({"target": target, "chains": chains, "path": path,
+                     "receptor": receptor, "pairs": pairs, "rmsd": rmsd,
+                     "kept": kept, "matched": len(mobile), "mobile": mobile,
+                     "fixed": fixed, "transform": (rotation, centres)})
 
-        text = path.read_text(encoding="utf-8", errors="replace")
-        ligand_chains = {c["id"] for c in chains if c["kind"] == "ligand"}
+    # The shared region, in the reference's numbering: a residue is in it when at
+    # least half the fits kept it. An intersection would be at the mercy of the
+    # single worst target; a union would put the disordered parts back.
+    votes: dict[int, int] = {}
+    fitted = [f for f in fits if f["transform"]]
+    for fit in fitted:
+        for index in fit["kept"]:
+            if index >= len(fit["pairs"]):
+                continue
+            ref_number = fit["pairs"][index][1]
+            if ref_number is not None:
+                votes[ref_number] = votes.get(ref_number, 0) + 1
+    threshold = max(1, len(fitted) // 2)
+    core = {number for number, count in votes.items() if count >= threshold}
+
+    rows = []
+    for fit in fits:
+        target = fit["target"]
+        if not fit["transform"]:
+            rows.append({"id": target.target_id, "name": target.display_name,
+                         "ligand": target.ligand_id, "rmsd": None,
+                         "matched": fit["matched"], "core": 0})
+            continue
+        rotation, centres = fit["transform"]
+        # The shared region translated into this target's own numbering.
+        mine = {mine_number for mine_number, ref_number in fit["pairs"]
+                if ref_number in core and mine_number is not None}
+        # And the RMSD over exactly that region, rather than over this target's
+        # own best-fitting part. The panel draws one region for everybody, so the
+        # number beside each row has to be the one the picture shows -- and only
+        # then are the fifteen numbers measurements of the same thing.
+        shared_rmsd = _rmsd_over(fit, core, rotation, centres)
+        text = fit["path"].read_text(encoding="utf-8", errors="replace")
+        ligand_chains = {c["id"] for c in fit["chains"] if c["kind"] == "ligand"}
+        receptor = fit["receptor"]
         wrote_ligand = False
         try:
             trace = alphafold.transform_subset(
                 text, rotation, centres,
                 lambda f, c: (f[c["auth_asym_id"]] == receptor["id"]
-                              and f[c["label_atom_id"]] == "CA"))
+                              and f[c["label_atom_id"]] == "CA"
+                              and _as_int(f[c["auth_seq_id"]]) in mine))
             (session / f"overlay-ca-{target.target_id}.cif").write_text(trace)
             if ligand_chains:
                 ligand = alphafold.transform_subset(
@@ -626,11 +696,14 @@ def _overlay_payload(session: Path, loaded: bmz.Results) -> dict:
 
         rows.append({
             "id": target.target_id, "name": target.display_name,
-            "ligand": target.ligand_id, "rmsd": round(rmsd, 2),
-            "matched": len(mobile), "core": core, "has_ligand": wrote_ligand,
+            "ligand": target.ligand_id,
+            "rmsd": None if shared_rmsd is None else round(shared_rmsd, 2),
+            "matched": fit["matched"], "core": len(fit["kept"]),
+            "shared": len(mine), "has_ligand": wrote_ligand,
         })
 
-    payload = {"reference": reference["id"] if reference else "", "targets": rows}
+    payload = {"reference": reference["id"] if reference else "",
+               "shared": len(core), "targets": rows}
     try:
         cache.write_text(json.dumps(payload))
     except OSError:

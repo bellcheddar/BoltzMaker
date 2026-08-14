@@ -366,3 +366,44 @@ def test_the_header_height_is_measured_not_assumed():
     # Re-measured on resize, or crossing the breakpoint leaves the old value.
     fn = js[js.index("function trackHeaderHeight"):js.index("// ---- the two campaign-wide")]
     assert 'addEventListener("resize"' in fn
+
+
+def test_every_trace_is_the_same_region_of_the_protein():
+    """Drawing whole chains put a correctly superposed core inside a haze of the
+    parts that were never fitted -- a 5-HT2A N-terminus and ICL3 are long,
+    disordered and differ between predictions, taking the picture from 0.8A of
+    agreement to 9.8A of spray. Drawing each target's OWN core instead would have
+    every trace covering a different stretch, which is a different way of not
+    being comparable."""
+    src = (WEB / "boltzmaker_web" / "views_auto.py").read_text()
+    fn = src[src.index("def _overlay_payload"):src.index('@bp.route("/analysis/<token>/overlay.json")')]
+    # A residue is in the shared region when at least half the fits kept it: an
+    # intersection is at the mercy of the single worst target, a union puts the
+    # disordered parts back.
+    assert "votes[ref_number]" in fn
+    assert "count >= threshold" in fn
+
+
+def test_the_reported_rmsd_is_over_the_region_drawn():
+    """The panel draws one region for everybody, so the number beside each row has
+    to be the one the picture shows -- and only then are the fifteen numbers
+    measurements of the same thing."""
+    src = (WEB / "boltzmaker_web" / "views_auto.py").read_text()
+    assert "def _rmsd_over(" in src
+    assert "shared_rmsd = _rmsd_over(" in src
+
+
+def test_hiding_a_structure_is_idempotent():
+    """toggleVisibility flips whatever the current state is, so calling it for a
+    checkbox that is already unchecked would put the structure back."""
+    js = _viewer_js()
+    fn = js[js.index("Wrapper.prototype.setExtraVisible"):js.index("Wrapper.prototype.frameAll")]
+    assert "isHidden" in fn and "if (hidden === !visible) return;" in fn
+
+
+def test_the_accession_box_stays_hidden_until_it_is_needed():
+    """`display: flex` and the browser's own `[hidden] { display: none }` have the
+    same specificity, so the later one wins -- the box sat open on every page
+    asking for something nobody needed."""
+    css = (WEB / "static" / "css" / "brand.css").read_text()
+    assert ".md-af-ask[hidden] { display: none; }" in css

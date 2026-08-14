@@ -598,7 +598,9 @@ var BoltzExplorer = (function () {
     var reference = payload.reference;
     note.textContent = which === "ligands"
       ? rows.length + " ligands, in the frame of " + reference + "."
-      : rows.length + " targets on " + reference + ". RMSD is over the residues that agree.";
+      : rows.length + " targets on " + reference + ", over the "
+        + (payload.shared || 0) + " residues most of them agree on. "
+        + "Every trace is that same region, so the RMSDs compare like with like.";
 
     rows.forEach(function (row, index) {
       var colour = overlayColour(index);
@@ -630,10 +632,11 @@ var BoltzExplorer = (function () {
         rmsd.className = "md-overlay-rmsd";
         rmsd.textContent = row.rmsd === null || row.rmsd === undefined
           ? "\u2014"
-          : row.rmsd.toFixed(2) + " \u00c5 / " + (row.core || row.matched);
+          : row.rmsd.toFixed(2) + " \u00c5";
         rmsd.title = row.rmsd === null
           ? "Too little in common with the reference to superpose."
-          : "RMSD over " + (row.core || row.matched) + " of " + row.matched + " paired CA";
+          : "RMSD over the " + (row.shared || 0) + " residues drawn, of "
+            + row.matched + " this target pairs with the reference";
         label.appendChild(rmsd);
       }
 

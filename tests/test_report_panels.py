@@ -460,21 +460,31 @@ def test_the_margins_are_equalised_after_drawing():
     assert "_fullLayout._size" in js
 
 
+def _chart_resize_handler() -> str:
+    """The resize listener the CHARTS install, not whichever one comes first.
+
+    These two tests used to slice from the first `addEventListener("resize")` in
+    the file, which was the chart one until the header started measuring itself on
+    resize as well -- and then they were reading a different handler and failing
+    on code that had not changed. Scoped to the function that owns it instead.
+    """
+    js = _explorer_js()
+    body = js[js.index("function plotReportCharts"):]
+    return body[body.index('window.addEventListener("resize"'):]
+
+
 def test_a_resize_re_equalises():
     """Legends are re-measured against the new width, so the sizes drift apart
     again the first time the window moves unless the pass runs a second time."""
-    js = _explorer_js()
-    resize = js[js.index('window.addEventListener("resize"'):]
-    assert "settleMargins(specs);" in resize[:1400]
+    assert "settleMargins(specs);" in _chart_resize_handler()[:1400]
 
 
 def test_crossing_the_breakpoint_redraws_rather_than_resizes():
     """Plots.resize recomputes none of the margins, the legend orientation or
     whether there is a modebar, and relayout cannot take a new config."""
-    js = _explorer_js()
-    resize = js[js.index('window.addEventListener("resize"'):]
-    assert "Plotly.react(host" in resize[:1400]
-    assert "nowNarrow !== wasNarrow" in resize[:1400]
+    handler = _chart_resize_handler()[:1400]
+    assert "Plotly.react(host" in handler
+    assert "nowNarrow !== wasNarrow" in handler
 
 
 def test_tables_scroll_sideways_on_a_phone_and_wrap_on_a_desktop():

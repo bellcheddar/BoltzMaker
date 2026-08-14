@@ -298,7 +298,9 @@ def logo_columns(aligned: list[str]) -> list[list]:
 
 
 def paired_ca(reference: dict, other: dict) -> tuple[list, list]:
-    """CA pairs between two chains, through an alignment when they differ.
+    """CA pairs between two chains, with both sides' residue numbers for each pair.
+
+    Through an alignment when the two differ.
 
     Two predictions of the same protein have the same sequence and the same
     numbering, and pairing by position is exact. Two members of a receptor family
@@ -310,14 +312,25 @@ def paired_ca(reference: dict, other: dict) -> tuple[list, list]:
     So: identical sequences pair position by position, and everything else pairs
     through the same alignment the conservation logo is drawn from.
     """
+    numbers = other.get("numbers") or []
+    ref_numbers = reference.get("numbers") or []
+
+    def number(source, index):
+        return source[index] if index < len(source) else None
+
     if reference["letters"] == other["letters"]:
-        pairs = [(a, b) for a, b in zip(other["ca"], reference["ca"]) if a and b]
-        return [a for a, _ in pairs], [b for _, b in pairs]
+        mobile, fixed, pairs = [], [], []
+        for index, (a, b) in enumerate(zip(other["ca"], reference["ca"])):
+            if a and b:
+                mobile.append(a)
+                fixed.append(b)
+                pairs.append((number(numbers, index), number(ref_numbers, index)))
+        return mobile, fixed, pairs
 
     aligned = align_to_reference([reference["letters"], other["letters"]])
     if len(aligned) != 2:
-        return [], []
-    mobile, fixed = [], []
+        return [], [], []
+    mobile, fixed, pairs = [], [], []
     i = j = 0
     for left, right in zip(aligned[0], aligned[1]):
         if left != "-" and right != "-":
@@ -325,8 +338,9 @@ def paired_ca(reference: dict, other: dict) -> tuple[list, list]:
             if a and b:
                 mobile.append(a)
                 fixed.append(b)
+                pairs.append((number(numbers, j), number(ref_numbers, i)))
         if left != "-":
             i += 1
         if right != "-":
             j += 1
-    return mobile, fixed
+    return mobile, fixed, pairs

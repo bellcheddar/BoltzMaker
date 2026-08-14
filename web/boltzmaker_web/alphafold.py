@@ -251,9 +251,11 @@ def superpose_core(mobile: list, fixed: list, rounds: int = 6,
     that produced that. Halving the set each round always makes progress, whatever
     the fit it starts from, and the absolute cutoff then decides when to stop.
 
-    Returns the transform, the RMSD over the residues that survived, and how many
-    those were. The count is not decoration: 1A over 40 residues and 1A over 400
-    are different claims, and only the second is about the protein.
+    Returns the transform, the RMSD over the residues that survived, and which
+    ones those were. The count is not decoration -- 1A over 40 residues and 1A
+    over 400 are different claims, and only the second is about the protein -- and
+    the caller needs the identities too, so it can draw the part that was actually
+    fitted rather than the part that was not.
     """
     keep = list(range(len(mobile)))
     rotation, centres, rmsd = superpose(mobile, fixed)
@@ -281,7 +283,7 @@ def superpose_core(mobile: list, fixed: list, rounds: int = 6,
         keep = survivors
         rotation, centres, rmsd = superpose([mobile[i] for i in keep],
                                             [fixed[i] for i in keep])
-    return rotation, centres, rmsd, len(keep)
+    return rotation, centres, rmsd, keep
 
 
 def apply_transform(cif_text: str, rotation: list, centres: list) -> str:

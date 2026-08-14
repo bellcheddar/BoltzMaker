@@ -539,8 +539,12 @@ tr.md-check-na .md-check-fail { color: var(--md-text-muted); }
   .md-report-plot img { max-height: 240px; }
 }
 
-/* Only shown when neither the spec nor the sequence produced an accession. */
+/* Only shown when neither the spec nor the sequence produced an accession. The
+   [hidden] rule is not redundant: `display: flex` here and the browser's own
+   `[hidden] { display: none }` have the same specificity, so the later one wins
+   and the box sat open on every page asking for something nobody needed. */
 .md-af-ask { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 12px 0 0; }
+.md-af-ask[hidden] { display: none; }
 .md-af-ask input { width: 140px; padding: 6px 8px; border: 1px solid var(--md-border);
   border-radius: var(--md-radius); font-family: 'Roboto Mono', monospace; font-size: 12px; }
 .md-af-ask .md-btn { padding: 6px 14px; font-size: 12px; }

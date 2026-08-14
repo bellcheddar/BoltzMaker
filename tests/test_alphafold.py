@@ -195,9 +195,14 @@ def test_the_core_fit_ignores_the_part_that_moved():
     identical."""
     mobile, fixed = _two_domains(30.0)
     _, _, plain_rmsd = af.superpose(mobile, fixed)
-    _, _, core_rmsd, core_n = af.superpose_core(mobile, fixed)
+    _, _, core_rmsd, kept = af.superpose_core(mobile, fixed)
+    core_n = len(kept)
     assert plain_rmsd > 5.0
     assert core_rmsd < 0.5
+    # The identities matter as much as the count: the caller draws the residues
+    # that were fitted, so anything from the displaced tail surviving would be
+    # drawn as though it had agreed. The core is the first 60 points.
+    assert max(kept) < 60
     # Most of the 60-point core survives and none of the 40-point tail can have:
     # a fit at 0.5A over 40+ points is only possible on points that agree. The
     # count is not 60 because the first round halves the set while the fit is
@@ -211,15 +216,15 @@ def test_the_refinement_starts_even_from_a_hopeless_fit():
     sat at 19A over every residue that way, having rejected all of them and kept
     the fit that produced it."""
     mobile, fixed = _two_domains(400.0)     # first fit is nowhere near anything
-    _, _, rmsd, core_n = af.superpose_core(mobile, fixed)
+    _, _, rmsd, kept = af.superpose_core(mobile, fixed)
     assert rmsd < 1.0
-    assert core_n < len(mobile)
+    assert len(kept) < len(mobile)
 
 
 def test_a_good_fit_is_not_trimmed_away():
     """Halving unconditionally each round takes a perfectly good superposition
     down to a quarter of the chain and then reports a fine RMSD over a fragment."""
     points = [[float(i), float(i % 7), float(i % 3)] for i in range(200)]
-    _, _, rmsd, core_n = af.superpose_core(points, points)
+    _, _, rmsd, kept = af.superpose_core(points, points)
     assert rmsd == pytest.approx(0.0, abs=1e-6)
-    assert core_n == 200
+    assert len(kept) == 200

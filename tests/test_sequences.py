@@ -193,11 +193,15 @@ def test_an_all_gap_column_draws_nothing():
 
 # --- pairing two chains for a superposition -----------------------------------
 
+def _chain(letters, y, first=1):
+    return {"letters": letters,
+            "ca": [[float(i), y, 0.0] for i in range(len(letters))],
+            "numbers": list(range(first, first + len(letters)))}
+
+
 def test_identical_chains_pair_position_by_position():
-    a = {"letters": "ACDEFG", "ca": [[float(i), 0.0, 0.0] for i in range(6)]}
-    b = {"letters": "ACDEFG", "ca": [[float(i), 1.0, 0.0] for i in range(6)]}
-    mobile, fixed = sequences.paired_ca(a, b)
-    assert len(mobile) == 6
+    mobile, fixed, pairs = sequences.paired_ca(_chain("ACDEFG", 0.0), _chain("ACDEFG", 1.0))
+    assert len(mobile) == len(fixed) == len(pairs) == 6
 
 
 def test_different_chains_pair_through_the_alignment():
@@ -205,16 +209,23 @@ def test_different_chains_pair_through_the_alignment():
     residues and share almost no residue numbers that mean the same thing.
     Pairing by position would superpose one onto a frameshifted copy of the other
     and report a confident, meaningless RMSD."""
-    a = {"letters": "ACDEFGHIK", "ca": [[float(i), 0.0, 0.0] for i in range(9)]}
-    b = {"letters": "ACDFGHIK", "ca": [[float(i), 1.0, 0.0] for i in range(8)]}
-    mobile, fixed = sequences.paired_ca(a, b)
+    mobile, fixed, pairs = sequences.paired_ca(_chain("ACDEFGHIK", 0.0), _chain("ACDFGHIK", 1.0))
     assert len(mobile) == len(fixed) == 8
-    # E is missing from b, so a's E (index 4) must not be paired with anything.
-    assert [f[0] for f in fixed] == [0.0, 1.0, 2.0, 5.0, 6.0, 7.0, 8.0, 4.0] or len(fixed) == 8
+    # E is in the reference and not in the other, so it pairs with nothing: the
+    # reference numbers skip it rather than shifting everything after it.
+    assert [ref for _, ref in pairs] == [1, 2, 3, 5, 6, 7, 8, 9]
+
+
+def test_both_sides_residue_numbers_come_back():
+    """The panel draws one region across every target, so it needs the pairing in
+    the reference's numbering as well as in each target's own."""
+    _, _, pairs = sequences.paired_ca(_chain("ACD", 0.0, first=1), _chain("ACD", 1.0, first=100))
+    assert pairs == [(100, 1), (101, 2), (102, 3)]
 
 
 def test_residues_with_no_coordinates_are_not_paired():
-    a = {"letters": "ACD", "ca": [[0.0, 0.0, 0.0], None, [2.0, 0.0, 0.0]]}
-    b = {"letters": "ACD", "ca": [[0.0, 1.0, 0.0], [1.0, 1.0, 0.0], [2.0, 1.0, 0.0]]}
-    mobile, fixed = sequences.paired_ca(a, b)
+    a = {"letters": "ACD", "ca": [[0.0, 0.0, 0.0], None, [2.0, 0.0, 0.0]], "numbers": [1, 2, 3]}
+    b = {"letters": "ACD", "ca": [[0.0, 1.0, 0.0], [1.0, 1.0, 0.0], [2.0, 1.0, 0.0]],
+         "numbers": [1, 2, 3]}
+    mobile, fixed, pairs = sequences.paired_ca(a, b)
     assert len(mobile) == 2
