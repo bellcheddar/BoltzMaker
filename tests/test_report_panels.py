@@ -504,3 +504,30 @@ def test_the_nav_may_wrap():
     nav = css[css.index(".md-header-nav {"):]
     assert "flex-shrink: 1" in nav[:200]
     assert "flex-wrap: wrap" in nav[:200]
+
+
+def test_the_colourbar_fills_its_outline():
+    """xpad defaults to 10, a gap between the coloured bar and the outline drawn
+    round it: the colours filled 56..308 of a 46..319 box and read as a bar sitting
+    loose inside a rectangle."""
+    js = _explorer_js()
+    assert "bar.xpad = 0; bar.ypad = 0;" in js
+    assert "bar.xpad = 10; bar.ypad = 10;" in js
+
+
+def test_the_colourbar_spans_the_plot_area_on_a_phone():
+    """Referred to the container it drew the fill to a fraction of one width and
+    the outline to a fraction of the other. In paper units with len 1 it starts and
+    ends on the axis ends."""
+    js = _explorer_js()
+    narrow = js[js.index('bar.orientation = "h";'):js.index('} else {\n      bar.orientation = "v";')]
+    assert 'bar.xref = "paper"' in narrow
+    assert 'bar.yref = "container"' in narrow      # y stays stable, see the settle loop
+    assert "bar.len = 1;" in narrow
+
+
+def test_the_legend_shares_a_centre_line_with_the_axis_title():
+    """Left-aligned it sat a legend's worth of internal padding in from the axis,
+    which read as a near-miss rather than a choice."""
+    js = _explorer_js()
+    assert 'legend.x = 0.5; legend.xanchor = "center";' in js

@@ -425,7 +425,11 @@ var BoltzExplorer = (function () {
       var legend = layout.legend || {};
       if (narrow) {
         legend.orientation = "h";
-        legend.x = 0; legend.xanchor = "left";
+        // Centred on the plot, which is where the axis title and the colourbar are
+        // centred too, so the three of them share one line down the middle of the
+        // card. Left-aligned it sat a legend's worth of internal padding in from
+        // the axis, which read as a near-miss rather than a choice.
+        legend.x = 0.5; legend.xanchor = "center";
         legend.y = 1.02; legend.yanchor = "bottom";
         legend.font = { size: 10 };
         // A legend box drawn over the plot is the report's own choice for the two
@@ -450,15 +454,26 @@ var BoltzExplorer = (function () {
     bar = bar || {};
     if (narrow) {
       bar.orientation = "h";
-      // Anchored to the container, not to the plot. Positioned against the plot
-      // its y is a fraction of the plot's height, so the margin it pushes depends
-      // on the height, and the height is derived from that margin -- the two
-      // chased each other a pixel apart and never settled. Against the container
-      // it sits a fixed distance off the bottom of the card whatever the plot does.
-      bar.xref = "container"; bar.yref = "container";
+      // x against the plot, y against the container. Both against the container
+      // drew the coloured fill to a fraction of one width and its outline to a
+      // fraction of the other, so the colours sat inside a box that did not
+      // contain them -- 56..216 of fill in a 56..237 box. In paper units x: 0.5
+      // with len 1 spans exactly the plot area, so the bar starts and ends on the
+      // axis ends and shares a centre line with the axis title below it.
+      //
+      // y stays on the container because against the plot it is a fraction of the
+      // plot's height, so the margin it pushes depends on the height, and the
+      // height is derived from that margin -- the two chased each other a pixel
+      // apart and never settled.
+      bar.xref = "paper"; bar.yref = "container";
       bar.x = 0.5; bar.xanchor = "center";
       bar.y = 0.02; bar.yanchor = "bottom";
-      bar.len = 0.66; bar.lenmode = "fraction"; bar.thickness = 12;
+      bar.len = 1; bar.lenmode = "fraction"; bar.thickness = 12;
+      // xpad defaults to 10, which is a gap between the coloured bar and the
+      // outline drawn around it: the colours filled 56..308 of a 46..319 box and
+      // read as a bar sitting loose inside a rectangle. At 0 the outline is the
+      // edge of the colours.
+      bar.xpad = 0; bar.ypad = 0;
       bar.title = bar.title || {};
       if (typeof bar.title === "object") bar.title.side = "bottom";
       bar.tickfont = { size: 9 };
@@ -468,6 +483,8 @@ var BoltzExplorer = (function () {
       bar.x = undefined; bar.y = undefined;
       bar.xanchor = undefined; bar.yanchor = undefined;
       bar.len = 1; bar.lenmode = "fraction"; bar.thickness = 15;
+      bar.xpad = 10; bar.ypad = 10;   // Plotly's defaults, restated so the
+                                      // breakpoint can be crossed both ways.
       if (bar.title && typeof bar.title === "object") bar.title.side = "right";
       bar.tickfont = undefined;
     }
