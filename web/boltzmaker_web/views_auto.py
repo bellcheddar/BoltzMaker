@@ -36,7 +36,8 @@ from flask import (
     Blueprint, Response, abort, current_app, render_template, request, send_file, url_for,
 )
 
-from . import apo, bundle, options, reports as report_panels, results as bmz, runs as runs_archive
+from . import (apo, bundle, options, reports as report_panels, results as bmz,
+               runs as runs_archive, sequences)
 from .app import new_scratch_dir, runs_root, session_root
 from .runner import BoltzMakerTimeout, extract_error_message, run_boltzmaker
 from .views_new import _parse_form
@@ -465,6 +466,108 @@ def _session_asset(token: str, target: str, subdir: str, suffix: str, mimetype: 
     # Immutable: a session's contents never change, and the token is already
     # unique per upload, so the URL is safe to cache for as long as it exists.
     return send_file(path, mimetype=mimetype, max_age=SESSION_CACHE_SECONDS)
+
+
+def _sequence_payload(session: Path, loaded: bmz.Results, target: str) -> dict:
+    """The sequence track for one target, and the conservation logo above it.
+
+    Cached beside the extracted campaign for the same reason the panels are: the
+    alignment is over every distinct protein in the campaign, and it does not
+    change between page loads.
+
+    The logo is aligned across the campaign's DISTINCT proteins, not across a
+    family_group. A group here is one receptor in its holo, no-partner and apo
+    forms -- the same sequence three times, whose conservation logo would be a
+    solid wall saying nothing. Across groups it is 5HT2A against 5HT2B against
+    5HT2C, which is the comparison that has something in it.
+    """
+    cache = session / f"sequence-{target}.json"
+    if cache.is_file():
+        try:
+            return json.loads(cache.read_text())
+        except (json.JSONDecodeError, OSError):
+            pass
+
+    structures = session / "campaign" / "structures"
+    chains = sequences.chains_from_cif(structures / f"{target}.cif")
+    if not chains:
+        return {"chains": [], "logo": [], "columns": []}
+
+    by_id = {t.target_id: t for t in loaded.targets}
+    this = by_id.get(target)
+    # The receptor, not a partner: the chain named after the target's family. Boltz
+    # writes the target protein first, so its position is the fallback.
+    proteins = [c for c in chains if c["kind"] == "protein"]
+    receptor = next((c for c in proteins if this and c["id"] == this.family_id),
+                    proteins[0] if proteins else None)
+
+    # One representative per distinct protein across the campaign, so the same
+    # receptor appearing as holo, no-partner and apo is counted once.
+    others: dict[str, str] = {}
+    for other in loaded.targets:
+        path = structures / f"{other.target_id}.cif"
+        if not path.is_file():
+            continue
+        other_chains = sequences.chains_from_cif(path)
+        other_proteins = [c for c in other_chains if c["kind"] == "protein"]
+        pick = next((c for c in other_proteins if c["id"] == other.family_id),
+                    other_proteins[0] if other_proteins else None)
+        if pick and pick["letters"] not in others.values():
+            others[other.target_id] = pick["letters"]
+
+    logo: list = []
+    columns: list = []
+    if receptor and len(others) > 1:
+        ordered = list(others.values())
+        # The selected target's own sequence must be in the set and identifiable,
+        # because the track is drawn against it and every column has to map back.
+        if receptor["letters"] not in ordered:
+            ordered.append(receptor["letters"])
+        aligned = sequences.align_to_reference(ordered)
+        mine = aligned[ordered.index(receptor["letters"])]
+        logo = sequences.logo_columns(aligned)
+        # Column index for each residue of the track, so the logo can be drawn in
+        # register with it: the alignment has gaps, the track does not.
+        position = 0
+        for index, letter in enumerate(mine):
+            if letter != "-":
+                columns.append(index)
+                position += 1
+
+    return {
+        "chains": [{k: c[k] for k in ("id", "letter", "kind")} for c in chains],
+        "receptor": receptor["id"] if receptor else "",
+        "letter": receptor["letter"] if receptor else "",
+        "letters": receptor["letters"] if receptor else "",
+        "numbers": receptor["numbers"] if receptor else [],
+        "restypes": receptor["restypes"] if receptor else [],
+        "logo": logo,
+        "columns": columns,
+        "aligned_count": len(others),
+    }
+
+
+@bp.route("/analysis/<token>/sequence/<target>.json")
+def sequence(token: str, target: str):
+    session = _session_dir(token)
+    if session is None:
+        return Response("session expired", status=404, mimetype="text/plain")
+    if not _TARGET_RE.match(target or ""):
+        return Response("bad target id", status=400, mimetype="text/plain")
+    try:
+        loaded = bmz.load(session / "campaign")
+    except bmz.BmzError:
+        return Response("session unreadable", status=404, mimetype="text/plain")
+    if target not in {t.target_id for t in loaded.targets}:
+        return Response("no such target", status=404, mimetype="text/plain")
+
+    payload = _sequence_payload(session, loaded, target)
+    try:
+        (session / f"sequence-{target}.json").write_text(json.dumps(payload))
+    except OSError:
+        pass
+    return Response(json.dumps(payload), mimetype="application/json",
+                    headers={"Cache-Control": f"private, max-age={SESSION_CACHE_SECONDS}"})
 
 
 @bp.route("/analysis/<token>/structure/<target>")

@@ -92,6 +92,18 @@ def packed_bmz(tmp_path, built_bundle):
     plip_dir = campaign / "boltz_plip"
     plip_dir.mkdir()
     (plip_dir / "AAA_LIG.png").write_bytes(b"\x89PNG\r\n\x1a\n" + b"\0" * 64)
+    # PLIP's per-contact detail, in the shape it really writes: one geometry
+    # column of "key=value; key=value" whose keys differ by interaction type.
+    (campaign / "boltz_interactions.csv").write_text(
+        "ligand,interaction_type,prot_resnr,prot_restype,prot_chain,lig_restype,lig_chain,"
+        "distance_A,prot_atom_idx,lig_atom_idx,geometry,target_id\n"
+        "LIG:E:1,hydrophobic,139,TYR,A,LIG,E,3.52,1061.0,9843.0,dist=3.52,AAA_LIG\n"
+        "LIG:E:1,hydrogen bonds,370,TYR,A,LIG,E,3.67,2898.0,9825.0,"
+        "sidechain=True; dist_h-a=3.20; dist_d-a=3.67; don_angle=112.93; protisdon=True; "
+        "donoridx=2898; donortype=O3; acceptoridx=9825; acceptortype=N3,AAA_LIG\n"
+        "LIG:E:1,pi stacks,340,PHE,A,LIG,E,5.33,,,"
+        "centdist=5.33; angle=64.18; offset=0.65; type=T,AAA_LIG\n"
+    )
 
     proc = subprocess.run([sys.executable, "pack_results.py"], cwd=campaign,
                           capture_output=True, text=True)
@@ -341,6 +353,16 @@ def test_manifest_records_what_was_not_packed(tmp_path, packed_bmz):
     assert manifest["structures_included"] == 2
     assert manifest["images_included"] == 1
     assert manifest["boltzmaker_sha256"] is None or len(manifest["boltzmaker_sha256"]) == 64
+
+
+@pytest.fixture
+def loaded_results(tmp_path, packed_bmz):
+    """The packed .bmz read back by the real reader -- the far end of the round
+    trip these tests are built around."""
+    dest = tmp_path / "loaded"
+    dest.mkdir()
+    bmz.extract(packed_bmz, dest)
+    return bmz.load(dest)
 
 
 def test_payload_json_matches_the_loaded_results(tmp_path, packed_bmz):
@@ -713,3 +735,55 @@ def test_prepare_reports_a_bad_spec_instead_of_shipping_it(client):
     # wizard.validate_name's own wording, checked verbatim so a reworded message
     # has to be acknowledged here rather than quietly weakening the test.
     assert "MAX 5 CHARACTERS" in response.data.decode()
+
+
+# --- PLIP detail --------------------------------------------------------------
+
+def test_the_interactions_survive_the_packer(loaded_results):
+    """The counts in boltz_summary.csv and the rows in boltz_interactions.csv are
+    the same data at two resolutions, and only the counts were ever read. This is
+    the round trip for the detail behind them."""
+    rows = loaded_results.interactions["AAA_LIG"]
+    assert [r["type"] for r in rows] == ["hydrophobic", "hydrogen bonds", "pi stacks"]
+    assert rows[0]["restype"] == "TYR" and rows[0]["resnr"] == 139
+    assert rows[0]["chain"] == "A" and rows[0]["distance"] == 3.52
+
+
+def test_the_geometry_column_is_parsed_into_labelled_fields(loaded_results):
+    """PLIP writes one string per contact whose keys depend on the interaction
+    type. A column per key across every type would be mostly empty."""
+    hbond = loaded_results.interactions["AAA_LIG"][1]
+    fields = {f["label"]: f["value"] for f in hbond["geometry"]}
+    assert fields["Donor angle"] == "112.93"
+    assert fields["Donor atom"] == "O3" and fields["Acceptor atom"] == "N3"
+    # Booleans read as words, not as Python repr.
+    assert fields["Side chain"] == "yes"
+
+
+def test_plip_atom_indices_are_not_shown(loaded_results):
+    """They index PLIP's own parse of the structure, identify nothing a reader can
+    look up, and change between runs -- printing them suggests otherwise."""
+    hbond = loaded_results.interactions["AAA_LIG"][1]
+    labels = " ".join(f["label"] for f in hbond["geometry"])
+    assert "idx" not in labels.lower()
+    assert "2898" not in " ".join(f["value"] for f in hbond["geometry"])
+
+
+def test_stacking_geometry_keeps_its_own_fields(loaded_results):
+    stack = loaded_results.interactions["AAA_LIG"][2]
+    fields = {f["label"]: f["value"] for f in stack["geometry"]}
+    assert fields["Stacking"] == "T"
+    assert fields["Ring offset"] == "0.65"
+
+
+def test_a_target_with_no_contacts_gets_an_empty_list(loaded_results):
+    """PLIP is skipped for a low-confidence target, and the panel has to say so
+    rather than fail looking for rows that were never written."""
+    assert loaded_results.interactions.get("BBB_LIG", []) == []
+
+
+def test_the_payload_carries_the_contacts(loaded_results):
+    payload = json.loads(bmz.to_json(loaded_results))
+    by_id = {t["id"]: t for t in payload["targets"]}
+    assert len(by_id["AAA_LIG"]["interactions"]) == 3
+    assert by_id["BBB_LIG"]["interactions"] == []

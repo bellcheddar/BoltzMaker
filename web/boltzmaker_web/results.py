@@ -200,6 +200,8 @@ class Results:
 
     #: Reports BoltzMaker generated, present in the file if the campaign wrote them.
     reports: list = field(default_factory=list)
+    #: Every PLIP contact, by target_id -- the detail behind the counts.
+    interactions: dict = field(default_factory=dict)
 
     @property
     def private(self) -> bool:
@@ -229,6 +231,82 @@ _PLIP_COLUMNS = {
     "plip_pi_stacks_count": "pi stacks",
     "plip_halogen_bonds_count": "halogen bonds",
 }
+
+
+#: PLIP writes one geometry column per interaction, as "key=value; key=value",
+#: and the keys differ by interaction type -- a hydrogen bond carries donor and
+#: acceptor types and a donor angle, a pi stack carries an offset and a T/P
+#: classification. Rather than a column per key across every type (mostly empty),
+#: the fields are parsed out here and labelled for display.
+_GEOMETRY_LABELS = {
+    "dist": ("Distance", "\u00c5"),
+    "dist_h-a": ("H\u00b7\u00b7\u00b7A", "\u00c5"),
+    "dist_d-a": ("D\u00b7\u00b7\u00b7A", "\u00c5"),
+    "centdist": ("Centroid distance", "\u00c5"),
+    "don_angle": ("Donor angle", "\u00b0"),
+    "acc_angle": ("Acceptor angle", "\u00b0"),
+    "angle": ("Ring angle", "\u00b0"),
+    "offset": ("Ring offset", "\u00c5"),
+    "type": ("Stacking", ""),
+    "donortype": ("Donor atom", ""),
+    "acceptortype": ("Acceptor atom", ""),
+    "lig_group": ("Ligand group", ""),
+    "sidechain": ("Side chain", ""),
+    "protisdon": ("Protein is donor", ""),
+    "protispos": ("Protein is positive", ""),
+}
+
+#: Atom indices are PLIP's internal numbering into its own parsed structure. They
+#: identify nothing a reader can look up and change between runs, so they are
+#: dropped rather than shown as if they meant something.
+_GEOMETRY_SKIP = {"donoridx", "acceptoridx", "don_idx", "acc_idx"}
+
+
+def _parse_geometry(raw: str) -> list[dict]:
+    """"sidechain=True; dist_h-a=3.20; ..." into labelled fields, in PLIP's order."""
+    fields = []
+    for part in (raw or "").split(";"):
+        part = part.strip()
+        if not part or "=" not in part:
+            continue
+        key, _, value = part.partition("=")
+        key, value = key.strip(), value.strip()
+        if key in _GEOMETRY_SKIP:
+            continue
+        label, unit = _GEOMETRY_LABELS.get(key, (key.replace("_", " "), ""))
+        if value in ("True", "False"):
+            value = "yes" if value == "True" else "no"
+        fields.append({"label": label, "value": value, "unit": unit})
+    return fields
+
+
+def _load_interactions(root: Path) -> dict[str, list[dict]]:
+    """Every PLIP contact, by target_id.
+
+    The counts in boltz_summary.csv are the same data summed, so this is the
+    detail behind the numbers the Targets table already shows.
+    """
+    path = root / "summary" / "boltz_interactions.csv"
+    if not path.is_file():
+        return {}
+    by_target: dict[str, list[dict]] = {}
+    with path.open(newline="", encoding="utf-8", errors="replace") as fh:
+        for row in csv.DictReader(fh):
+            target = (row.get("target_id") or "").strip()
+            if not target:
+                continue
+            resnr = (row.get("prot_resnr") or "").strip()
+            by_target.setdefault(target, []).append({
+                "type": (row.get("interaction_type") or "").strip(),
+                "restype": (row.get("prot_restype") or "").strip(),
+                "resnr": int(resnr) if resnr.isdigit() else None,
+                "chain": (row.get("prot_chain") or "").strip(),
+                "lig_restype": (row.get("lig_restype") or "").strip(),
+                "lig_chain": (row.get("lig_chain") or "").strip(),
+                "distance": _num(row.get("distance_A")),
+                "geometry": _parse_geometry(row.get("geometry") or ""),
+            })
+    return by_target
 
 
 def load(root: Path) -> Results:
@@ -340,6 +418,7 @@ def load(root: Path) -> Results:
         md_text=md_path.read_text(encoding="utf-8", errors="replace") if md_path.is_file() else "",
         sse_rows=sse_rows,
         reports=reports,
+        interactions=_load_interactions(root),
     )
 
 
@@ -363,6 +442,7 @@ def to_json(results: Results) -> str:
                 "pic50": t.pic50, "pic50_std": t.pic50_std,
                 "plip_status": t.plip_status, "plip": t.plip_counts, "plip_total": t.plip_total,
                 "structure": t.has_structure, "image": t.has_image,
+                "interactions": results.interactions.get(t.target_id, []),
             }
             for t in results.targets
         ],
