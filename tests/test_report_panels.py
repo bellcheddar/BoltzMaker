@@ -370,13 +370,19 @@ def _explorer_js() -> str:
             / "web" / "static" / "js" / "explorer.js").read_text()
 
 
+def _brand_css() -> str:
+    from pathlib import Path
+    return (Path(__file__).resolve().parents[1]
+            / "web" / "static" / "css" / "brand.css").read_text()
+
+
 def test_every_chart_is_given_the_same_margins():
-    """Plot areas match only if the margins do. Reinstating Math.max here -- which
-    is what the code did before -- lets a chart with a long y label quietly grow a
-    bigger margin than its neighbours, and the axes stop lining up down the page."""
+    """Plot areas match only if the margins do. Reinstating Math.max on the
+    per-chart margin -- which is what the code did before -- lets a chart with a
+    long y label quietly grow a bigger margin than its neighbours, and the axes
+    stop lining up down the page."""
     js = _explorer_js()
-    assert "var CHART_MARGIN = {" in js
-    assert "layout.margin = { t: CHART_MARGIN.t" in js
+    assert "layout.margin = { t: metrics.margin.t" in js
     assert "Math.max(layout.margin" not in js
 
 
@@ -388,27 +394,70 @@ def test_automargin_is_off():
     assert "layout.yaxis.automargin = false;" in js
 
 
-def test_the_right_margin_leaves_room_for_a_legend():
-    """The reserve has to hold the widest thing drawn outside a plot -- the binder
-    probability colourbar with its title -- or it lands on top of the axes."""
+def test_there_is_a_separate_margin_set_for_narrow_screens():
+    """120 + 170 of a 330px panel is 40px of plot, which is what the charts were on
+    a phone. Nothing can sit beside a plot at that width."""
     js = _explorer_js()
-    match = re.search(r"var CHART_MARGIN = \{[^}]*r:\s*(\d+)", js)
-    assert match and int(match.group(1)) >= 150
+    wide = re.search(r"CHART_WIDE = \{ height: (\d+), margin: \{ t: (\d+), b: (\d+), l: (\d+), r: (\d+)", js)
+    narrow = re.search(r"CHART_NARROW = \{ height: (\d+), margin: \{ t: (\d+), b: (\d+), l: (\d+), r: (\d+)", js)
+    assert wide and narrow
+    wide_lr = int(wide.group(4)) + int(wide.group(5))
+    narrow_lr = int(narrow.group(4)) + int(narrow.group(5))
+    # The side margins hold a legend on a desktop and nothing on a phone.
+    assert narrow_lr < wide_lr / 2
+
+
+def test_the_legend_and_colourbar_move_on_a_phone():
+    """There is no room beside the plot at 390px, so the legend goes above it and
+    the colourbar below. Both must be set in BOTH directions: the charts are relaid
+    out when the window crosses the breakpoint, so leaving a property alone keeps
+    the placement from whatever width the page happened to load at."""
+    js = _explorer_js()
+    assert 'legend.orientation = "h";' in js
+    assert 'legend.orientation = "v";' in js
+    assert 'bar.orientation = "h";' in js
+    assert 'bar.orientation = "v";' in js
+
+
+def test_the_colourbar_is_anchored_to_the_container_on_a_phone():
+    """Positioned against the plot, its y is a fraction of the plot height, so the
+    margin it pushes depends on the height and the height is derived from that
+    margin. The two chased each other a pixel apart and never settled."""
+    js = _explorer_js()
+    assert 'bar.yref = "container";' in js
+
+
+def test_the_modebar_is_off_on_a_phone():
+    """It is an absolutely positioned strip over the top of the plot, and none of
+    it is reachable by touch."""
+    assert "config.displayModeBar = !isNarrow();" in _explorer_js()
+
+
+def test_the_plot_area_height_is_not_the_largest_margin():
+    """Taking the largest top and bottom is right for left and right, and wrong for
+    height: on a phone a twelve-name legend is a block of top margin, and equalising
+    on it gave every chart a 400px margin inside a 460px box -- a 50px letterbox
+    where the plot should be. Each chart keeps its own top and bottom and its height
+    is set to hold them plus a plot area of a fixed size."""
+    js = _explorer_js()
+    assert "var height = top + bottom + plotHeight;" in js
+    assert "wide.l = Math.max(wide.l" in js
+    assert "wide.r = Math.max(wide.r" in js
+    # No max over t/b -- that is the bug this guards.
+    assert "Math.max(used.t" not in js and "wide.t" not in js
 
 
 def test_the_margins_are_equalised_after_drawing():
     """Setting equal margins is not enough on its own: Plotly widens a side to fit
     a legend drawn outside the plot, and that widening never appears in
     layout.margin, so a chart whose legend is twelve full target names came out
-    611px wide beside its neighbours' 620. The second pass reads the margins
-    Plotly actually used and gives every chart the largest."""
+    611px wide beside its neighbours' 620."""
     js = _explorer_js()
     assert "function equaliseMargins(specs)" in js
-    assert "equaliseMargins(specs);" in js
+    assert "settleMargins(specs);" in js
     # _fullLayout._size, not _fullLayout.margin -- the latter still reads 170 on a
     # chart Plotly has quietly widened to 179, which is what made this hard to see.
     assert "_fullLayout._size" in js
-    assert "Math.max(used[side]" in js
 
 
 def test_a_resize_re_equalises():
@@ -416,4 +465,42 @@ def test_a_resize_re_equalises():
     again the first time the window moves unless the pass runs a second time."""
     js = _explorer_js()
     resize = js[js.index('window.addEventListener("resize"'):]
-    assert "equaliseMargins(specs);" in resize[:600]
+    assert "settleMargins(specs);" in resize[:1400]
+
+
+def test_crossing_the_breakpoint_redraws_rather_than_resizes():
+    """Plots.resize recomputes none of the margins, the legend orientation or
+    whether there is a modebar, and relayout cannot take a new config."""
+    js = _explorer_js()
+    resize = js[js.index('window.addEventListener("resize"'):]
+    assert "Plotly.react(host" in resize[:1400]
+    assert "nowNarrow !== wasNarrow" in resize[:1400]
+
+
+def test_tables_scroll_sideways_on_a_phone_and_wrap_on_a_desktop():
+    """Opposite answers to the same question, and both are right for their width.
+    A desktop panel wraps because a scrollbar hides the right-hand columns behind
+    a gesture; at 390px wrapping crushes every column to a few characters and
+    "boltz_input.md" came out as "boltz_inpu t.md" down four lines."""
+    css = _brand_css()
+    assert ".md-report-panel { overflow-x: visible; }" in css
+    mobile = css[css.index("@media (max-width: 768px)"):]
+    assert ".md-report-panel { overflow-x: auto;" in mobile
+    assert "min-width: 520px" in mobile
+
+
+def test_button_rows_stack_on_a_phone():
+    """The pills are sized to their labels, so a wrapped row was ragged."""
+    css = _brand_css()
+    mobile = css[css.index("@media (max-width: 768px)"):]
+    assert ".md-button-row { flex-direction: column; align-items: stretch; }" in mobile
+    assert ".md-button-row .md-btn { width: 100%;" in mobile
+
+
+def test_the_nav_may_wrap():
+    """flex-shrink:0 sized it to its content, so the row ran off the right of a
+    phone screen and GitHub was simply unreachable."""
+    css = _brand_css()
+    nav = css[css.index(".md-header-nav {"):]
+    assert "flex-shrink: 1" in nav[:200]
+    assert "flex-wrap: wrap" in nav[:200]

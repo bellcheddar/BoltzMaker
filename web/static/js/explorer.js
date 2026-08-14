@@ -21,11 +21,20 @@ var BoltzExplorer = (function () {
   // One height for every report chart. Tall enough that a rotated axis label fits
   // inside it: the alternative, clipping the panel, removed the labels instead of
   // containing them.
-  var CHART_HEIGHT = 420;
   // One margin for every chart. b holds a rotated, shortened category label; l
   // holds a y title plus tick labels, including a heatmap's row names; r holds a
   // legend or colourbar. Every plot area is then the same box.
-  var CHART_MARGIN = { t: 20, b: 110, l: 120, r: 170 };
+  //
+  // The narrow set exists because the wide one is most of a phone: 120 + 170 of
+  // a 330px panel left about 40px of plot, which is what the charts on an iPhone
+  // were. Nothing can sit beside a plot at this width, so the legend goes above
+  // it and the colourbar below, and the margins shrink to what the tick labels
+  // alone need.
+  var NARROW = 768;
+  var CHART_WIDE = { height: 420, margin: { t: 20, b: 110, l: 120, r: 170 } };
+  var CHART_NARROW = { height: 460, margin: { t: 64, b: 150, l: 46, r: 14 } };
+  function isNarrow() { return window.innerWidth <= NARROW; }
+  function chartMetrics() { return isNarrow() ? CHART_NARROW : CHART_WIDE; }
   var viewer = null;
   var current = null;
   var sortKey = "confidence";
@@ -403,6 +412,77 @@ var BoltzExplorer = (function () {
   }
 
 
+
+  function placeLegendAndColourbar(layout) {
+    // Wide: both sit to the right of the plot, in the margin reserved for them.
+    // Narrow: there is no room beside the plot, so the legend goes above it as a
+    // single wrapping row and the colourbar below, under the category labels. Set
+    // explicitly in both directions -- these charts are relaid out when the window
+    // crosses the breakpoint, so leaving a property alone means keeping the
+    // placement from the width the page happened to load at.
+    var narrow = isNarrow();
+    if (layout.showlegend !== false) {
+      var legend = layout.legend || {};
+      if (narrow) {
+        legend.orientation = "h";
+        legend.x = 0; legend.xanchor = "left";
+        legend.y = 1.02; legend.yanchor = "bottom";
+        legend.font = { size: 10 };
+        // A legend box drawn over the plot is the report's own choice for the two
+        // scatters; above the plot it would be floating in the margin.
+        legend.bgcolor = "rgba(0,0,0,0)";
+        legend.borderwidth = 0;
+      } else {
+        legend.orientation = "v";
+        delete legend.xanchor; delete legend.yanchor;
+      }
+      layout.legend = legend;
+    }
+    // The colourbar is reached either through coloraxis or through the trace, and
+    // the reports use both. Only the layout one can be moved from here; the trace
+    // form is handled in placeTraceColourbars.
+    if (layout.coloraxis) {
+      layout.coloraxis.colorbar = colourbarPlacement(layout.coloraxis.colorbar, narrow);
+    }
+  }
+
+  function colourbarPlacement(bar, narrow) {
+    bar = bar || {};
+    if (narrow) {
+      bar.orientation = "h";
+      // Anchored to the container, not to the plot. Positioned against the plot
+      // its y is a fraction of the plot's height, so the margin it pushes depends
+      // on the height, and the height is derived from that margin -- the two
+      // chased each other a pixel apart and never settled. Against the container
+      // it sits a fixed distance off the bottom of the card whatever the plot does.
+      bar.xref = "container"; bar.yref = "container";
+      bar.x = 0.5; bar.xanchor = "center";
+      bar.y = 0.02; bar.yanchor = "bottom";
+      bar.len = 0.66; bar.lenmode = "fraction"; bar.thickness = 12;
+      bar.title = bar.title || {};
+      if (typeof bar.title === "object") bar.title.side = "bottom";
+      bar.tickfont = { size: 9 };
+    } else {
+      bar.orientation = "v";
+      bar.xref = "paper"; bar.yref = "paper";
+      bar.x = undefined; bar.y = undefined;
+      bar.xanchor = undefined; bar.yanchor = undefined;
+      bar.len = 1; bar.lenmode = "fraction"; bar.thickness = 15;
+      if (bar.title && typeof bar.title === "object") bar.title.side = "right";
+      bar.tickfont = undefined;
+    }
+    return bar;
+  }
+
+  function placeTraceColourbars(traces, narrow) {
+    (traces || []).forEach(function (trace) {
+      if (trace && trace.colorbar) trace.colorbar = colourbarPlacement(trace.colorbar, narrow);
+      if (trace && trace.marker && trace.marker.colorbar) {
+        trace.marker.colorbar = colourbarPlacement(trace.marker.colorbar, narrow);
+      }
+    });
+  }
+
   function equaliseMargins(specs) {
     // Equal margins asked for are not equal margins drawn. Plotly measures a
     // legend or colourbar that sits outside the plot and widens that side to fit
@@ -410,34 +490,144 @@ var BoltzExplorer = (function () {
     // _fullLayout._size. The apo-vs-holo shift chart, whose legend is twelve full
     // target names, came out 611px wide against its neighbours' 620 that way.
     //
-    // So: draw them all, read back the margins Plotly actually used, and give
-    // every chart the largest of each. Because that is at least as big as any
-    // chart's own legend, nothing gets widened a second time and one pass settles
-    // it. This is the "use the minimal size" the sizing is meant to hit -- found
-    // by measuring the most constrained chart rather than guessing at font
-    // metrics, which is what the two previous attempts here did.
-    var hosts = [], used = { l: 0, r: 0, t: 0, b: 0 };
+    // So: draw them all, read back the margins Plotly actually used, and settle
+    // them. Left and right take the largest of each, which is what makes the plot
+    // areas the same WIDTH -- the most constrained chart sets it, found by
+    // measuring rather than by guessing at font metrics.
+    //
+    // Height is not done that way, and the first attempt that did was wrong. On a
+    // phone the legend sits above the plot and the colourbar below, so a legend of
+    // twelve names is a block of margin, not a column beside the plot. Taking the
+    // largest top and bottom then gave every chart a 400px margin inside a 460px
+    // box: a 50px letterbox where the plot should be. Instead each chart keeps its
+    // own top and bottom, and its height is set to hold them plus a plot area of a
+    // fixed size. The plot areas still match exactly -- it is the cards around
+    // them that differ, by however much legend each one has to carry.
+    var hosts = [], wide = { l: 0, r: 0 };
     specs.forEach(function (spec) {
       var host = document.getElementById(spec.id);
       if (!host || !host._fullLayout || !host._fullLayout._size) return;
-      hosts.push(host);
+      hosts.push({ host: host, spec: spec });
       var size = host._fullLayout._size;
-      ["l", "r", "t", "b"].forEach(function (side) {
-        used[side] = Math.max(used[side], Math.ceil(size[side]));
-      });
+      wide.l = Math.max(wide.l, Math.ceil(size.l));
+      wide.r = Math.max(wide.r, Math.ceil(size.r));
     });
-    if (hosts.length < 2) return;
-    hosts.forEach(function (host) {
-      var size = host._fullLayout._size;
-      if (Math.ceil(size.l) === used.l && Math.ceil(size.r) === used.r &&
-          Math.ceil(size.t) === used.t && Math.ceil(size.b) === used.b) return;
+    if (!hosts.length) return false;
+
+    var plotHeight = isNarrow() ? 260 : 290;
+    var changed = false;
+    hosts.forEach(function (entry) {
+      var size = entry.host._fullLayout._size;
+      var update = {};
+      if (Math.ceil(size.l) !== wide.l) update["margin.l"] = wide.l;
+      if (Math.ceil(size.r) !== wide.r) update["margin.r"] = wide.r;
+      // Pin top and bottom to whole pixels as well. A legend Plotly measures at
+      // 63.6px leaves a plot one pixel short of the height derived from ceil(),
+      // which is how 272x260 and 272x259 ended up on the same page. Setting the
+      // margin to the value it already pushed to is stable: the final margin is
+      // the larger of the two and they are now the same number.
+      var top = Math.ceil(size.t), bottom = Math.ceil(size.b);
+      if (size.t !== top) update["margin.t"] = top;
+      if (size.b !== bottom) update["margin.b"] = bottom;
+      var height = top + bottom + plotHeight;
+      if (Math.round(entry.host._fullLayout.height) !== height) {
+        update.height = height;
+        // The container is sized in CSS as well as in the layout; left at 460 a
+        // taller chart would be drawn behind the card below it.
+        entry.host.style.height = height + "px";
+        entry.spec.layout.height = height;
+      }
+      if (!Object.keys(update).length) return;
+      changed = true;
       try {
-        Plotly.relayout(host, {
-          "margin.l": used.l, "margin.r": used.r,
-          "margin.t": used.t, "margin.b": used.b,
-        });
+        Plotly.relayout(entry.host, update);
       } catch (err) { /* leave that chart at the size it drew itself */ }
     });
+    return changed;
+  }
+
+  function settleMargins(specs) {
+    // Relayout changes the plot's width, which can rewrap a horizontal legend and
+    // so change the very top margin the height was just derived from. Two passes
+    // reach a fixed point in every case seen; the third is a stop, not a plan.
+    for (var pass = 0; pass < 3; pass++) {
+      if (!equaliseMargins(specs)) return;
+    }
+  }
+
+  function normaliseSpec(spec, host) {
+    // Everything that depends on the width the page is being read at. Called on
+    // the first draw and again whenever the window crosses the breakpoint, so it
+    // must set each property in both directions rather than leaving one alone.
+    var metrics = chartMetrics();
+    // The report's own div carries an inline height (260px, sized to its own
+    // layout) and the sanitiser keeps style attributes, so plotting at a
+    // different height drew a 420px chart inside a 260px box, which spilled
+    // over the card below. The container is told the height too, not just Plotly.
+    host.style.height = metrics.height + "px";
+    host.style.width = "100%";
+
+    // Responsive is forced on: the reports were laid out for a full-width
+    // page and these panels are narrower.
+    var config = spec.config || {};
+    config.responsive = true;
+    config.displaylogo = false;
+    // The modebar is an absolutely positioned strip over the top of the plot.
+    // At desktop width it sits in the margin; on a phone it covered the top
+    // third of the chart, and none of it is reachable by touch anyway.
+    config.displayModeBar = !isNarrow();
+    spec.config = config;
+
+    // One height for every chart. The reports size each plot to its own
+    // content, so a thirteen-bar chart came out twice the height of a
+    // one-row heatmap and the panels read as a jumble of different objects.
+    // autosize lets width follow the panel, and since every panel is the same
+    // width and every margin below is the same, every plot area matches too.
+    var layout = spec.layout || {};
+    layout.height = metrics.height;
+    layout.autosize = true;
+    // The same margins on every chart, which is what makes the plot AREAS match
+    // rather than merely the containers. These are a floor, not the last word:
+    // Plotly grows a margin on its own to fit a legend or colourbar drawn
+    // outside the plot, so equaliseMargins() below settles the final number.
+    layout.margin = { t: metrics.margin.t, b: metrics.margin.b,
+                      l: metrics.margin.l, r: metrics.margin.r };
+    placeLegendAndColourbar(layout);
+    placeTraceColourbars(spec.data, isNarrow());
+    // The scatters label every point with its target name. Fifteen of those in a
+    // 250px-wide plot is a thicket, and each one is a name already truncated to
+    // sixteen characters. On a phone the markers stand alone -- the point is still
+    // tappable, which is how a target is opened from here anyway.
+    (spec.data || []).forEach(function (trace) {
+      if (!trace || typeof trace.mode !== "string") return;
+      if (trace._fullMode === undefined) trace._fullMode = trace.mode;
+      trace.mode = isNarrow()
+        ? trace._fullMode.split("+").filter(function (m) { return m !== "text"; }).join("+") || "markers"
+        : trace._fullMode;
+    });
+    // Created if the report did not define them: guarding on `if (layout.xaxis)`
+    // used to leave the settings below unapplied wherever a report had no axis
+    // block, and those charts then sized themselves however they liked.
+    layout.xaxis = layout.xaxis || {};
+    layout.yaxis = layout.yaxis || {};
+    // automargin OFF, deliberately. It expands the margin to fit the labels,
+    // which is exactly what makes every plot area a different size; the labels
+    // are shortened below so they fit the fixed margin instead.
+    layout.xaxis.automargin = false;
+    layout.yaxis.automargin = false;
+    shortenCategories(spec.data, layout);
+    // -75 is almost vertical, which is what made short labels take so much
+    // height. Shortened labels read fine at -45. Narrower still on a phone,
+    // where the labels have to fit a third of the width.
+    if (layout.xaxis.tickangle === undefined || layout.xaxis.tickangle < -50) {
+      layout.xaxis.tickangle = -45;
+    }
+    if (layout.xaxis.tickfont === undefined) layout.xaxis.tickfont = {};
+    layout.xaxis.tickfont.size = isNarrow() ? 9 : 11;
+    layout.yaxis.tickfont = layout.yaxis.tickfont || {};
+    layout.yaxis.tickfont.size = isNarrow() ? 9 : 11;
+    spec.layout = layout;
+    return spec;
   }
 
   function plotReportCharts(specs) {
@@ -445,50 +635,9 @@ var BoltzExplorer = (function () {
     specs.forEach(function (spec) {
       var host = document.getElementById(spec.id);
       if (!host) return;      // its panel was dropped
-      // The report's own div carries an inline height (260px, sized to its own
-      // layout) and the sanitiser keeps style attributes, so plotting at a
-      // different height drew a 420px chart inside a 260px box, which spilled
-      // over the card below. The container is told the height too, not just Plotly.
-      host.style.height = CHART_HEIGHT + "px";
-      host.style.width = "100%";
       try {
-        // Responsive is forced on: the reports were laid out for a full-width
-        // page and these panels are narrower.
-        var config = spec.config || {};
-        config.responsive = true;
-        config.displaylogo = false;
-
-        // One height for every chart. The reports size each plot to its own
-        // content, so a thirteen-bar chart came out twice the height of a
-        // one-row heatmap and the panels read as a jumble of different objects.
-        // autosize lets width follow the panel, and since every panel is the same
-        // width and every margin below is the same, every plot area matches too.
-        var layout = spec.layout || {};
-        layout.height = CHART_HEIGHT;
-        layout.autosize = true;
-        // The same margins on every chart, which is what makes the plot AREAS match
-        // rather than merely the containers. These are a floor, not the last word:
-        // Plotly grows a margin on its own to fit a legend or colourbar drawn
-        // outside the plot, so equaliseMargins() below settles the final number.
-        layout.margin = { t: CHART_MARGIN.t, b: CHART_MARGIN.b,
-                          l: CHART_MARGIN.l, r: CHART_MARGIN.r };
-        // Created if the report did not define them: guarding on `if (layout.xaxis)`
-        // used to leave the settings below unapplied wherever a report had no axis
-        // block, and those charts then sized themselves however they liked.
-        layout.xaxis = layout.xaxis || {};
-        layout.yaxis = layout.yaxis || {};
-        // automargin OFF, deliberately. It expands the margin to fit the labels,
-        // which is exactly what makes every plot area a different size; the labels
-        // are shortened below so they fit the fixed margin instead.
-        layout.xaxis.automargin = false;
-        layout.yaxis.automargin = false;
-        shortenCategories(spec.data, layout);
-        // -75 is almost vertical, which is what made short labels take so much
-        // height. Shortened labels read fine at -45.
-        if (layout.xaxis.tickangle === undefined || layout.xaxis.tickangle < -50) {
-          layout.xaxis.tickangle = -45;
-        }
-        Plotly.newPlot(host, spec.data, layout, config);
+        normaliseSpec(spec, host);
+        Plotly.newPlot(host, spec.data, spec.layout, spec.config);
         // The report's own confidence-against-affinity scatter is the one kept, so
         // it takes over the job of opening a target.
         if (spec.id === "chart-scatter") wireScatterClicks(host);
@@ -496,15 +645,34 @@ var BoltzExplorer = (function () {
         host.innerHTML = '<p class="md-hint">This chart could not be drawn.</p>';
       }
     });
-    equaliseMargins(specs);
+    settleMargins(specs);
+
+    var wasNarrow = isNarrow();
     window.addEventListener("resize", function () {
-      specs.forEach(function (spec) {
-        var host = document.getElementById(spec.id);
-        if (host && host.data) Plotly.Plots.resize(host);
-      });
+      var nowNarrow = isNarrow();
+      if (nowNarrow !== wasNarrow) {
+        // Crossing the breakpoint changes the margins, the legend's orientation
+        // and whether there is a modebar, and none of those are things resize()
+        // recomputes. react() takes the new config as well as the new layout,
+        // which relayout() cannot.
+        wasNarrow = nowNarrow;
+        specs.forEach(function (spec) {
+          var host = document.getElementById(spec.id);
+          if (!host || !host.data) return;
+          try {
+            normaliseSpec(spec, host);
+            Plotly.react(host, spec.data, spec.layout, spec.config);
+          } catch (err) { /* leave that chart as it is */ }
+        });
+      } else {
+        specs.forEach(function (spec) {
+          var host = document.getElementById(spec.id);
+          if (host && host.data) Plotly.Plots.resize(host);
+        });
+      }
       // A resize re-measures the legends against the new width, so the sizes have
       // to be settled again or they drift apart the first time the window moves.
-      equaliseMargins(specs);
+      settleMargins(specs);
     });
   }
 

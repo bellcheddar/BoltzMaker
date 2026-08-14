@@ -16,8 +16,10 @@
   {% if result_text %}
   <div class="md-alert md-alert-success">
     Your <code>boltz_input.md</code> is valid and ready.
-    <a id="wizard-download" class="md-btn" href="#" download="boltz_input.md" style="margin-left:10px;">Download</a>
-    <a class="md-btn md-btn-secondary" href="/preflight" style="margin-left:6px;">Next: run preflight &rarr;</a>
+    <div class="md-button-row md-button-row-spaced">
+      <a id="wizard-download" class="md-btn" href="#" download="boltz_input.md">Download</a>
+      <a class="md-btn md-btn-secondary" href="/preflight">Next: run preflight &rarr;</a>
+    </div>
   </div>
   <div class="md-card">
     <textarea readonly style="min-height:300px;">{{ result_text }}</textarea>

@@ -29,10 +29,10 @@
     <div class="md-stat"><span class="md-stat-value" id="stat-structures">0</span><span class="md-stat-label">structures</span></div>
   </div>
 
-  <p style="margin:14px 0 0">
+  <div class="md-button-row md-button-row-spaced">
     <a class="md-btn md-btn-secondary" href="{{ url_for('auto.summary_csv', token=token) }}">Download summary CSV</a>
-    <a class="md-btn md-btn-secondary" href="/auto/prepare" style="margin-left:6px">Prepare another campaign</a>
-  </p>
+    <a class="md-btn md-btn-secondary" href="/auto/prepare">Prepare another campaign</a>
+  </div>
 </div>
 
 {#  One ordered sequence, built in reports.ordered_slots from PANEL_ORDER: this
@@ -149,13 +149,13 @@
   <h2>The reports as files</h2>
   <p class="md-hint" style="margin-top:0">The same panels as BoltzMaker wrote them, if you want
     the whole page in one file.</p>
-  <p style="margin:0">
+  <div class="md-button-row">
     {% for report in results.reports %}
-    <a class="md-btn md-btn-secondary" style="margin-right:6px"
+    <a class="md-btn md-btn-secondary"
        href="{{ url_for('auto.report', token=token, name=report.name) }}"
        download="{{ report.name }}">{{ report.title }} ({{ (report.bytes / 1024 / 1024) | round(1) }} MB)</a>
     {% endfor %}
-  </p>
+  </div>
 </div>
 {% endif %}
 

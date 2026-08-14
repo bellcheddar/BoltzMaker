@@ -69,7 +69,9 @@ img, canvas { max-width: 100%; height: auto; }
 .md-logo-dot { width: 10px; height: 10px; background: var(--md-accent-amber); border-radius: 50%; flex-shrink: 0; }
 .md-header-title { flex: 1; min-width: 0; }
 .md-header-title h1 { font-size: 16px; font-weight: 700; color: #fff; margin: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.md-header-nav { display: flex; gap: 10px; flex-shrink: 0; flex-wrap: wrap; }
+/* flex-shrink:0 sized this to its content, so on a phone the row ran off the
+   right of the screen and GitHub was simply unreachable. It wraps instead. */
+.md-header-nav { display: flex; gap: 8px; flex-shrink: 1; flex-wrap: wrap; min-width: 0; }
 .md-header-nav a {
   color: rgba(255,255,255,0.85);
   text-decoration: none;
@@ -181,7 +183,12 @@ img, canvas { max-width: 100%; height: auto; }
   padding: 10px 14px; margin: 8px 0; font-family: 'Roboto Mono', monospace; font-size: 12.5px;
   overflow-x: auto; white-space: pre;
 }
+/* Every cluster of buttons uses this. Several used inline margin-left on each
+   button instead, which is fine on one line and ragged the moment they wrap:
+   the pills are sized to their labels, so "Secondary structure (apo vs holo)
+   (4.4 MB)" began a second line indented by the previous button's margin. */
 .md-button-row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+.md-button-row-spaced { margin-top: 14px; }
 /* Pushes the page save/load controls away from the two actions that actually
    progress the campaign, so a row of five buttons still reads as two groups.
    Collapses to nothing once the row wraps on a narrow screen. */
@@ -383,15 +390,51 @@ tr.md-check-na .md-check-fail { color: var(--md-text-muted); }
 .md-readiness-fail { background: #fdecea; border: 1px solid var(--md-accent-red); color: #7a1030; }
 
 @media (max-width: 768px) {
-  .md-header-inner { padding: 10px 16px; gap: 8px; }
+  .md-header-inner { padding: 10px 14px; gap: 8px; }
   .md-header-title h1 { font-size: 14px; }
-  .md-header-nav a { font-size: 11px; padding: 3px 8px; }
+  /* The nav takes a row of its own rather than competing with the title for the
+     remaining width, and wraps within it. */
+  .md-header-nav { width: 100%; gap: 6px; }
+  .md-header-nav a { font-size: 11px; padding: 3px 9px; }
   .md-main { padding: 14px; }
   .md-card { padding: 14px; }
   .md-tool-grid, .md-mode-grid, .md-detail-grid, .md-intro-grid { grid-template-columns: 1fr; }
   .lig-page { grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); }
-  .md-report-panel table { font-size: 11px; }
   .md-stat-row { gap: 18px; }
   .md-viewer { min-height: 260px; }
   .md-mode-card { padding: 18px; }
+
+  /* Buttons go full width and stack. Centre-aligned labels, so a two-line label
+     stays inside its own pill instead of pushing the next one out of line. */
+  .md-button-row { flex-direction: column; align-items: stretch; }
+  .md-button-row .md-btn { width: 100%; text-align: center; }
+  /* The 3D viewer's style buttons are short, and three of them fit a phone
+     across, so they share a row and split it evenly. */
+  .md-viewer-controls { flex-direction: row; }
+  .md-viewer-controls .md-btn { flex: 1 1 0; padding: 6px 4px; }
+
+  /* Tables scroll sideways here. On a desktop panel they are told to wrap
+     instead, because a scrollbar hides the right-hand columns behind a gesture
+     -- but at 390px wrapping is worse: every column crushes to a few characters
+     and "boltz_input.md" came out as "boltz_inpu t.md" down four lines. The
+     min-width keeps the columns readable and the panel scrolls to reach them. */
+  .md-report-panel { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  .md-report-panel table { font-size: 11px; min-width: 520px; }
+  .md-report-wide-table table { min-width: 700px; }
+  .md-report-panel th, .md-report-panel td { padding: 4px 6px; }
+  .md-report-panel td { overflow-wrap: break-word; }
+
+  /* One legend entry per line. Wrapped mid-row, the middot separators ended up
+     at the start of a line, reading as bullets for a list that was not one. */
+  .summary-legend { flex-direction: column; gap: 10px; }
+  .legend-group { flex-direction: column; align-items: flex-start; gap: 4px; }
+  .summary-legend .legend-item { width: 100%; }
+  .summary-legend .legend-item + .legend-item::before { content: none; }
+
+  /* Charts are re-laid out for this width in explorer.js -- the legend moves
+     above the plot and the colourbar below it, so they need more height than
+     the desktop 420 to keep the plot itself a usable size. */
+  .md-report-plain .plotly-graph-div { min-height: 460px; }
+  .md-report-plot { min-height: 240px; }
+  .md-report-plot img { max-height: 240px; }
 }
