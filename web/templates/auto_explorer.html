@@ -42,10 +42,25 @@
 {#  One ordered sequence, built in reports.ordered_slots from PANEL_ORDER: this
     page's own panels and the ones lifted out of BoltzMaker's reports, interleaved.
     Reordering is a line moved in that list, not a template edit.  #}
+{% if nav | length > 1 %}
+{#  A campaign's dashboard is a long page and every panel on it is one someone
+    might have come for. The pulldown is the whole navigation: a row of links
+    would be fifteen of them, which is another thing to read rather than a way
+    past it.  #}
+<div class="md-card md-nav-card">
+  <label class="md-detail-label" for="panel-nav">Jump to</label>
+  <select id="panel-nav" class="md-detail-select">
+    {% for entry in nav %}
+    <option value="{{ entry.anchor }}">{{ entry.title }}</option>
+    {% endfor %}
+  </select>
+</div>
+{% endif %}
+
 {% for slot in slots %}
 
 {% if slot.kind == 'own' and slot.which == 'targets' %}
-<div class="md-card">
+<div class="md-card" id="{{ slot.anchor }}">
   <h2>Targets</h2>
   <p class="md-hint" style="margin-top:0">Click a target row to see its pose and interactions,
     in the panel below.</p>
@@ -84,7 +99,7 @@
 {#  Open from the start on the first target, rather than waiting for a click: on a
     one-target campaign there was nothing to click, and the panels simply never
     appeared.  #}
-<div class="md-card" id="detail-card">
+<div class="md-card" id="detail-card" data-anchor="{{ slot.anchor }}">
   {#  The heading is the target picker. It named the open target and the only way
       to change it was to scroll back to the table -- so the one piece of chrome
       that was already saying "this is the target" now also chooses it.  #}
@@ -97,7 +112,7 @@
       below the fold.  #}
   <div class="md-detail-grid">
     <div class="md-detail-pane">
-      <h3 class="md-sub">Predicted pose</h3>
+      <h3 class="md-sub">Overall structure</h3>
       <div class="md-detail-body"><div id="viewer" class="md-viewer"></div></div>
       <div class="md-viewer-controls md-button-row" data-viewer="pose">
         <button type="button" class="md-btn md-btn-secondary" data-style="cartoon">Cartoon</button>
@@ -138,6 +153,31 @@
 
   {#  Full width under the four, because a sequence is long and thin and a quarter
       of a row would show forty residues of four hundred.  #}
+  {#  Campaign-wide, not per target: both panes show every target at once, in one
+      frame, so they sit below the four that describe the open one.  #}
+  <div class="md-detail-grid md-overlay-grid">
+    <div class="md-detail-pane">
+      <h3 class="md-sub">Ligand pose</h3>
+      <div class="md-detail-body"><div id="viewer-ligands" class="md-viewer"></div></div>
+      <div class="md-viewer-controls md-button-row" data-viewer="ligands">
+        <button type="button" class="md-btn md-btn-secondary" data-style="spin">Spin</button>
+        <button type="button" class="md-btn md-btn-secondary" data-style="reset">Reset</button>
+      </div>
+      <p class="md-hint" id="ligands-note" style="margin-bottom:0"></p>
+      <div class="md-overlay-list" id="ligands-list"></div>
+    </div>
+    <div class="md-detail-pane">
+      <h3 class="md-sub">Superposed targets</h3>
+      <div class="md-detail-body"><div id="viewer-traces" class="md-viewer"></div></div>
+      <div class="md-viewer-controls md-button-row" data-viewer="traces">
+        <button type="button" class="md-btn md-btn-secondary" data-style="spin">Spin</button>
+        <button type="button" class="md-btn md-btn-secondary" data-style="reset">Reset</button>
+      </div>
+      <p class="md-hint" id="traces-note" style="margin-bottom:0"></p>
+      <div class="md-overlay-list" id="traces-list"></div>
+    </div>
+  </div>
+
   <p class="md-hint md-af-ask" id="af-ask" hidden>
     <label for="af-accession">UniProt accession</label>
     <input type="text" id="af-accession" maxlength="12" placeholder="e.g. P28223">
@@ -155,8 +195,20 @@
   </div>
 </div>
 
+{% elif slot.kind == 'group' %}
+{#  The per-family fingerprints, two to a row: six full-width copies of the same
+    plot is a long scroll for a set whose whole point is comparison.  #}
+<div class="md-fingerprint-grid" id="{{ slot.anchor }}">
+  {% for panel in slot.panels %}
+  <div class="md-card">
+    <h2>{{ panel.title }}</h2>
+    <div class="md-report-panel md-report-{{ panel.kind }}">{{ panel.html | safe }}</div>
+  </div>
+  {% endfor %}
+</div>
+
 {% elif slot.kind == 'report' %}
-<div class="md-card{% if slot.panel.wide %} md-card-wide{% endif %}">
+<div class="md-card{% if slot.panel.wide %} md-card-wide{% endif %}" id="{{ slot.anchor }}">
   <h2>{{ slot.panel.title }}</h2>
   {% if slot.panel.title == 'pIC50 vs confidence score' %}
   {#  "below" since the detail panel moved under the Targets table; this plot now

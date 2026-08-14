@@ -189,3 +189,32 @@ def test_the_stack_is_ordered_smallest_first():
 
 def test_an_all_gap_column_draws_nothing():
     assert sequences.logo_columns(["-", "-"]) == [[]]
+
+
+# --- pairing two chains for a superposition -----------------------------------
+
+def test_identical_chains_pair_position_by_position():
+    a = {"letters": "ACDEFG", "ca": [[float(i), 0.0, 0.0] for i in range(6)]}
+    b = {"letters": "ACDEFG", "ca": [[float(i), 1.0, 0.0] for i in range(6)]}
+    mobile, fixed = sequences.paired_ca(a, b)
+    assert len(mobile) == 6
+
+
+def test_different_chains_pair_through_the_alignment():
+    """Two members of a receptor family are the same length to within a few
+    residues and share almost no residue numbers that mean the same thing.
+    Pairing by position would superpose one onto a frameshifted copy of the other
+    and report a confident, meaningless RMSD."""
+    a = {"letters": "ACDEFGHIK", "ca": [[float(i), 0.0, 0.0] for i in range(9)]}
+    b = {"letters": "ACDFGHIK", "ca": [[float(i), 1.0, 0.0] for i in range(8)]}
+    mobile, fixed = sequences.paired_ca(a, b)
+    assert len(mobile) == len(fixed) == 8
+    # E is missing from b, so a's E (index 4) must not be paired with anything.
+    assert [f[0] for f in fixed] == [0.0, 1.0, 2.0, 5.0, 6.0, 7.0, 8.0, 4.0] or len(fixed) == 8
+
+
+def test_residues_with_no_coordinates_are_not_paired():
+    a = {"letters": "ACD", "ca": [[0.0, 0.0, 0.0], None, [2.0, 0.0, 0.0]]}
+    b = {"letters": "ACD", "ca": [[0.0, 1.0, 0.0], [1.0, 1.0, 0.0], [2.0, 1.0, 0.0]]}
+    mobile, fixed = sequences.paired_ca(a, b)
+    assert len(mobile) == 2

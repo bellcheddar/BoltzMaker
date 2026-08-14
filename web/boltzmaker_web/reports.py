@@ -98,11 +98,38 @@ PANEL_ORDER = (
 )
 
 
+#: The per-family fingerprint heatmaps. There is one per family and one per
+#: family-with-partners, so a campaign of three receptors produces six -- six
+#: full-width cards of the same plot is a long scroll for a set meant to be
+#: compared, so they are grouped two to a row.
+_FINGERPRINT_SUFFIX = "residue interaction fingerprint"
+
+#: Titles for this page's own panels, for the navigation pulldown. The slot's
+#: `which` is a code, and "detail" is not what the panel is called.
+OWN_TITLES = {"targets": "Targets", "detail": "Target detail"}
+
+
+def anchor_for(title: str) -> str:
+    """A stable id for a panel, from its title.
+
+    Used by the navigation and by nothing else, so it only has to be unique
+    within a page and survive a reload -- which rules out an ordinal, since the
+    panels a campaign produces depend on what it ran.
+    """
+    slug = re.sub(r"[^a-z0-9]+", "-", (title or "").lower()).strip("-")
+    return "panel-" + (slug or "untitled")
+
+
+def _panel_title(panel) -> str:
+    return panel["title"] if isinstance(panel, dict) else panel.title
+
+
 def ordered_slots(panels: list) -> list:
     """Interleave this page's own panels with the report's, in PANEL_ORDER.
 
-    Returns a list of slots, each either {"kind": "own", "which": ...} or
-    {"kind": "report", "panel": ...}. Reordering the page is then a matter of
+    Returns a list of slots, each {"kind": "own", "which": ...},
+    {"kind": "report", "panel": ...} or {"kind": "group", "panels": [...]} for a
+    run of fingerprints that share a row. Reordering the page is a matter of
     moving a line in PANEL_ORDER rather than editing the template.
     """
     by_title = {}
@@ -118,11 +145,47 @@ def ordered_slots(panels: list) -> list:
             placed.add(entry)
 
     for panel in panels:
-        title = panel["title"] if isinstance(panel, dict) else panel.title
+        title = _panel_title(panel)
         if title not in placed:
             slots.append({"kind": "report", "panel": panel})
             placed.add(title)
-    return slots
+
+    # Consecutive fingerprints become one grouped slot. Grouping here rather than
+    # in CSS because they are siblings in the page's flow: no selector can put
+    # two of a run of cards side by side and leave the rest full width.
+    grouped: list = []
+    for slot in slots:
+        is_fingerprint = (slot["kind"] == "report"
+                          and _panel_title(slot["panel"]).endswith(_FINGERPRINT_SUFFIX))
+        if is_fingerprint and grouped and grouped[-1]["kind"] == "group":
+            grouped[-1]["panels"].append(slot["panel"])
+        elif is_fingerprint:
+            grouped.append({"kind": "group", "panels": [slot["panel"]]})
+        else:
+            grouped.append(slot)
+
+    for slot in grouped:
+        if slot["kind"] == "report":
+            slot["anchor"] = anchor_for(_panel_title(slot["panel"]))
+        elif slot["kind"] == "own":
+            slot["anchor"] = anchor_for(OWN_TITLES.get(slot["which"], slot["which"]))
+        else:
+            slot["anchor"] = anchor_for("residue interaction fingerprints")
+    return grouped
+
+
+def navigation(slots: list) -> list:
+    """Title and anchor for every panel on the page, in the order they appear."""
+    entries = []
+    for slot in slots:
+        if slot["kind"] == "own":
+            title = OWN_TITLES.get(slot["which"], slot["which"].title())
+        elif slot["kind"] == "group":
+            title = "Residue interaction fingerprints"
+        else:
+            title = _panel_title(slot["panel"])
+        entries.append({"title": title, "anchor": slot["anchor"]})
+    return entries
 
 _VOID_TAGS = {"br", "hr", "img"}
 # Dropped along with everything inside them. foreignObject is the way arbitrary

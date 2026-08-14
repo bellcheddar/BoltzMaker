@@ -173,3 +173,53 @@ def test_motifs_with_no_measurement_are_left_out():
 
 def test_a_target_with_no_sse_rows_gets_no_entry():
     assert bmz._apo_rmsd([]) == {}
+
+
+# --- fitting on the part that agrees ------------------------------------------
+
+def _two_domains(shift):
+    """A rigid core of 60 points and a 40-point tail displaced by `shift`.
+
+    Which is the shape of the real problem: a receptor whose transmembrane bundle
+    is the same in both structures and whose N-terminus and ICL3 are not.
+    """
+    core = [[float(i % 10), float(i // 10), 0.0] for i in range(60)]
+    tail = [[float(i), 20.0, 0.0] for i in range(40)]
+    moved_tail = [[p[0] + shift, p[1], p[2]] for p in tail]
+    return core + tail, core + moved_tail
+
+
+def test_the_core_fit_ignores_the_part_that_moved():
+    """A whole-chain fit is a fit to whatever moves most: the tail drags the core
+    off its match and reports a large RMSD for structures whose cores are
+    identical."""
+    mobile, fixed = _two_domains(30.0)
+    _, _, plain_rmsd = af.superpose(mobile, fixed)
+    _, _, core_rmsd, core_n = af.superpose_core(mobile, fixed)
+    assert plain_rmsd > 5.0
+    assert core_rmsd < 0.5
+    # Most of the 60-point core survives and none of the 40-point tail can have:
+    # a fit at 0.5A over 40+ points is only possible on points that agree. The
+    # count is not 60 because the first round halves the set while the fit is
+    # still bad, which is the price of being able to start from a bad one.
+    assert 40 <= core_n < len(mobile)
+
+
+def test_the_refinement_starts_even_from_a_hopeless_fit():
+    """Dropping only pairs beyond the cutoff cannot begin when nothing is within
+    the cutoff of anything. Three of the fifteen targets in the example campaign
+    sat at 19A over every residue that way, having rejected all of them and kept
+    the fit that produced it."""
+    mobile, fixed = _two_domains(400.0)     # first fit is nowhere near anything
+    _, _, rmsd, core_n = af.superpose_core(mobile, fixed)
+    assert rmsd < 1.0
+    assert core_n < len(mobile)
+
+
+def test_a_good_fit_is_not_trimmed_away():
+    """Halving unconditionally each round takes a perfectly good superposition
+    down to a quarter of the chain and then reports a fine RMSD over a fragment."""
+    points = [[float(i), float(i % 7), float(i % 3)] for i in range(200)]
+    _, _, rmsd, core_n = af.superpose_core(points, points)
+    assert rmsd == pytest.approx(0.0, abs=1e-6)
+    assert core_n == 200

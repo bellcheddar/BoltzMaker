@@ -36,7 +36,9 @@ var BoltzExplorer = (function () {
   function isNarrow() { return window.innerWidth <= NARROW; }
   function chartMetrics() { return isNarrow() ? CHART_NARROW : CHART_WIDE; }
   var viewers = { pose: { promise: null, wrapper: null },
-                  contacts: { promise: null, wrapper: null } };
+                  contacts: { promise: null, wrapper: null },
+                  ligands: { promise: null, wrapper: null },
+                  traces: { promise: null, wrapper: null } };
   var sequence = null;      // the open target's track, logo and chain map
   var ligandCards = {};     // ligand id -> the report's own depiction
   var current = null;
@@ -407,10 +409,15 @@ var BoltzExplorer = (function () {
   /* Two panes, one library. Creating a Mol* viewer is async and costs a WebGL
      context, so each pane's viewer is created once and reused for every target
      rather than rebuilt on each selection. */
+  var VIEWER_HOSTS = {
+    pose: "viewer", contacts: "viewer-contacts",
+    ligands: "viewer-ligands", traces: "viewer-traces",
+  };
+
   function ensureViewer(which) {
     var slot = viewers[which];
     if (slot.promise) return slot.promise;
-    var host = document.getElementById(which === "pose" ? "viewer" : "viewer-contacts");
+    var host = document.getElementById(VIEWER_HOSTS[which]);
     slot.promise = BoltzViewer.create(host).then(function (wrapper) {
       slot.wrapper = wrapper;
       return wrapper;
@@ -514,6 +521,130 @@ var BoltzExplorer = (function () {
   }
 
 
+
+
+  // ---- the two campaign-wide overlay panes --------------------------------
+
+  //: Enough colours to tell fifteen targets apart, and none of them the ligand
+  //: red the per-target viewers use for their own ligand.
+  var OVERLAY_COLOURS = [
+    0x1e73be, 0x00875a, 0xb07d00, 0x9b51e0, 0x0f9ba8, 0xc45500, 0x4a9fd4,
+    0x00b578, 0x8a6100, 0x6a3fb5, 0x2f6f9f, 0x7a9a01, 0xcf6679, 0x3d8361, 0x8d6e63,
+  ];
+
+  function overlayColour(index) {
+    return OVERLAY_COLOURS[index % OVERLAY_COLOURS.length];
+  }
+
+  function hexOf(value) {
+    return "#" + ("000000" + value.toString(16)).slice(-6);
+  }
+
+  /* Both panes draw the same fifteen structures from one superposition, so the
+     listing is fetched once and each pane loads only the files it draws: the
+     ligand pane the ligands, the trace pane the CA. */
+  function loadOverlays() {
+    if (!BoltzViewer.available()) {
+      ["ligands", "traces"].forEach(function (which) {
+        document.getElementById(which + "-note").textContent = BoltzViewer.reason();
+      });
+      return;
+    }
+    fetch("/auto/analysis/" + token + "/overlay.json")
+      .then(function (response) { return response.ok ? response.json() : null; })
+      .then(function (payload) {
+        if (!payload || !payload.targets || !payload.targets.length) throw new Error("none");
+        overlayPane("ligands", payload, function (row) { return row.has_ligand; },
+                    "lig", { type: "ball-and-stick" });
+        overlayPane("traces", payload, function () { return true; },
+                    "ca", { type: "backbone" });
+      })
+      .catch(function () {
+        ["ligands", "traces"].forEach(function (which) {
+          document.getElementById(which + "-note").textContent =
+            "The superposition could not be computed for this campaign.";
+        });
+      });
+  }
+
+  function overlayPane(which, payload, include, kind, options) {
+    var rows = payload.targets.filter(include);
+    var note = document.getElementById(which + "-note");
+    var list = document.getElementById(which + "-list");
+    list.innerHTML = "";
+    if (!rows.length) {
+      note.textContent = which === "ligands"
+        ? "No target in this campaign has a ligand."
+        : "Nothing could be superposed.";
+      return;
+    }
+    var reference = payload.reference;
+    note.textContent = which === "ligands"
+      ? rows.length + " ligands, in the frame of " + reference + "."
+      : rows.length + " targets on " + reference +
+        ". RMSD is over the residues that agree, which is what the count beside it is.";
+
+    rows.forEach(function (row, index) {
+      var colour = overlayColour(index);
+      var label = document.createElement("label");
+      label.className = "md-overlay-row";
+
+      var box = document.createElement("input");
+      box.type = "checkbox";
+      box.checked = true;
+      label.appendChild(box);
+
+      var swatch = document.createElement("span");
+      swatch.className = "md-overlay-swatch";
+      swatch.style.background = hexOf(colour);
+      label.appendChild(swatch);
+
+      var name = document.createElement("span");
+      name.className = "md-overlay-name";
+      // The target's name in both panes, not the ligand's. Several targets share
+      // a ligand -- RISP is bound to 5HT2A with and without its G protein -- so a
+      // list of ligand ids read as "RISP, PSIL, RISP" with no way to tell which
+      // row was which.
+      name.textContent = row.name;
+      name.title = row.name;
+      label.appendChild(name);
+
+      if (which === "traces") {
+        var rmsd = document.createElement("span");
+        rmsd.className = "md-overlay-rmsd";
+        rmsd.textContent = row.rmsd === null || row.rmsd === undefined
+          ? "\u2014"
+          : row.rmsd.toFixed(2) + " \u00c5 / " + (row.core || row.matched);
+        rmsd.title = row.rmsd === null
+          ? "Too little in common with the reference to superpose."
+          : "RMSD over " + (row.core || row.matched) + " of " + row.matched + " paired CA";
+        label.appendChild(rmsd);
+      }
+
+      box.addEventListener("change", function () {
+        var wrapper = viewers[which].wrapper;
+        if (wrapper) wrapper.setExtraVisible(row.id, box.checked);
+      });
+      list.appendChild(label);
+    });
+
+    ensureViewer(which).then(function (wrapper) {
+      // In series, not in parallel: fifteen concurrent loads into one Mol* plugin
+      // race each other through its state tree, and the structure a load returns
+      // is then not always the one it just added.
+      return rows.reduce(function (chain, row, index) {
+        return chain.then(function () {
+          var url = "/auto/analysis/" + token + "/overlay/" + kind + "/" +
+                    encodeURIComponent(row.id) + ".cif";
+          return wrapper.loadExtra(row.id, url, {
+            color: overlayColour(index), type: options.type,
+          }).catch(function () { /* one missing file is not the whole pane */ });
+        });
+      }, Promise.resolve()).then(function () {
+        wrapper.frameAll();
+      });
+    });
+  }
 
   // ---- the AlphaFold overlay ----------------------------------------------
 
@@ -843,6 +974,17 @@ var BoltzExplorer = (function () {
     });
 
     wireSequence();
+
+    loadOverlays();
+
+    var nav = document.getElementById("panel-nav");
+    if (nav) {
+      nav.addEventListener("change", function () {
+        var panel = document.getElementById(nav.value)
+                    || document.querySelector('[data-anchor="' + nav.value + '"]');
+        if (panel) panel.scrollIntoView({ behavior: "smooth", block: "start" });
+      });
+    }
 
     document.getElementById("af-accession-go").addEventListener("click", function () {
       var value = (document.getElementById("af-accession").value || "").trim().toUpperCase();

@@ -436,12 +436,13 @@ def _report_panels(session: Path, loaded: bmz.Results) -> tuple:
 def _render_explorer(token: str, loaded: bmz.Results):
     session = _session_dir(token)
     panels, charts, ligands = _report_panels(session, loaded) if session else ([], [], {})
+    slots = report_panels.ordered_slots(panels)
     return render_template(
         "auto_explorer.html", active="analysis",
         token=token, results=loaded,
         payload=bmz.to_json(loaded),
         low_confidence=bmz.LOW_CONFIDENCE_THRESHOLD,
-        slots=report_panels.ordered_slots(panels),
+        slots=slots, nav=report_panels.navigation(slots),
         has_panels=bool(panels), report_charts=json.dumps(charts),
         ligand_cards=json.dumps(ligands),
     )
@@ -554,6 +555,113 @@ def _sequence_payload(session: Path, loaded: bmz.Results, target: str) -> dict:
         "columns": columns,
         "aligned_count": len(others),
     }
+
+
+def _receptor_of(chains: list, target) -> dict | None:
+    proteins = [c for c in chains if c["kind"] == "protein"]
+    return next((c for c in proteins if target and c["id"] == target.family_id),
+                proteins[0] if proteins else None)
+
+
+def _overlay_payload(session: Path, loaded: bmz.Results) -> dict:
+    """Every target superposed onto one reference, for the two overlay panes.
+
+    Both panes want the same thing -- all the targets in one frame -- so the
+    superposition is done once and each target is written out twice, very small:
+    its receptor's CA atoms, and its ligand's atoms. A pane that draws fifteen
+    targets then fetches a few hundred KB rather than the fifteen megabytes the
+    full complexes would be.
+
+    The reference is the first target that has a structure, so it is the same for
+    everyone looking at this campaign and the RMSDs are comparable to each other.
+    """
+    cache = session / "overlay.json"
+    if cache.is_file():
+        try:
+            return json.loads(cache.read_text())
+        except (json.JSONDecodeError, OSError):
+            pass
+
+    structures = session / "campaign" / "structures"
+    reference = None
+    rows = []
+    for target in loaded.targets:
+        path = structures / f"{target.target_id}.cif"
+        if not path.is_file():
+            continue
+        chains = sequences.chains_from_cif(path)
+        receptor = _receptor_of(chains, target)
+        if not receptor:
+            continue
+        if reference is None:
+            reference = {"id": target.target_id, "chain": receptor}
+
+        mobile, fixed = sequences.paired_ca(reference["chain"], receptor)
+        try:
+            rotation, centres, rmsd, core = alphafold.superpose_core(mobile, fixed)
+        except alphafold.AlphaFoldError:
+            # Too little in common to place it in the same frame. Listed with no
+            # RMSD rather than dropped, so a target never silently disappears.
+            rows.append({"id": target.target_id, "name": target.display_name,
+                         "ligand": target.ligand_id, "rmsd": None, "matched": len(mobile)})
+            continue
+
+        text = path.read_text(encoding="utf-8", errors="replace")
+        ligand_chains = {c["id"] for c in chains if c["kind"] == "ligand"}
+        wrote_ligand = False
+        try:
+            trace = alphafold.transform_subset(
+                text, rotation, centres,
+                lambda f, c: (f[c["auth_asym_id"]] == receptor["id"]
+                              and f[c["label_atom_id"]] == "CA"))
+            (session / f"overlay-ca-{target.target_id}.cif").write_text(trace)
+            if ligand_chains:
+                ligand = alphafold.transform_subset(
+                    text, rotation, centres,
+                    lambda f, c: f[c["auth_asym_id"]] in ligand_chains)
+                (session / f"overlay-lig-{target.target_id}.cif").write_text(ligand)
+                wrote_ligand = True
+        except (alphafold.AlphaFoldError, OSError):
+            continue
+
+        rows.append({
+            "id": target.target_id, "name": target.display_name,
+            "ligand": target.ligand_id, "rmsd": round(rmsd, 2),
+            "matched": len(mobile), "core": core, "has_ligand": wrote_ligand,
+        })
+
+    payload = {"reference": reference["id"] if reference else "", "targets": rows}
+    try:
+        cache.write_text(json.dumps(payload))
+    except OSError:
+        pass
+    return payload
+
+
+@bp.route("/analysis/<token>/overlay.json")
+def overlay(token: str):
+    session = _session_dir(token)
+    if session is None:
+        return Response("session expired", status=404, mimetype="text/plain")
+    try:
+        loaded = bmz.load(session / "campaign")
+    except bmz.BmzError:
+        return Response("session unreadable", status=404, mimetype="text/plain")
+    return Response(json.dumps(_overlay_payload(session, loaded)),
+                    mimetype="application/json")
+
+
+@bp.route("/analysis/<token>/overlay/<kind>/<target>.cif")
+def overlay_file(token: str, kind: str, target: str):
+    session = _session_dir(token)
+    if session is None:
+        return Response("session expired", status=404, mimetype="text/plain")
+    if kind not in ("ca", "lig") or not _TARGET_RE.match(target or ""):
+        return Response("bad request", status=400, mimetype="text/plain")
+    path = (session / f"overlay-{kind}-{target}.cif").resolve()
+    if path.parent != session.resolve() or not path.is_file():
+        return Response("not found", status=404, mimetype="text/plain")
+    return send_file(path, mimetype="chemical/x-cif", max_age=SESSION_CACHE_SECONDS)
 
 
 #: AlphaFold's own threshold for a confident residue. Superposing on everything

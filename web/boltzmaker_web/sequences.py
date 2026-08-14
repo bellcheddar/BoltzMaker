@@ -295,3 +295,38 @@ def logo_columns(aligned: list[str]) -> list[list]:
         columns.append([[letter, round(count / observed, 4), round(bits, 4)]
                         for letter, count in stack])
     return columns
+
+
+def paired_ca(reference: dict, other: dict) -> tuple[list, list]:
+    """CA pairs between two chains, through an alignment when they differ.
+
+    Two predictions of the same protein have the same sequence and the same
+    numbering, and pairing by position is exact. Two members of a receptor family
+    do not: 5-HT2A and 5-HT2B are the same length to within a few residues and
+    share almost no residue numbers that mean the same thing, so pairing by number
+    would superpose one onto a frameshifted copy of the other and report a
+    confident, meaningless RMSD.
+
+    So: identical sequences pair position by position, and everything else pairs
+    through the same alignment the conservation logo is drawn from.
+    """
+    if reference["letters"] == other["letters"]:
+        pairs = [(a, b) for a, b in zip(other["ca"], reference["ca"]) if a and b]
+        return [a for a, _ in pairs], [b for _, b in pairs]
+
+    aligned = align_to_reference([reference["letters"], other["letters"]])
+    if len(aligned) != 2:
+        return [], []
+    mobile, fixed = [], []
+    i = j = 0
+    for left, right in zip(aligned[0], aligned[1]):
+        if left != "-" and right != "-":
+            a, b = other["ca"][j], reference["ca"][i]
+            if a and b:
+                mobile.append(a)
+                fixed.append(b)
+        if left != "-":
+            i += 1
+        if right != "-":
+            j += 1
+    return mobile, fixed

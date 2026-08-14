@@ -233,6 +233,57 @@ def superpose(mobile: list, fixed: list) -> tuple[list, list, float]:
     return rotation, [centre_m, centre_f], rmsd
 
 
+def superpose_core(mobile: list, fixed: list, rounds: int = 6,
+                   cutoff: float = 4.0, floor: int = 40) -> tuple:
+    """Superpose on the part of two structures that agrees, and say how much that was.
+
+    A whole-chain fit is a fit to whatever moves most. Two Boltz predictions of the
+    SAME receptor with different ligands came out at 9.3A over all 471 CA -- not
+    because the receptor differs by 9A but because its N-terminus and ICL3 are long,
+    disordered and placed differently each time, and a least-squares fit spends its
+    accuracy on them. The transmembrane bundle, which is the thing anyone is looking
+    at, then does not overlay at all.
+
+    The refinement is on a percentile, not on the cutoff alone. Dropping only the
+    pairs beyond 4A cannot start when the first fit is bad enough that nothing is
+    within 4A of anything -- three of the fifteen targets in the example campaign
+    sat at 19A over every residue, having rejected all of them and kept the fit
+    that produced that. Halving the set each round always makes progress, whatever
+    the fit it starts from, and the absolute cutoff then decides when to stop.
+
+    Returns the transform, the RMSD over the residues that survived, and how many
+    those were. The count is not decoration: 1A over 40 residues and 1A over 400
+    are different claims, and only the second is about the protein.
+    """
+    keep = list(range(len(mobile)))
+    rotation, centres, rmsd = superpose(mobile, fixed)
+    for _ in range(rounds - 1):
+        centre_m, centre_f = centres
+        deviations = []
+        for index in keep:
+            point = [mobile[index][i] - centre_m[i] for i in range(3)]
+            moved = [sum(rotation[i][j] * point[j] for j in range(3)) + centre_f[i]
+                     for i in range(3)]
+            deviations.append((math.dist(moved, fixed[index]), index))
+        deviations.sort()
+        # The threshold is whichever is LARGER: the absolute cutoff, or the median
+        # deviation. Halving unconditionally trims a good fit down to a quarter of
+        # the chain and then reports a fine RMSD over a fragment; thresholding on
+        # the cutoff alone cannot start from a bad one. Taking the larger halves
+        # while the fit is poor and then keeps everything that genuinely agrees.
+        median = deviations[len(deviations) // 2][0]
+        threshold = max(cutoff, median)
+        survivors = [index for distance, index in deviations if distance <= threshold]
+        if len(survivors) < floor:
+            survivors = [index for _, index in deviations[:floor]]
+        if len(survivors) >= len(keep) or len(survivors) < 3:
+            break
+        keep = survivors
+        rotation, centres, rmsd = superpose([mobile[i] for i in keep],
+                                            [fixed[i] for i in keep])
+    return rotation, centres, rmsd, len(keep)
+
+
 def apply_transform(cif_text: str, rotation: list, centres: list) -> str:
     """Rewrite an mmCIF's coordinates in place, leaving everything else alone.
 
@@ -266,6 +317,47 @@ def apply_transform(cif_text: str, rotation: list, centres: list) -> str:
                      float(fields[cz]) - centre_m[2]]
         except ValueError:
             out.append(line)
+            continue
+        moved = [sum(rotation[i][j] * point[j] for j in range(3)) + centre_f[i] for i in range(3)]
+        fields[cx], fields[cy], fields[cz] = (f"{value:.3f}" for value in moved)
+        out.append(" ".join(fields))
+    return "\n".join(out) + "\n"
+
+
+def transform_subset(cif_text: str, rotation: list, centres: list, keep) -> str:
+    """The same rewrite as apply_transform, over a chosen subset of the atoms.
+
+    Used to cut a whole complex down to the few hundred atoms a panel actually
+    draws -- one chain's CA, or one ligand -- so a page showing fifteen targets
+    at once fetches a few hundred KB rather than fifteen megabytes.
+
+    `keep` is called with the row's split fields and the column index map.
+    """
+    from . import sequences
+
+    lines = cif_text.splitlines()
+    columns, start = sequences._atom_site_columns(lines)
+    needed = ("Cartn_x", "Cartn_y", "Cartn_z")
+    if not all(name in columns for name in needed):
+        raise AlphaFoldError("This structure has no coordinates.")
+    cx, cy, cz = (columns[name] for name in needed)
+    width = len(columns)
+    centre_m, centre_f = centres
+
+    out = lines[:start]
+    for line in lines[start:]:
+        if not line.startswith(("ATOM ", "HETATM ")):
+            # The atom loop has ended; everything after it belongs to other
+            # categories and would be meaningless without the atoms it describes.
+            break
+        fields = line.split()
+        if len(fields) < width or not keep(fields, columns):
+            continue
+        try:
+            point = [float(fields[cx]) - centre_m[0],
+                     float(fields[cy]) - centre_m[1],
+                     float(fields[cz]) - centre_m[2]]
+        except ValueError:
             continue
         moved = [sum(rotation[i][j] * point[j] for j in range(3)) + centre_f[i] for i in range(3)]
         fields[cx], fields[cy], fields[cz] = (f"{value:.3f}" for value in moved)

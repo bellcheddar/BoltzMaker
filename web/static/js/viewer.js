@@ -34,6 +34,10 @@
     viewportShowTrajectoryControls: false,
   };
 
+  //: The ligand's colour in both viewers. Bright enough to find in a pocket, and
+  //: not on the chain-id scale the protein is drawn from.
+  var LIGAND_RED = 0xd81b60;
+
   function hasWebGL() {
     try {
       var canvas = document.createElement("canvas");
@@ -93,6 +97,7 @@
     this.host = host;
     this.structure = null;
     this.overlay = null;
+    this.extras = {};
     this.spinning = false;
     this.mode = "cartoon";
   }
@@ -109,6 +114,7 @@
     }).then(function () {
       var current = self.plugin.managers.structure.hierarchy.current;
       self.overlay = null;          // cleared with the scene by plugin.clear()
+      self.extras = {};
       self.structure = current.structures[0] || null;
       if (!self.structure) throw new Error("the file held no structure");
       return self.setStyle(self.mode);
@@ -152,10 +158,29 @@
       .then(function () { return self.colourByChain(); });
   };
 
+  /* Chains for the protein, one flat red for the ligand.
+
+     Colouring everything by chain-id gave the ligand a colour off the same scale
+     as the protein chains, so on a five-chain complex it was the fifth colour in
+     a series rather than the thing the campaign is about. Applied per component,
+     which is why this cannot be a single call. */
   Wrapper.prototype.colourByChain = function () {
     if (!this.structure) return Promise.resolve();
-    return this.plugin.managers.structure.component.updateRepresentationsTheme(
-      this.components(), { color: "chain-id" });
+    var manager = this.plugin.managers.structure.component;
+    var polymer = [], ligand = [];
+    this.components().forEach(function (component) {
+      var key = component.key || "";
+      (key.indexOf("ligand") >= 0 ? ligand : polymer).push(component);
+    });
+    var work = [];
+    if (polymer.length) {
+      work.push(manager.updateRepresentationsTheme(polymer, { color: "chain-id" }));
+    }
+    if (ligand.length) {
+      work.push(manager.updateRepresentationsTheme(
+        ligand, { color: "uniform", colorParams: { value: LIGAND_RED } }));
+    }
+    return Promise.all(work);
   };
 
   Wrapper.prototype.setSpin = function (on) {
@@ -172,7 +197,12 @@
      structure explicitly rather than for whatever home happens to be. */
   Wrapper.prototype.resetCamera = function () {
     var data = this.data();
-    if (!data) return;
+    if (!data) {
+      // The overlay panes hold only extras -- no "the" structure -- so there is
+      // nothing for the loci route to frame and Mol*'s own reset is right.
+      if (this.plugin.managers.camera) this.plugin.managers.camera.reset();
+      return;
+    }
     this.plugin.managers.interactivity.lociSelects.deselectAll();
     this.plugin.managers.camera.focusLoci({
       kind: "element-loci", structure: data,
@@ -235,8 +265,11 @@
     });
     if (!elements.length) return false;
     var combined = { kind: "element-loci", structure: data, elements: elements };
+    // Framed, not selected. Mol* paints a selection bright green over whatever
+    // theme is underneath, so leaving the ligand and its contacts selected made
+    // the ligand green in a pane whose whole point was to show it red -- and the
+    // contacts are already named in the list and marked on the sequence track.
     this.plugin.managers.camera.focusLoci(combined);
-    this.plugin.managers.structure.selection.fromLoci("set", combined);
     return true;
   };
 
@@ -279,6 +312,54 @@
   };
 
   Wrapper.prototype.hasOverlay = function () { return !!this.overlay; };
+
+  /* An extra structure in the scene, kept by name so it can be hidden and shown
+     again without reloading. Used by the two overlay panes, which hold one per
+     target and toggle them from a checkbox. */
+  Wrapper.prototype.loadExtra = function (name, url, options) {
+    var self = this;
+    options = options || {};
+    if (self.extras[name]) return Promise.resolve(self.extras[name]);
+    return fetch(url).then(function (response) {
+      if (!response.ok) throw new Error(response.status + " for " + name);
+      return response.text();
+    }).then(function (cif) {
+      var before = self.plugin.managers.structure.hierarchy.current.structures.length;
+      return self.viewer.loadStructureFromData(cif, "mmcif").then(function () {
+        var structures = self.plugin.managers.structure.hierarchy.current.structures;
+        if (structures.length <= before) throw new Error("nothing loaded for " + name);
+        var entry = structures[structures.length - 1];
+        self.extras[name] = entry;
+        var work = [];
+        if (options.color !== undefined) {
+          work.push(self.plugin.managers.structure.component.updateRepresentationsTheme(
+            entry.components, { color: "uniform", colorParams: { value: options.color } }));
+        }
+        if (options.type) {
+          entry.components.forEach(function (component) {
+            if (!component.representations.length) return;
+            work.push(self.plugin.managers.structure.component.updateRepresentations(
+              [component], component.representations[0],
+              { type: { name: options.type, params: options.typeParams || {} } }));
+          });
+        }
+        return Promise.all(work).then(function () { return entry; });
+      });
+    });
+  };
+
+  Wrapper.prototype.setExtraVisible = function (name, visible) {
+    var entry = this.extras[name];
+    if (!entry) return;
+    var manager = this.plugin.managers.structure.hierarchy;
+    // toggleVisibility flips whatever the current state is, so it is only safe to
+    // call when the current state is known to differ from the wanted one.
+    var hidden = !!(entry.cell && entry.cell.state && entry.cell.state.isHidden);
+    if (hidden === !visible) return;
+    manager.toggleVisibility([entry]);
+  };
+
+  Wrapper.prototype.frameAll = function () { this.resetCamera(); };
 
   Wrapper.prototype.dispose = function () {
     try { this.viewer.dispose(); } catch (err) { /* already gone */ }

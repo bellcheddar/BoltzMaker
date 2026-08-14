@@ -95,12 +95,17 @@ def test_the_missing_viewer_reasons_are_distinguishable():
 # --- the panel ----------------------------------------------------------------
 
 def test_both_panes_are_viewers():
-    """The interaction pane was a PLIP PNG. Both are structures now, with the same
-    three controls, so the second is a view of the pocket rather than a picture."""
+    """The interaction pane was a PLIP PNG. Both are structures now, so the second
+    is a view of the pocket rather than a picture of one."""
     html = _explorer_html()
     assert 'id="viewer"' in html and 'id="viewer-contacts"' in html
-    assert html.count('data-style="spin"') == 2
+    # Cartoon and surface belong to the two per-target panes only: the overlay
+    # panes draw sticks and a trace, and a surface of fifteen superposed
+    # structures is a solid block.
     assert html.count('data-style="surface"') == 2
+    assert html.count('data-style="cartoon"') == 2
+    # Spin and reset belong to all four.
+    assert html.count('data-style="spin"') == 4
 
 
 def test_each_control_row_names_its_viewer():
@@ -164,9 +169,11 @@ def test_the_sequence_canvas_escapes_the_responsive_image_cap():
 
 # --- the controls and the panes added later -----------------------------------
 
-def test_both_viewers_have_reset_and_alphafold():
+def test_reset_is_on_every_viewer_and_alphafold_on_the_per_target_ones():
+    """AlphaFold overlays the model of ONE protein, so it has no meaning on a pane
+    showing fifteen targets at once."""
     html = _explorer_html()
-    assert html.count('data-style="reset"') == 2
+    assert html.count('data-style="reset"') == 4
     assert html.count('data-style="alphafold"') == 2
 
 
@@ -192,3 +199,75 @@ def test_the_ligand_card_comes_from_the_report():
     the depiction is lifted out of the grid the report already drew."""
     assert "ligand-cards" in _explorer_html()
     assert "ligandCards" in _explorer_js()
+
+
+# --- the layout added later ---------------------------------------------------
+
+def test_the_fingerprints_are_grouped_rather_than_styled():
+    """They are siblings in the page's flow, and no selector can put two of a run
+    of cards side by side and leave the rest full width."""
+    from boltzmaker_web import reports
+    panels = [{"title": "Campaign summary", "html": "", "wide": False, "kind": "table"},
+              {"title": "A: residue interaction fingerprint", "html": "", "wide": True, "kind": "plain"},
+              {"title": "B: residue interaction fingerprint", "html": "", "wide": True, "kind": "plain"}]
+    slots = reports.ordered_slots(panels)
+    groups = [s for s in slots if s["kind"] == "group"]
+    assert len(groups) == 1 and len(groups[0]["panels"]) == 2
+
+
+def test_every_panel_has_an_anchor_and_appears_in_the_navigation():
+    from boltzmaker_web import reports
+    panels = [{"title": "Campaign summary", "html": "", "wide": False, "kind": "table"},
+              {"title": "Summary table", "html": "", "wide": False, "kind": "table"}]
+    slots = reports.ordered_slots(panels)
+    assert all(s.get("anchor") for s in slots)
+    nav = reports.navigation(slots)
+    assert len(nav) == len(slots)
+    assert all(entry["title"] and entry["anchor"] for entry in nav)
+    # The page's own panels are named, not left as their internal code.
+    assert "Target detail" in [entry["title"] for entry in nav]
+
+
+def test_the_anchor_is_derived_from_the_title_not_the_position():
+    """A campaign produces different panels depending on what it ran, so an
+    ordinal would point at a different panel in a different campaign."""
+    from boltzmaker_web import reports
+    assert reports.anchor_for("pIC50 vs confidence score") == "panel-pic50-vs-confidence-score"
+    assert reports.anchor_for("Family x ligand selectivity") == "panel-family-x-ligand-selectivity"
+
+
+def test_the_overall_structure_pane_is_named_that():
+    assert "Overall structure" in _explorer_html()
+    assert "Predicted pose" not in _explorer_html()
+
+
+def test_the_ligand_is_not_coloured_off_the_chain_scale():
+    """chain-id gave the ligand the fifth colour in a series on a five-chain
+    complex, rather than making it the thing the campaign is about."""
+    js = _viewer_js()
+    assert "LIGAND_RED" in js
+    colour = js[js.index("Wrapper.prototype.colourByChain"):js.index("Wrapper.prototype.setSpin")]
+    assert 'color: "chain-id"' in colour and "LIGAND_RED" in colour
+
+
+def test_framing_the_contacts_does_not_select_them():
+    """Mol* paints a selection bright green over whatever theme is underneath, so
+    a left-over selection made the ligand green in the pane meant to show it red."""
+    js = _viewer_js()
+    focus = js[js.index("Wrapper.prototype.focusContacts"):js.index("Wrapper.prototype.loadExtra")]
+    assert "camera.focusLoci" in focus
+    assert "selection.fromLoci" not in focus
+
+
+def test_the_two_overlay_panes_exist_with_their_own_lists():
+    html = _explorer_html()
+    for name in ("viewer-ligands", "viewer-traces", "ligands-list", "traces-list"):
+        assert name in html
+
+
+def test_the_overlay_structures_load_one_at_a_time():
+    """Fifteen concurrent loads race each other through Mol*'s state tree, and the
+    structure a load returns is then not always the one it just added."""
+    js = _explorer_js()
+    pane = js[js.index("function overlayPane"):js.index("// ---- the AlphaFold overlay")]
+    assert "reduce(" in pane and "Promise.resolve()" in pane
