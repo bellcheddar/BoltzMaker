@@ -531,3 +531,51 @@ def test_the_legend_shares_a_centre_line_with_the_axis_title():
     which read as a near-miss rather than a choice."""
     js = _explorer_js()
     assert 'legend.x = 0.5; legend.xanchor = "center";' in js
+
+
+# --- panels this page rebuilds rather than replays -----------------------------
+
+def test_the_selectivity_panel_is_replaced_with_a_chart_container():
+    """The report draws it as a PNG, so a cell's value could only be read off its
+    colour. The same pivot is in the payload and a heatmap can be hovered."""
+    panels = [{"title": "Family x ligand selectivity", "html": "<img src='x'>",
+               "wide": False, "kind": "plot"}]
+    reports.rebuild_panels(panels)
+    assert "chart-selectivity" in panels[0]["html"]
+    assert "<img" not in panels[0]["html"]
+
+
+def test_the_per_motif_panel_is_replaced_with_two_containers():
+    """A loop moving 18A flattens a 2A change in a helix, so the helices get an
+    axis of their own."""
+    panels = [{"title": "Per-motif Ca RMSD", "html": "<div id='chart-sse-shift'></div>",
+               "wide": False, "kind": "plain"}]
+    reports.rebuild_panels(panels)
+    assert "chart-sse-loops" in panels[0]["html"]
+    assert "chart-sse-tm" in panels[0]["html"]
+
+
+def test_a_panel_that_is_not_rebuilt_is_untouched():
+    panels = [{"title": "Campaign summary", "html": "<table>x</table>",
+               "wide": False, "kind": "table"}]
+    reports.rebuild_panels(panels)
+    assert panels[0]["html"] == "<table>x</table>"
+
+
+def test_the_summary_headers_are_shortened():
+    """Every column of that table is a number two or three characters wide under a
+    header two or three times as long, so it is the headers that set the widths --
+    "5HT2A" came out as "5HT2 A" because "Interactions" above it would not fit."""
+    html = "<tr><th>H-bond</th><th>π-stack</th><th>Halogen</th><th>Target</th></tr>"
+    out = reports.shorten_headers(html)
+    assert "<th>H</th>" in out
+    assert "<th>π</th>" in out
+    assert "<th>Hal</th>" in out
+    assert "<th>Target</th>" in out          # left alone: it is not the wide one
+
+
+def test_shortening_headers_leaves_the_cells_alone():
+    """A td holding the text of a header must not be rewritten with it."""
+    html = "<tr><th>H-bond</th></tr><tr><td>H-bond</td></tr>"
+    out = reports.shorten_headers(html)
+    assert "<td>H-bond</td>" in out

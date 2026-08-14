@@ -436,7 +436,7 @@ def _report_panels(session: Path, loaded: bmz.Results) -> tuple:
 def _render_explorer(token: str, loaded: bmz.Results):
     session = _session_dir(token)
     panels, charts, ligands = _report_panels(session, loaded) if session else ([], [], {})
-    slots = report_panels.ordered_slots(panels)
+    slots = report_panels.ordered_slots(report_panels.rebuild_panels(panels))
     return render_template(
         "auto_explorer.html", active="analysis",
         token=token, results=loaded,

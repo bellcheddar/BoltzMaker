@@ -41,6 +41,8 @@ var BoltzExplorer = (function () {
                   traces: { promise: null, wrapper: null } };
   var sequence = null;      // the open target's track, logo and chain map
   var ligandCards = {};     // ligand id -> the report's own depiction
+  var extraSpecs = [];      // charts this page builds rather than replays
+  var fingerprintMax = 1;   // one colour scale across every fingerprint
   var current = null;
   var sortKey = "confidence";
   var sortDir = -1;
@@ -134,7 +136,7 @@ var BoltzExplorer = (function () {
       cell(t.name || t.id);
       cell(t.family || "—");
       cell(t.ligand || "—");
-      cell(fmt(t.confidence, 3), "num");
+      cell(fmt(t.confidence, 2), "num");
       cell(t.pic50 === null ? "—" : fmt(t.pic50, 2), "num");
       cell(t.plip_total ? String(t.plip_total) : "—", "num");
 
@@ -581,8 +583,7 @@ var BoltzExplorer = (function () {
     var reference = payload.reference;
     note.textContent = which === "ligands"
       ? rows.length + " ligands, in the frame of " + reference + "."
-      : rows.length + " targets on " + reference +
-        ". RMSD is over the residues that agree, which is what the count beside it is.";
+      : rows.length + " targets on " + reference + ". RMSD is over the residues that agree.";
 
     rows.forEach(function (row, index) {
       var colour = overlayColour(index);
@@ -1139,58 +1140,65 @@ var BoltzExplorer = (function () {
     // _fullLayout._size. The apo-vs-holo shift chart, whose legend is twelve full
     // target names, came out 611px wide against its neighbours' 620 that way.
     //
-    // So: draw them all, read back the margins Plotly actually used, and settle
-    // them. Left and right take the largest of each, which is what makes the plot
-    // areas the same WIDTH -- the most constrained chart sets it, found by
-    // measuring rather than by guessing at font metrics.
-    //
-    // Height is not done that way, and the first attempt that did was wrong. On a
-    // phone the legend sits above the plot and the colourbar below, so a legend of
-    // twelve names is a block of margin, not a column beside the plot. Taking the
-    // largest top and bottom then gave every chart a 400px margin inside a 460px
-    // box: a 50px letterbox where the plot should be. Instead each chart keeps its
-    // own top and bottom, and its height is set to hold them plus a plot area of a
-    // fixed size. The plot areas still match exactly -- it is the cards around
-    // them that differ, by however much legend each one has to carry.
-    var hosts = [], wide = { l: 0, r: 0 };
+    // Equalised WITHIN a column width, not across the page. A chart in a
+    // two-column grid is half as wide as a full-width one, so forcing it to carry
+    // the same 170px legend reserve leaves it 160px of plot: the reserve is for a
+    // legend it does not have, since the set shares one. Charts of the same width
+    // are the ones worth comparing, and they are the ones equalised together.
+    var groups = {};
     specs.forEach(function (spec) {
       var host = document.getElementById(spec.id);
       if (!host || !host._fullLayout || !host._fullLayout._size) return;
-      hosts.push({ host: host, spec: spec });
-      var size = host._fullLayout._size;
-      wide.l = Math.max(wide.l, Math.ceil(size.l));
-      wide.r = Math.max(wide.r, Math.ceil(size.r));
+      var key = Math.round((host.offsetWidth || 0) / 20) * 20;
+      (groups[key] = groups[key] || []).push({ host: host, spec: spec });
     });
-    if (!hosts.length) return false;
 
-    var plotHeight = isNarrow() ? 260 : 290;
     var changed = false;
-    hosts.forEach(function (entry) {
-      var size = entry.host._fullLayout._size;
-      var update = {};
-      if (Math.ceil(size.l) !== wide.l) update["margin.l"] = wide.l;
-      if (Math.ceil(size.r) !== wide.r) update["margin.r"] = wide.r;
-      // Pin top and bottom to whole pixels as well. A legend Plotly measures at
-      // 63.6px leaves a plot one pixel short of the height derived from ceil(),
-      // which is how 272x260 and 272x259 ended up on the same page. Setting the
-      // margin to the value it already pushed to is stable: the final margin is
-      // the larger of the two and they are now the same number.
-      var top = Math.ceil(size.t), bottom = Math.ceil(size.b);
-      if (size.t !== top) update["margin.t"] = top;
-      if (size.b !== bottom) update["margin.b"] = bottom;
-      var height = top + bottom + plotHeight;
-      if (Math.round(entry.host._fullLayout.height) !== height) {
-        update.height = height;
-        // The container is sized in CSS as well as in the layout; left at 460 a
-        // taller chart would be drawn behind the card below it.
-        entry.host.style.height = height + "px";
-        entry.spec.layout.height = height;
-      }
-      if (!Object.keys(update).length) return;
-      changed = true;
-      try {
-        Plotly.relayout(entry.host, update);
-      } catch (err) { /* leave that chart at the size it drew itself */ }
+    Object.keys(groups).forEach(function (key) {
+      var hosts = groups[key];
+      var wide = { l: 0, r: 0 };
+      hosts.forEach(function (entry) {
+        var size = entry.host._fullLayout._size;
+        wide.l = Math.max(wide.l, Math.ceil(size.l));
+        wide.r = Math.max(wide.r, Math.ceil(size.r));
+      });
+
+      hosts.forEach(function (entry) {
+        var size = entry.host._fullLayout._size;
+        var update = {};
+        if (Math.ceil(size.l) !== wide.l) update["margin.l"] = wide.l;
+        if (Math.ceil(size.r) !== wide.r) update["margin.r"] = wide.r;
+        // Pin top and bottom to whole pixels as well. A legend Plotly measures at
+        // 63.6px leaves a plot one pixel short of the height derived from ceil(),
+        // which is how 272x260 and 272x259 ended up on the same page.
+        var top = Math.ceil(size.t), bottom = Math.ceil(size.b);
+        if (size.t !== top) update["margin.t"] = top;
+        if (size.b !== bottom) update["margin.b"] = bottom;
+
+        // Height is not equalised the way width is. On a phone the legend sits
+        // above the plot, so a twelve-name legend is a block of top margin, and
+        // taking the largest gave every chart a 400px margin inside a 460px box.
+        // Each chart keeps its own top and bottom and its height holds them plus
+        // a plot area -- square for a fingerprint, where the two axes are
+        // residues and ligands and a wide thin box makes the cells unreadable.
+        var width = Math.round(entry.host._fullLayout.width - wide.l - wide.r);
+        var plotHeight = isFingerprint(entry.spec)
+          ? Math.max(120, width)
+          : (isNarrow() ? 260 : 290);
+        var height = top + bottom + plotHeight;
+        if (Math.round(entry.host._fullLayout.height) !== height) {
+          update.height = height;
+          // The container is sized in CSS as well as in the layout; left at 460 a
+          // taller chart would be drawn behind the card below it.
+          entry.host.style.height = height + "px";
+          entry.spec.layout.height = height;
+        }
+        if (!Object.keys(update).length) return;
+        changed = true;
+        try {
+          Plotly.relayout(entry.host, update);
+        } catch (err) { /* leave that chart at the size it drew itself */ }
+      });
     });
     return changed;
   }
@@ -1279,21 +1287,226 @@ var BoltzExplorer = (function () {
     return spec;
   }
 
+
+
+
+
+  //: The fingerprints all measure the same thing on the same scale, so one
+  //: colourbar serves the set. The first keeps it; the rest are the same plot
+  //: with the same legend printed again.
+  function isFingerprint(spec) {
+    return String(spec.id || "").indexOf("chart-fingerprint") === 0;
+  }
+
+  function shareFingerprintScale(spec, drawn) {
+    if (!isFingerprint(spec)) return;
+    var first = !drawn.some(isFingerprint);
+    (spec.data || []).forEach(function (trace) {
+      trace.showscale = first;
+      if (first) trace.colorbar = { title: { text: "contacts" }, thickness: 12 };
+      // Fixed ends, so the same colour means the same number of contacts in every
+      // plot. Left to itself each heatmap scales to its own maximum, and a family
+      // with one weak contact then looks exactly like one with many.
+      trace.zmin = 0;
+      trace.zmax = fingerprintMax;
+    });
+  }
+
+  function computeFingerprintMax(specs) {
+    var top = 1;
+    specs.filter(isFingerprint).forEach(function (spec) {
+      (spec.data || []).forEach(function (trace) {
+        // z is a grid, and Plotly's typed-array spec can encode it either as an
+        // array of encoded rows or as one encoded block for the whole thing. The
+        // second is not iterable, and assuming the first threw on every load and
+        // took every chart on the page down with it.
+        var rows = Array.isArray(trace.z) ? trace.z : [trace.z];
+        rows.forEach(function (row) {
+          toArray(row).forEach(function (value) {
+            if (typeof value === "number" && value > top) top = value;
+          });
+        });
+      });
+    });
+    return top;
+  }
+
+  /* Family x ligand selectivity, rebuilt rather than replayed.
+
+     The report draws this one as a PNG, so the number in a cell could only be
+     read off the colour. The same pivot is in the payload -- family, ligand and
+     pIC50 per target -- so it is redrawn here as a heatmap that can be hovered.
+     Falls back to the report's image if the campaign predicted no affinity. */
+  function drawSelectivity() {
+    var host = document.getElementById("chart-selectivity");
+    if (!host || !data.has_affinity) return;
+    var families = [], ligands = [], seenF = {}, seenL = {};
+    data.targets.forEach(function (t) {
+      if (t.pic50 === null || t.pic50 === undefined || !t.ligand) return;
+      var family = t.group || t.family;
+      if (!seenF[family]) { seenF[family] = true; families.push(family); }
+      if (!seenL[t.ligand]) { seenL[t.ligand] = true; ligands.push(t.ligand); }
+    });
+    if (!families.length || !ligands.length) return;
+
+    // Several targets can share a family and ligand -- the same receptor with and
+    // without its G protein -- so the strongest of them stands for the pair,
+    // which is what a selectivity panel is asking about.
+    var best = {};
+    data.targets.forEach(function (t) {
+      if (t.pic50 === null || t.pic50 === undefined || !t.ligand) return;
+      var key = (t.group || t.family) + "\u0000" + t.ligand;
+      if (best[key] === undefined || t.pic50 > best[key]) best[key] = t.pic50;
+    });
+
+    var z = families.map(function (family) {
+      return ligands.map(function (ligand) {
+        var value = best[family + "\u0000" + ligand];
+        return value === undefined ? null : value;
+      });
+    });
+
+    var spec = {
+      id: "chart-selectivity",
+      data: [{
+        type: "heatmap", x: ligands, y: families, z: z,
+        colorscale: "Viridis", xgap: 2, ygap: 2,
+        hovertemplate: "%{y} \u00b7 %{x}<br>pIC50 %{z:.2f}<extra></extra>",
+        colorbar: { title: { text: "pIC50" } },
+      }],
+      layout: { yaxis: { autorange: "reversed" } },
+      config: {},
+    };
+    drawSpec(spec, host);
+    extraSpecs.push(spec);
+  }
+
+  //: The bars carry a raw float, so the default hover reads 0.8275268673896790.
+  //: Two decimals is the precision these numbers are quoted at everywhere else on
+  //: the page, and the table beside them.
+  var HOVER_2DP = {
+    "chart-pic50": "%{customdata}<br>pIC50 %{y:.2f}<extra></extra>",
+    "chart-confidence": "%{customdata}<br>confidence %{y:.2f}<extra></extra>",
+  };
+
+  function roundHovers(spec) {
+    var template = HOVER_2DP[spec.id];
+    if (!template) return;
+    // The bars are plotted against numeric positions with the names in ticktext,
+    // so the name has to be carried per point for the hover to be able to say it.
+    var names = (spec.layout && spec.layout.xaxis && spec.layout.xaxis.ticktext) || [];
+    (spec.data || []).forEach(function (trace) {
+      trace.hovertemplate = template;
+      if (names.length) trace.customdata = names.slice();
+    });
+  }
+
+  //: Which motifs belong to which of the two per-motif panels. A GPCR's loops
+  //: move on a scale that hides what the helices do -- an ICL2 shifting 18A puts
+  //: a 2A change in TM6 flat against the axis -- so they are drawn apart.
+  function motifClass(name) {
+    var label = String(name || "").toUpperCase();
+    if (label.indexOf("TM") === 0) return "tm";
+    return "loop";       // ICL, ECL, H8 and its loop: everything that is not a helix crossing
+  }
+
+  /* The per-motif chart, drawn twice: loops in one panel, transmembrane in the
+     other, sharing one legend. The traces are per target, so the split is on the
+     x categories rather than on the traces. */
+  function splitMotifChart(spec) {
+    var loops = document.getElementById("chart-sse-loops");
+    var tm = document.getElementById("chart-sse-tm");
+    if (!loops || !tm) return false;
+
+    ["loop", "tm"].forEach(function (kind) {
+      var host = kind === "loop" ? loops : tm;
+      var traces = (spec.data || []).map(function (trace) {
+        var copy = {};
+        Object.keys(trace).forEach(function (key) { copy[key] = trace[key]; });
+        var keepIndex = [];
+        (trace.x || []).forEach(function (name, index) {
+          if (motifClass(name) === kind) keepIndex.push(index);
+        });
+        var y = toArray(trace.y);
+        copy.x = keepIndex.map(function (i) { return trace.x[i]; });
+        copy.y = keepIndex.map(function (i) { return y[i]; });
+        copy.hovertemplate = "%{fullData.name}<br>%{x}: %{y:.2f} \u00c5<extra></extra>";
+        // One legend for the pair: the second panel's traces are the same twelve
+        // targets, and a second copy of the list says nothing the first did not.
+        copy.showlegend = kind === "loop";
+        return copy;
+      }).filter(function (trace) { return trace.x.length; });
+      if (!traces.length) return;
+      var layout = JSON.parse(JSON.stringify(spec.layout || {}));
+      layout.showlegend = kind === "loop";
+      // The report pins the category list so every chart shares one x ordering.
+      // Left alone, both halves draw all fifteen motifs and only half of each has
+      // any bars -- the split was in the data and invisible on screen.
+      if (layout.xaxis && Array.isArray(layout.xaxis.categoryarray)) {
+        layout.xaxis.categoryarray = layout.xaxis.categoryarray.filter(function (name) {
+          return motifClass(name) === kind;
+        });
+      }
+      var clone = { id: host.id, data: traces, layout: layout,
+                    config: JSON.parse(JSON.stringify(spec.config || {})) };
+      drawSpec(clone, host);
+      extraSpecs.push(clone);
+    });
+    return true;
+  }
+
+  //: Plotly's typed-array spec: numbers that came from numpy arrive as base64
+  //: rather than as a JSON array. Splitting a trace by index means decoding it,
+  //: because trace.y[i] on one of these is undefined and every bar would vanish.
+  var TYPED_ARRAYS = {
+    f8: Float64Array, f4: Float32Array, i4: Int32Array, i2: Int16Array,
+    i1: Int8Array, u4: Uint32Array, u2: Uint16Array, u1: Uint8Array,
+  };
+
+  function toArray(values) {
+    if (Array.isArray(values)) return values;
+    if (!values || values.bdata === undefined) return [];
+    var View = TYPED_ARRAYS[values.dtype];
+    if (!View) return [];
+    try {
+      var binary = atob(values.bdata);
+      var bytes = new Uint8Array(binary.length);
+      for (var i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+      return Array.prototype.slice.call(new View(bytes.buffer));
+    } catch (err) {
+      return [];
+    }
+  }
+
+  function drawSpec(spec, host) {
+    try {
+      normaliseSpec(spec, host);
+      Plotly.newPlot(host, spec.data, spec.layout, spec.config);
+      // The report's own confidence-against-affinity scatter is the one kept, so
+      // it takes over the job of opening a target.
+      if (spec.id === "chart-scatter") wireScatterClicks(host);
+    } catch (err) {
+      host.innerHTML = '<p class="md-hint">This chart could not be drawn.</p>';
+    }
+  }
+
   function plotReportCharts(specs) {
     if (!window.Plotly || !Array.isArray(specs)) return;
+    var drawn = [];
+    fingerprintMax = computeFingerprintMax(specs);
     specs.forEach(function (spec) {
+      // Two charts the page rebuilds rather than replays: the per-motif RMSD is
+      // split in two, and the selectivity heatmap replaces a flat image.
+      if (spec.id === "chart-sse-shift" && splitMotifChart(spec)) return;
       var host = document.getElementById(spec.id);
       if (!host) return;      // its panel was dropped
-      try {
-        normaliseSpec(spec, host);
-        Plotly.newPlot(host, spec.data, spec.layout, spec.config);
-        // The report's own confidence-against-affinity scatter is the one kept, so
-        // it takes over the job of opening a target.
-        if (spec.id === "chart-scatter") wireScatterClicks(host);
-      } catch (err) {
-        host.innerHTML = '<p class="md-hint">This chart could not be drawn.</p>';
-      }
+      roundHovers(spec);
+      shareFingerprintScale(spec, drawn);
+      drawSpec(spec, host);
+      drawn.push(spec);
     });
+    drawSelectivity();
+    specs = drawn.concat(extraSpecs);
     settleMargins(specs);
 
     var wasNarrow = isNarrow();

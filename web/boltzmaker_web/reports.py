@@ -502,3 +502,61 @@ def ligand_cells(panels: list) -> dict:
                         cells.setdefault(name.group(1).strip(), cell)
                     break
     return cells
+
+#: Panels this page rebuilds rather than replays, and the markup it puts in their
+#: place. The report's own version is a flat image or one chart where the page
+#: wants two, and neither can be fixed by styling what it sent.
+_REBUILT_PANELS = {
+    # Drawn as a PNG by the report, so a cell's value could only be read off its
+    # colour. The same pivot is in the payload, and a heatmap can be hovered.
+    "Family x ligand selectivity": '<div id="chart-selectivity"></div>',
+    # One chart of every motif, where a loop moving 18A flattens a 2A change in a
+    # helix. Two charts, so the helices have an axis of their own.
+    "Per-motif Ca RMSD": (
+        '<div class="md-motif-grid">'
+        '<div><h3 class="md-sub">Loops</h3><div id="chart-sse-loops"></div></div>'
+        '<div><h3 class="md-sub">Transmembrane</h3><div id="chart-sse-tm"></div></div>'
+        "</div>"
+    ),
+}
+
+
+def rebuild_panels(panels: list) -> list:
+    """Swap in this page's own markup for the panels it redraws."""
+    for panel in panels:
+        title = _panel_title(panel)
+        if title in _REBUILT_PANELS and isinstance(panel, dict):
+            panel["html"] = _REBUILT_PANELS[title]
+            panel["kind"] = "plain"
+        elif title == "Summary table" and isinstance(panel, dict):
+            panel["html"] = shorten_headers(panel["html"])
+    return panels
+
+#: Header text the summary table can spare. Every column of that table is a
+#: number two or three characters wide under a header two or three times as long,
+#: so it is the headers that set the column widths and the headers that wrap --
+#: "5HT2A" came out as "5HT2 A" down two lines because "Interactions" above it
+#: would not fit. The legend under the table already says what each one is.
+_HEADER_SHORTENINGS = {
+    "H-bond": "H",
+    "\u03c0-stack": "\u03c0",
+    "Halogen": "Hal",
+    "Phobic": "Phob",
+    "Binder p": "Binder",
+    "Lig ipTM": "Lig",
+    "PPI ipTM": "PPI",
+}
+
+_TH_RE = re.compile(r"(<th[^>]*>)(.*?)(</th>)", re.S)
+
+
+def shorten_headers(html: str) -> str:
+    """Trim the summary table's headers to what the columns under them need."""
+    def swap(match):
+        inner = match.group(2)
+        text = re.sub("<[^>]+>", "", inner).strip()
+        if text in _HEADER_SHORTENINGS:
+            return match.group(1) + _HEADER_SHORTENINGS[text] + match.group(3)
+        return match.group(0)
+    return _TH_RE.sub(swap, html)
+

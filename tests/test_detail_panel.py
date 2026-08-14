@@ -271,3 +271,78 @@ def test_the_overlay_structures_load_one_at_a_time():
     js = _explorer_js()
     pane = js[js.index("function overlayPane"):js.index("// ---- the AlphaFold overlay")]
     assert "reduce(" in pane and "Promise.resolve()" in pane
+
+
+# --- the charts this page rebuilds --------------------------------------------
+
+def test_the_motif_split_puts_only_helices_in_the_transmembrane_panel():
+    js = _explorer_js()
+    fn = js[js.index("function motifClass"):js.index("/* The per-motif chart")]
+    assert 'indexOf("TM") === 0' in fn and '"tm"' in fn
+
+
+def test_the_split_also_narrows_the_pinned_category_list():
+    """The report pins the category order so every chart shares one x axis. Left
+    alone, both halves draw all fifteen motifs and only half of each has any bars
+    -- the split was in the data and invisible on screen."""
+    js = _explorer_js()
+    split = js[js.index("function splitMotifChart"):js.index("//: Plotly's typed-array spec")]
+    assert "categoryarray" in split
+
+
+def test_the_two_motif_panels_share_one_legend():
+    js = _explorer_js()
+    split = js[js.index("function splitMotifChart"):js.index("//: Plotly's typed-array spec")]
+    assert 'showlegend = kind === "loop"' in split
+
+
+def test_typed_arrays_are_decoded_before_a_trace_is_split():
+    """Numbers that came from numpy arrive as base64, not as a JSON array, so
+    trace.y[i] is undefined and every bar would vanish."""
+    js = _explorer_js()
+    assert "TYPED_ARRAYS" in js and "atob(" in js
+
+
+def test_the_fingerprints_share_one_scale_and_one_bar():
+    """Left to itself each heatmap scales to its own maximum, and a family with
+    one weak contact then looks exactly like one with many."""
+    js = _explorer_js()
+    fn = js[js.index("function shareFingerprintScale"):js.index("function computeFingerprintMax")]
+    assert "trace.showscale = first" in fn
+    assert "trace.zmax = fingerprintMax" in fn
+
+
+def test_the_fingerprint_plot_areas_are_square():
+    """Both axes are lists -- residues and ligands -- and a wide thin box makes
+    the cells unreadable."""
+    js = _explorer_js()
+    assert "isFingerprint(entry.spec)" in js
+    assert "Math.max(120, width)" in js
+
+
+def test_charts_are_equalised_within_a_column_width():
+    """A chart in a two-column grid is half as wide as a full-width one, and
+    forcing it to carry the same legend reserve left it 160px of plot."""
+    js = _explorer_js()
+    fn = js[js.index("function equaliseMargins"):js.index("function settleMargins")]
+    assert "host.offsetWidth" in fn and "groups[key]" in fn
+
+
+def test_the_ranked_charts_hover_to_two_decimals():
+    js = _explorer_js()
+    assert "%{y:.2f}" in js
+    assert "HOVER_2DP" in js
+
+
+def test_the_confidence_column_is_two_decimals():
+    js = _explorer_js()
+    assert "cell(fmt(t.confidence, 2)" in js
+
+
+def test_campaign_names_are_upper_case_where_they_are_listed():
+    """Transformed rather than upper-cased at the source, so the name the bundle
+    and the results file carry is untouched."""
+    css = (WEB / "static" / "css" / "brand.css").read_text()
+    assert ".md-campaign-name { text-transform: uppercase; }" in css
+    for name in ("runs.html", "index.html"):
+        assert "md-campaign-name" in (WEB / "templates" / name).read_text()

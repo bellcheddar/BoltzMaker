@@ -29,7 +29,7 @@
         {% for run in runs %}
         <tr>
           <td>
-            {{ run.campaign }}<br>
+            <span class="md-campaign-name">{{ run.campaign }}</span><br>
             <span class="md-run-key">{{ run.key[:12] }}</span>
           </td>
           <td>{{ run.created[:10] }}<br><span class="md-run-key">{{ run.created[11:19] }}</span></td>

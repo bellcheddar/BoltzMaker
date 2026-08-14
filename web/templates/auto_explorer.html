@@ -196,15 +196,22 @@
 </div>
 
 {% elif slot.kind == 'group' %}
-{#  The per-family fingerprints, two to a row: six full-width copies of the same
-    plot is a long scroll for a set whose whole point is comparison.  #}
-<div class="md-fingerprint-grid" id="{{ slot.anchor }}">
-  {% for panel in slot.panels %}
-  <div class="md-card">
-    <h2>{{ panel.title }}</h2>
-    <div class="md-report-panel md-report-{{ panel.kind }}">{{ panel.html | safe }}</div>
+{#  One card holding every fingerprint, two to a row. Six cards of the same plot
+    was a long scroll for a set whose whole point is comparison, and six copies of
+    one colour scale said the same thing six times.  #}
+<div class="md-card" id="{{ slot.anchor }}">
+  <h2>Residue interaction fingerprints</h2>
+  <p class="md-hint" style="margin-top:0">Which residues each ligand touches, per
+    protein. One scale for all of them, so a strong contact looks the same in every
+    plot.</p>
+  <div class="md-fingerprint-grid">
+    {% for panel in slot.panels %}
+    <div class="md-fingerprint-cell">
+      <h3 class="md-sub">{{ panel.title | replace(': residue interaction fingerprint', '') }}</h3>
+      <div class="md-report-panel md-report-{{ panel.kind }}">{{ panel.html | safe }}</div>
+    </div>
+    {% endfor %}
   </div>
-  {% endfor %}
 </div>
 
 {% elif slot.kind == 'report' %}

@@ -227,6 +227,15 @@ img, canvas { max-width: 100%; height: auto; }
    header onto four lines. */
 .md-report-wide-table table { font-size: 11px; }
 .md-report-wide-table th, .md-report-wide-table td { padding: 4px 5px; }
+/* One line per cell. Everything in this table is an identifier or a number, and
+   both are unreadable broken across lines -- "5HT2A" as "5HT2 A" and "0.91" as
+   "0.9 1" are not shorter, they are wrong-looking. The partner list is the one
+   genuinely multi-valued column, so it keeps its wrapping; if the rest still do
+   not fit, the panel scrolls, which is the lesser harm now that the headers no
+   longer set the widths. */
+.md-report-wide-table th, .md-report-wide-table td { white-space: nowrap; }
+.md-report-wide-table td.wrap, .md-report-wide-table td.partners { white-space: normal; }
+.md-report-wide-table { overflow-x: auto; }
 /* Images from the reports -- the selectivity heatmap and the ligand grid -- are
    rendered by matplotlib at whatever aspect their data implies. A one-family,
    one-ligand heatmap comes out as a wide letterbox with a rotated label longer
@@ -489,7 +498,7 @@ tr.md-check-na .md-check-fail { color: var(--md-text-muted); }
   .md-stat-row { gap: 18px; }
   .md-viewer { min-height: 260px; }
   .md-detail-select { font-size: 15px; }
-  .md-fingerprint-grid { grid-template-columns: 1fr; }
+  .md-fingerprint-grid, .md-motif-grid { grid-template-columns: 1fr; }
   .md-seq-tooltip { white-space: normal; max-width: 240px; }
   .md-mode-card { padding: 18px; }
 
@@ -541,7 +550,8 @@ tr.md-check-na .md-check-fail { color: var(--md-text-muted); }
 /* Two to a row on a desktop, one on a phone -- where two 400px heatmaps side by
    side would each be 190px of a plot whose axes are residue names. */
 .md-fingerprint-grid { display: grid; gap: 16px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
-.md-fingerprint-grid > .md-card { margin-bottom: 0; min-width: 0; }
+.md-fingerprint-cell { min-width: 0; }
+.md-fingerprint-cell .md-sub { margin: 0 0 4px; }
 
 /* ---- the two campaign-wide overlay panes ---- */
 .md-overlay-grid { margin-top: 16px; }
@@ -560,3 +570,12 @@ tr.md-check-na .md-check-fail { color: var(--md-text-muted); }
 .md-overlay-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis;
   white-space: nowrap; }
 .md-overlay-rmsd { color: var(--md-text-muted); font-variant-numeric: tabular-nums; }
+
+/* A campaign name is an identifier, not prose: upper case everywhere it is
+   listed, whatever case it was typed in. Transformed rather than upper-cased at
+   the source, so the name the bundle and the results file carry is untouched. */
+.md-campaign-name { text-transform: uppercase; }
+
+/* The per-motif RMSD, as two charts sharing one legend. */
+.md-motif-grid { display: grid; gap: 12px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.md-motif-grid .md-sub { margin: 0 0 4px; }

@@ -46,7 +46,7 @@
       <ul class="md-run-list">
         {% for run in recent_runs %}
         <li>
-          <div class="md-run-name">{{ run.campaign }}</div>
+          <div class="md-run-name md-campaign-name">{{ run.campaign }}</div>
           <div class="md-run-meta">
             {{ run.created[:10] }}
             {%- if run.targets %} &middot; {{ run.targets }} target{{ 's' if run.targets != 1 }}{% endif %}
