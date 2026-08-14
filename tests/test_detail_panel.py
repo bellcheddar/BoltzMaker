@@ -311,12 +311,12 @@ def test_typed_arrays_are_decoded_before_a_trace_is_split():
     assert "TYPED_ARRAYS" in js and "atob(" in js
 
 
-def test_the_fingerprints_share_one_scale_and_one_bar():
+def test_the_fingerprints_share_one_scale():
     """Left to itself each heatmap scales to its own maximum, and a family with
     one weak contact then looks exactly like one with many."""
     js = _explorer_js()
     fn = js[js.index("function shareFingerprintScale"):js.index("function computeFingerprintMax")]
-    assert "trace.showscale = first" in fn
+    assert "trace.zmin = 0;" in fn
     assert "trace.zmax = fingerprintMax" in fn
 
 
@@ -501,3 +501,44 @@ def test_the_gene_name_is_trimmed_to_a_legal_chain_id():
     src = (WEB / "boltzmaker_web" / "alphafold.py").read_text()
     fn = src[src.index("def entry("):src.index("def model_url(")]
     assert "c.isalnum()" in fn and "[:5]" in fn
+
+
+def test_the_mobile_rules_come_last_in_the_stylesheet():
+    """A media query carries no extra specificity, so a plain rule written LATER
+    beats it at every width. The fingerprint and per-motif grids were defined
+    below the mobile block and stayed two columns on a phone, which put two 180px
+    heatmaps side by side with their titles overlapping."""
+    css = (WEB / "static" / "css" / "brand.css").read_text()
+    media = css.index("@media (max-width: 768px)")
+    for rule in (".md-fingerprint-grid {", ".md-motif-grid {"):
+        assert css.index(rule) < media, rule + " is defined after the mobile block"
+
+
+def test_margins_follow_the_charts_width_not_the_windows():
+    """A chart in a two-column grid is half a page wide even on a desktop, and the
+    wide margins are most of it: a fingerprint in a 530px cell came out 157px
+    square, having reserved 120 for row names and 250 for a legend of two words."""
+    js = _explorer_js()
+    assert "NARROW_CHART" in js
+    assert "width <= NARROW_CHART" in js
+
+
+def test_charts_are_grouped_by_panel_as_well_as_width():
+    """Width alone conflated two different two-column grids with the same cell
+    width -- the per-motif pair, whose legend is twelve full target names, and the
+    fingerprints, whose legend is two words."""
+    js = _explorer_js()
+    fn = js[js.index("function equaliseMargins"):js.index("function settleMargins")]
+    assert "host.closest(" in fn
+    # Top and bottom are equalised within a panel, so a pair of cards line up.
+    assert "wide.t = Math.max" in fn and "wide.b = Math.max" in fn
+
+
+def test_the_fingerprints_have_no_colourbar():
+    """The values are 0 and 1 -- touched or not -- and a bar running 0, 0.5, 1
+    under the word "contacts" invited a reading of how many, which the plot does
+    not say."""
+    js = _explorer_js()
+    fn = js[js.index("function shareFingerprintScale"):js.index("function computeFingerprintMax")]
+    assert "trace.showscale = false;" in fn
+    assert "spec.layout.showlegend = first" in fn

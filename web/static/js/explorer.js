@@ -34,7 +34,17 @@ var BoltzExplorer = (function () {
   var CHART_WIDE = { height: 420, margin: { t: 20, b: 110, l: 120, r: 170 } };
   var CHART_NARROW = { height: 460, margin: { t: 64, b: 150, l: 46, r: 14 } };
   function isNarrow() { return window.innerWidth <= NARROW; }
-  function chartMetrics() { return isNarrow() ? CHART_NARROW : CHART_WIDE; }
+
+  //: A chart in a two-column grid is half a page wide even on a desktop, and the
+  //: wide margins are most of it: a fingerprint in a 530px cell came out 157px
+  //: square, having reserved 120 for row names and 250 for a two-word legend. The
+  //: margins follow the CHART's width rather than the window's.
+  var NARROW_CHART = 620;
+
+  function chartMetrics(host) {
+    var width = host && host.offsetWidth ? host.offsetWidth : window.innerWidth;
+    return (isNarrow() || width <= NARROW_CHART) ? CHART_NARROW : CHART_WIDE;
+  }
   var viewers = { pose: { promise: null, wrapper: null },
                   contacts: { promise: null, wrapper: null },
                   ligands: { promise: null, wrapper: null },
@@ -1179,14 +1189,13 @@ var BoltzExplorer = (function () {
 
 
 
-  function placeLegendAndColourbar(layout) {
+  function placeLegendAndColourbar(layout, narrow) {
     // Wide: both sit to the right of the plot, in the margin reserved for them.
     // Narrow: there is no room beside the plot, so the legend goes above it as a
     // single wrapping row and the colourbar below, under the category labels. Set
     // explicitly in both directions -- these charts are relaid out when the window
     // crosses the breakpoint, so leaving a property alone means keeping the
     // placement from the width the page happened to load at.
-    var narrow = isNarrow();
     if (layout.showlegend !== false) {
       var legend = layout.legend || {};
       if (narrow) {
@@ -1282,18 +1291,33 @@ var BoltzExplorer = (function () {
     specs.forEach(function (spec) {
       var host = document.getElementById(spec.id);
       if (!host || !host._fullLayout || !host._fullLayout._size) return;
-      var key = Math.round((host.offsetWidth || 0) / 20) * 20;
+      // Width AND the panel it sits in. Width alone conflated two different
+      // two-column grids that happen to have the same cell width: the per-motif
+      // pair, whose legend is twelve full target names, and the fingerprints,
+      // whose legend is two words. Equalised together, the fingerprints inherited
+      // a 250px legend reserve for a legend they do not have and came out 157px
+      // square inside a 530px cell.
+      var panel = host.closest(".md-fingerprint-grid, .md-motif-grid, .md-card");
+      var key = Math.round((host.offsetWidth || 0) / 20) * 20 + "|" +
+                (panel ? (panel.id || panel.className) : "");
       (groups[key] = groups[key] || []).push({ host: host, spec: spec });
     });
 
     var changed = false;
     Object.keys(groups).forEach(function (key) {
       var hosts = groups[key];
-      var wide = { l: 0, r: 0 };
+      var wide = { l: 0, r: 0, t: 0, b: 0 };
       hosts.forEach(function (entry) {
         var size = entry.host._fullLayout._size;
         wide.l = Math.max(wide.l, Math.ceil(size.l));
         wide.r = Math.max(wide.r, Math.ceil(size.r));
+        // Top and bottom too, but only WITHIN a panel. Across the whole page this
+        // was wrong and produced a 50px letterbox: one chart's twelve-name legend
+        // became every chart's top margin. Within one grid it is right -- the two
+        // per-motif charts sit side by side and only one carries the legend, so
+        // without it one card is 551px and its neighbour 474.
+        wide.t = Math.max(wide.t, Math.ceil(size.t));
+        wide.b = Math.max(wide.b, Math.ceil(size.b));
       });
 
       hosts.forEach(function (entry) {
@@ -1304,9 +1328,9 @@ var BoltzExplorer = (function () {
         // Pin top and bottom to whole pixels as well. A legend Plotly measures at
         // 63.6px leaves a plot one pixel short of the height derived from ceil(),
         // which is how 272x260 and 272x259 ended up on the same page.
-        var top = Math.ceil(size.t), bottom = Math.ceil(size.b);
-        if (size.t !== top) update["margin.t"] = top;
-        if (size.b !== bottom) update["margin.b"] = bottom;
+        var top = wide.t, bottom = wide.b;
+        if (Math.ceil(size.t) !== top) update["margin.t"] = top;
+        if (Math.ceil(size.b) !== bottom) update["margin.b"] = bottom;
 
         // Height is not equalised the way width is. On a phone the legend sits
         // above the plot, so a twelve-name legend is a block of top margin, and
@@ -1315,9 +1339,10 @@ var BoltzExplorer = (function () {
         // a plot area -- square for a fingerprint, where the two axes are
         // residues and ligands and a wide thin box makes the cells unreadable.
         var width = Math.round(entry.host._fullLayout.width - wide.l - wide.r);
+        var narrowChart = chartMetrics(entry.host) === CHART_NARROW;
         var plotHeight = isFingerprint(entry.spec)
           ? Math.max(120, width)
-          : (isNarrow() ? 260 : 290);
+          : (narrowChart ? 260 : 290);
         var height = top + bottom + plotHeight;
         if (Math.round(entry.host._fullLayout.height) !== height) {
           update.height = height;
@@ -1349,7 +1374,7 @@ var BoltzExplorer = (function () {
     // Everything that depends on the width the page is being read at. Called on
     // the first draw and again whenever the window crosses the breakpoint, so it
     // must set each property in both directions rather than leaving one alone.
-    var metrics = chartMetrics();
+    var metrics = chartMetrics(host);
     // The report's own div carries an inline height (260px, sized to its own
     // layout) and the sanitiser keeps style attributes, so plotting at a
     // different height drew a 420px chart inside a 260px box, which spilled
@@ -1382,8 +1407,9 @@ var BoltzExplorer = (function () {
     // outside the plot, so equaliseMargins() below settles the final number.
     layout.margin = { t: metrics.margin.t, b: metrics.margin.b,
                       l: metrics.margin.l, r: metrics.margin.r };
-    placeLegendAndColourbar(layout);
-    placeTraceColourbars(spec.data, isNarrow());
+    var narrow = metrics === CHART_NARROW;
+    placeLegendAndColourbar(layout, narrow);
+    placeTraceColourbars(spec.data, narrow);
     // The scatters label every point with its target name. Fifteen of those in a
     // 250px-wide plot is a thicket, and each one is a name already truncated to
     // sixteen characters. On a phone the markers stand alone -- the point is still
@@ -1435,13 +1461,21 @@ var BoltzExplorer = (function () {
     if (!isFingerprint(spec)) return;
     var first = !drawn.some(isFingerprint);
     (spec.data || []).forEach(function (trace) {
-      trace.showscale = first;
-      if (first) trace.colorbar = { title: { text: "contacts" }, thickness: 12 };
-      // Fixed ends, so the same colour means the same number of contacts in every
-      // plot. Left to itself each heatmap scales to its own maximum, and a family
-      // with one weak contact then looks exactly like one with many.
+      // No colourbar at all. The values are 0 and 1 -- touched or not -- and a bar
+      // running 0, 0.5, 1 under the word "contacts" invited a reading of how many,
+      // which the plot does not say. The report's own two-swatch legend does say
+      // it, in words.
+      trace.showscale = false;
+      // Fixed ends, so a colour means the same thing in every plot. Left to
+      // itself each heatmap scales to its own maximum.
       trace.zmin = 0;
       trace.zmax = fingerprintMax;
+    });
+    // One legend for the set. It is the same two swatches six times over, and six
+    // copies of it cost more vertical space than the plots they explain.
+    if (spec.layout) spec.layout.showlegend = first;
+    (spec.data || []).forEach(function (trace) {
+      if (trace.type !== "heatmap") trace.showlegend = first;
     });
   }
 

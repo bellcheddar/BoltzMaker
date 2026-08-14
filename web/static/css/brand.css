@@ -484,60 +484,6 @@ tr.md-check-na .md-check-fail { color: var(--md-text-muted); }
 }
 .md-seq-key-contact { background: #c0166f; border-color: #c0166f !important; }
 
-@media (max-width: 768px) {
-  .md-header-inner { padding: 10px 14px; gap: 8px; }
-  .md-header-title h1 { font-size: 14px; }
-  /* The nav takes a row of its own rather than competing with the title for the
-     remaining width, and wraps within it. */
-  .md-header-nav { width: 100%; gap: 6px; }
-  .md-header-nav a { font-size: 11px; padding: 3px 9px; }
-  .md-main { padding: 14px; }
-  .md-card { padding: 14px; }
-  .md-tool-grid, .md-mode-grid, .md-detail-grid, .md-intro-grid { grid-template-columns: 1fr; }
-  .lig-page { grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); }
-  .md-stat-row { gap: 18px; }
-  .md-viewer { min-height: 260px; }
-  .md-detail-select { font-size: 15px; }
-  .md-fingerprint-grid, .md-motif-grid { grid-template-columns: 1fr; }
-  .md-seq-tooltip { white-space: normal; max-width: 240px; }
-  .md-mode-card { padding: 18px; }
-
-  /* Buttons go full width and stack. Centre-aligned labels, so a two-line label
-     stays inside its own pill instead of pushing the next one out of line. */
-  .md-button-row { flex-direction: column; align-items: stretch; }
-  .md-button-row .md-btn { width: 100%; text-align: center; }
-  /* The viewer's controls stay side by side rather than stacking full width --
-     five stacked pills is most of a phone screen before any structure. They wrap
-     onto a second row instead: five across a 390px screen would give each about
-     70px, and "AlphaFold" does not fit in 70px. */
-  .md-viewer-controls { flex-direction: row; flex-wrap: wrap; }
-  .md-viewer-controls .md-btn { flex: 0 1 auto; width: auto; padding: 6px 10px; font-size: 11px; }
-
-  /* Tables scroll sideways here. On a desktop panel they are told to wrap
-     instead, because a scrollbar hides the right-hand columns behind a gesture
-     -- but at 390px wrapping is worse: every column crushes to a few characters
-     and "boltz_input.md" came out as "boltz_inpu t.md" down four lines. The
-     min-width keeps the columns readable and the panel scrolls to reach them. */
-  .md-report-panel { overflow-x: auto; -webkit-overflow-scrolling: touch; }
-  .md-report-panel table { font-size: 11px; min-width: 520px; }
-  .md-report-wide-table table { min-width: 700px; }
-  .md-report-panel th, .md-report-panel td { padding: 4px 6px; }
-  .md-report-panel td { overflow-wrap: break-word; }
-
-  /* One legend entry per line. Wrapped mid-row, the middot separators ended up
-     at the start of a line, reading as bullets for a list that was not one. */
-  .summary-legend { flex-direction: column; gap: 10px; }
-  .legend-group { flex-direction: column; align-items: flex-start; gap: 4px; }
-  .summary-legend .legend-item { width: 100%; }
-  .summary-legend .legend-item + .legend-item::before { content: none; }
-
-  /* Charts are re-laid out for this width in explorer.js -- the legend moves
-     above the plot and the colourbar below it, so they need more height than
-     the desktop 420 to keep the plot itself a usable size. */
-  .md-report-plain .plotly-graph-div { min-height: 460px; }
-  .md-report-plot { min-height: 240px; }
-  .md-report-plot img { max-height: 240px; }
-}
 
 /* Only shown when neither the spec nor the sequence produced an accession. The
    [hidden] rule is not redundant: `display: flex` here and the browser's own
@@ -605,3 +551,66 @@ tr.md-check-na .md-check-fail { color: var(--md-text-muted); }
 .md-btn-destroy { background: var(--md-accent-red); color: #fff; }
 .md-btn-destroy:hover { background: #7a1030; }
 .md-btn-destroy[disabled] { opacity: .55; cursor: default; }
+
+/* ---- narrow screens ----
+
+   Last in the file on purpose. Everything in here is an override meant to win at
+   narrow widths, and a media query carries no extra specificity: a plain rule
+   written LATER beats it at every width. That is not hypothetical -- the
+   fingerprint and per-motif grids were defined below this block and stayed two
+   columns on a phone, which put two 180px heatmaps side by side with their titles
+   overlapping. New rules go above this block. */
+@media (max-width: 768px) {
+  .md-header-inner { padding: 10px 14px; gap: 8px; }
+  .md-header-title h1 { font-size: 14px; }
+  /* The nav takes a row of its own rather than competing with the title for the
+     remaining width, and wraps within it. */
+  .md-header-nav { width: 100%; gap: 6px; }
+  .md-header-nav a { font-size: 11px; padding: 3px 9px; }
+  .md-main { padding: 14px; }
+  .md-card { padding: 14px; }
+  .md-tool-grid, .md-mode-grid, .md-detail-grid, .md-intro-grid { grid-template-columns: 1fr; }
+  .lig-page { grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); }
+  .md-stat-row { gap: 18px; }
+  .md-viewer { min-height: 260px; }
+  .md-detail-select { font-size: 15px; }
+  .md-fingerprint-grid, .md-motif-grid { grid-template-columns: 1fr; }
+  .md-seq-tooltip { white-space: normal; max-width: 240px; }
+  .md-mode-card { padding: 18px; }
+
+  /* Buttons go full width and stack. Centre-aligned labels, so a two-line label
+     stays inside its own pill instead of pushing the next one out of line. */
+  .md-button-row { flex-direction: column; align-items: stretch; }
+  .md-button-row .md-btn { width: 100%; text-align: center; }
+  /* The viewer's controls stay side by side rather than stacking full width --
+     five stacked pills is most of a phone screen before any structure. They wrap
+     onto a second row instead: five across a 390px screen would give each about
+     70px, and "AlphaFold" does not fit in 70px. */
+  .md-viewer-controls { flex-direction: row; flex-wrap: wrap; }
+  .md-viewer-controls .md-btn { flex: 0 1 auto; width: auto; padding: 6px 10px; font-size: 11px; }
+
+  /* Tables scroll sideways here. On a desktop panel they are told to wrap
+     instead, because a scrollbar hides the right-hand columns behind a gesture
+     -- but at 390px wrapping is worse: every column crushes to a few characters
+     and "boltz_input.md" came out as "boltz_inpu t.md" down four lines. The
+     min-width keeps the columns readable and the panel scrolls to reach them. */
+  .md-report-panel { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  .md-report-panel table { font-size: 11px; min-width: 520px; }
+  .md-report-wide-table table { min-width: 700px; }
+  .md-report-panel th, .md-report-panel td { padding: 4px 6px; }
+  .md-report-panel td { overflow-wrap: break-word; }
+
+  /* One legend entry per line. Wrapped mid-row, the middot separators ended up
+     at the start of a line, reading as bullets for a list that was not one. */
+  .summary-legend { flex-direction: column; gap: 10px; }
+  .legend-group { flex-direction: column; align-items: flex-start; gap: 4px; }
+  .summary-legend .legend-item { width: 100%; }
+  .summary-legend .legend-item + .legend-item::before { content: none; }
+
+  /* Charts are re-laid out for this width in explorer.js -- the legend moves
+     above the plot and the colourbar below it, so they need more height than
+     the desktop 420 to keep the plot itself a usable size. */
+  .md-report-plain .plotly-graph-div { min-height: 460px; }
+  .md-report-plot { min-height: 240px; }
+  .md-report-plot img { max-height: 240px; }
+}

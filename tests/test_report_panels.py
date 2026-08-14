@@ -433,18 +433,19 @@ def test_the_modebar_is_off_on_a_phone():
     assert "config.displayModeBar = !isNarrow();" in _explorer_js()
 
 
-def test_the_plot_area_height_is_not_the_largest_margin():
-    """Taking the largest top and bottom is right for left and right, and wrong for
-    height: on a phone a twelve-name legend is a block of top margin, and equalising
-    on it gave every chart a 400px margin inside a 460px box -- a 50px letterbox
-    where the plot should be. Each chart keeps its own top and bottom and its height
-    is set to hold them plus a plot area of a fixed size."""
+def test_the_plot_area_height_is_derived_not_inherited_across_the_page():
+    """On a phone a twelve-name legend is a block of top margin, and equalising the
+    whole page on it gave every chart a 400px margin inside a 460px box -- a 50px
+    letterbox where the plot should be. The height is derived from the margins plus
+    a plot area of a fixed size, and the margins are shared only within a panel:
+    charts that sit side by side in one grid, where uneven cards look broken."""
     js = _explorer_js()
     assert "var height = top + bottom + plotHeight;" in js
     assert "wide.l = Math.max(wide.l" in js
-    assert "wide.r = Math.max(wide.r" in js
-    # No max over t/b -- that is the bug this guards.
-    assert "Math.max(used.t" not in js and "wide.t" not in js
+    # Grouped per panel, which is what makes sharing top and bottom safe: the
+    # page-wide version of this is the letterbox above.
+    fn = js[js.index("function equaliseMargins"):js.index("function settleMargins")]
+    assert "host.closest(" in fn
 
 
 def test_the_margins_are_equalised_after_drawing():
