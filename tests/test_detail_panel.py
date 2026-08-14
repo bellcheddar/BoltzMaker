@@ -407,3 +407,26 @@ def test_the_accession_box_stays_hidden_until_it_is_needed():
     asking for something nobody needed."""
     css = (WEB / "static" / "css" / "brand.css").read_text()
     assert ".md-af-ask[hidden] { display: none; }" in css
+
+
+def test_the_contacts_are_drawn_and_measured():
+    """Mol* has an `interactions` representation that computes its own, but it
+    only sees the component it is given and this build has no query language to
+    build a "ligand plus surroundings" component with -- on the ligand alone it
+    finds nothing and draws nothing. Measurements need no component, and drawing
+    the contacts PLIP reported keeps the picture and the list beside it the same
+    set of facts rather than two opinions."""
+    js = _viewer_js()
+    assert "Wrapper.prototype.showInteractions" in js
+    assert "measurement.addDistance(" in js
+
+
+def test_a_contact_is_measured_between_atoms_not_centroids():
+    """A dashed line between two whole residues is drawn between their centroids,
+    which for a tryptophan against a ligand is several angstrom from where the
+    contact actually is."""
+    js = _viewer_js()
+    assert "function closestAtomLoci" in js
+    fn = js[js.index("Wrapper.prototype.showInteractions"):]
+    assert "closestAtomLoci(data, residue, ligandCentre)" in fn
+    assert "closestAtomLoci(data, ligand, residueAtom.point)" in fn

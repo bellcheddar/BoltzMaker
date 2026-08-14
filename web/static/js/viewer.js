@@ -97,6 +97,7 @@
     this.host = host;
     this.structure = null;
     this.overlay = null;
+    this.pocket = null;
     this.extras = {};
     this.spinning = false;
     this.mode = "cartoon";
@@ -114,6 +115,7 @@
     }).then(function () {
       var current = self.plugin.managers.structure.hierarchy.current;
       self.overlay = null;          // cleared with the scene by plugin.clear()
+      self.pocket = null;
       self.extras = {};
       self.structure = current.structures[0] || null;
       if (!self.structure) throw new Error("the file held no structure");
@@ -360,6 +362,85 @@
   };
 
   Wrapper.prototype.frameAll = function () { this.resetCamera(); };
+
+  /* Closest atom of a residue (or chain) to a reference point, as a one-atom
+     loci. A contact is between two atoms, and a dashed line drawn between two
+     whole residues is drawn between their centroids -- which for a tryptophan
+     against a ligand is several angstrom from where the contact actually is. */
+  function closestAtomLoci(structure, loci, target) {
+    var best = null;
+    loci.elements.forEach(function (element) {
+      var unit = element.unit;
+      var conformation = unit.conformation;
+      for (var i = 0; i < element.indices.length; i++) {
+        var index = element.indices[i];
+        var id = unit.elements[index];
+        var x = conformation.x(id), y = conformation.y(id), z = conformation.z(id);
+        var distance = target
+          ? Math.sqrt(Math.pow(x - target[0], 2) + Math.pow(y - target[1], 2) +
+                      Math.pow(z - target[2], 2))
+          : 0;
+        if (!best || distance < best.distance) {
+          best = { distance: distance, unit: unit, index: index, point: [x, y, z] };
+        }
+      }
+    });
+    if (!best) return null;
+    return {
+      loci: { kind: "element-loci", structure: structure,
+              elements: [{ unit: best.unit, indices: new Int32Array([best.index]) }] },
+      point: best.point,
+    };
+  }
+
+  function centroidOf(loci) {
+    var sum = [0, 0, 0], count = 0;
+    loci.elements.forEach(function (element) {
+      var conformation = element.unit.conformation;
+      for (var i = 0; i < element.indices.length; i++) {
+        var id = element.unit.elements[element.indices[i]];
+        sum[0] += conformation.x(id);
+        sum[1] += conformation.y(id);
+        sum[2] += conformation.z(id);
+        count++;
+      }
+    });
+    return count ? [sum[0] / count, sum[1] / count, sum[2] / count] : null;
+  }
+
+  /* Each contact PLIP found, drawn: a dashed line between the two closest atoms
+     with the distance on it.
+
+     Mol* has an `interactions` representation that would compute its own, but it
+     only sees the component it is given, and this build has no query language to
+     build a "ligand plus surroundings" component with -- on the ligand alone it
+     finds nothing and draws nothing. Measurements need no component, and drawing
+     the contacts PLIP reported keeps the picture and the list beside it the same
+     set of facts rather than two opinions. */
+  Wrapper.prototype.showInteractions = function (ligandChain, contacts) {
+    var data = this.data();
+    var measurement = this.plugin.managers.structure.measurement;
+    if (!data || !measurement || !ligandChain) return 0;
+    var ligand = chainLoci(data, ligandChain);
+    if (!ligand) return 0;
+    var ligandCentre = centroidOf(ligand);
+    var drawn = 0;
+    (contacts || []).forEach(function (contact) {
+      var residue = residueLoci(data, contact.chain, contact.resnr);
+      if (!residue) return;
+      // Nearest residue atom to the ligand, then nearest ligand atom to THAT --
+      // one pass from each side lands on the pair actually in contact.
+      var residueAtom = closestAtomLoci(data, residue, ligandCentre);
+      if (!residueAtom) return;
+      var ligandAtom = closestAtomLoci(data, ligand, residueAtom.point);
+      if (!ligandAtom) return;
+      try {
+        measurement.addDistance(ligandAtom.loci, residueAtom.loci);
+        drawn++;
+      } catch (err) { /* one contact failing is not the whole pocket */ }
+    });
+    return drawn;
+  };
 
   Wrapper.prototype.dispose = function () {
     try { this.viewer.dispose(); } catch (err) { /* already gone */ }

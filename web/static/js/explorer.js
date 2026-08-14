@@ -463,8 +463,14 @@ var BoltzExplorer = (function () {
           wrapper.setSpin(true);
           note.textContent = framed
             ? contacts.length + " contacting residue" + (contacts.length === 1 ? "" : "s") +
-              " and the ligand."
+              " and the ligand, as sticks with the contacts drawn between them."
             : "No contacts to frame, so the whole complex is shown.";
+          var drawn = wrapper.showInteractions(ligand ? ligand.id : "", contacts);
+          if (framed && drawn) {
+            note.textContent = contacts.length + " contacting residue"
+              + (contacts.length === 1 ? "" : "s") + " and the ligand, with "
+              + drawn + " contact" + (drawn === 1 ? "" : "s") + " drawn and measured.";
+          }
         })
         .catch(function (err) {
           // Not every thrown value is an Error: a rejected load can be a bare
