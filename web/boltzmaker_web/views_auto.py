@@ -256,7 +256,8 @@ def prepare():
         "private": private,
         # Only the ones actually given. An empty map is the normal case and means
         # the explorer falls back to matching the sequence.
-        "uniprot": {p.name: p.uniprot for p in proteins if p.uniprot},
+        "uniprot": {**{p.name: p.uniprot for p in proteins if p.uniprot},
+                    **{p.name: p.uniprot for p in partners if p.uniprot}},
     }, indent=2, sort_keys=True)
 
     try:
@@ -709,6 +710,25 @@ def _overlay_payload(session: Path, loaded: bmz.Results) -> dict:
     except OSError:
         pass
     return payload
+
+
+@bp.route("/uniprot/<accession>.json")
+def uniprot(accession: str):
+    """One UniProt entry, for the Prepare form's autofill.
+
+    Proxied rather than fetched from the browser so the accession is validated
+    against the same grammar the form validates, and so the page keeps talking
+    only to this server.
+    """
+    accession = (accession or "").strip().upper()
+    if not _ACCESSION_RE.match(accession):
+        return Response(json.dumps({"error": "That is not a UniProt accession."}),
+                        mimetype="application/json", status=400)
+    try:
+        return Response(json.dumps(alphafold.entry(accession)), mimetype="application/json")
+    except alphafold.AlphaFoldError as exc:
+        return Response(json.dumps({"error": str(exc)}), mimetype="application/json",
+                        status=404)
 
 
 @bp.route("/analysis/<token>/pocket/<target>.cif")

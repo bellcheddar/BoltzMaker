@@ -450,3 +450,46 @@ def test_the_pocket_is_loaded_before_the_camera_is_framed():
     js = _explorer_js()
     block = js[js.index('loadExtra("pocket"'):]
     assert block.index("focusContacts") < block.index("setSpin")
+
+
+# --- the Prepare form's UniProt autofill ---------------------------------------
+
+def test_both_proteins_and_partners_can_name_an_accession():
+    html = (WEB / "templates" / "_wizard_fields.html").read_text()
+    assert 'name="protein_uniprot[]"' in html
+    assert 'name="partner_uniprot[]"' in html
+    assert html.count('data-uniprot-for') == 2
+
+
+def test_the_accession_box_comes_before_what_it_fills():
+    """It fills the short name and the sequence, so it reads wrong sitting under
+    them."""
+    html = (WEB / "templates" / "_wizard_fields.html").read_text()
+    block = html[html.index("<template id=\"tpl-protein\">"):]
+    assert block.index('protein_uniprot[]') < block.index('protein_name[]')
+
+
+def test_autofill_is_delegated_not_bound_per_row():
+    """Rows are cloned from a <template> at any time, and a handler bound at load
+    would never reach them."""
+    js = (WEB / "static" / "js" / "wizard.js").read_text()
+    assert 'document.addEventListener("change"' in js
+    assert "[data-uniprot-for]" in js
+
+
+def test_autofill_never_overwrites_what_was_typed():
+    """Someone who has pasted their own construct and then names the accession for
+    the AlphaFold overlay must not have that construct silently replaced by the
+    canonical sequence -- the two are often different on purpose, which is the
+    whole reason the accession is asked for separately."""
+    js = (WEB / "static" / "js" / "wizard.js").read_text()
+    assert "!fields.name.value.trim()" in js
+    assert "!fields.sequence.value.trim()" in js
+
+
+def test_the_gene_name_is_trimmed_to_a_legal_chain_id():
+    """Boltz allows five characters, and a chain id has to survive the wizard's own
+    validator."""
+    src = (WEB / "boltzmaker_web" / "alphafold.py").read_text()
+    fn = src[src.index("def entry("):src.index("def model_url(")]
+    assert "c.isalnum()" in fn and "[:5]" in fn

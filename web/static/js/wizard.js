@@ -98,3 +98,77 @@ var BoltzWizard = (function () {
   return { GROUPS: GROUPS, addRowFor: addRowFor, clearRows: clearRows,
            renumber: renumber, renumberAll: renumberAll };
 })();
+
+/* UniProt autofill.
+
+   Typing an accession fills that row's short name and sequence. Delegated from
+   the document rather than bound per input, because rows are cloned from a
+   <template> at any time and a handler bound at load would never reach them.
+
+   It fills only empty fields. Someone who has pasted their own construct and
+   then names the accession for the AlphaFold overlay must not have that
+   construct silently replaced by the canonical sequence -- the two are often
+   different on purpose, which is the whole reason the accession is asked for
+   separately. */
+(function () {
+  "use strict";
+
+  var LOOKUP = "/auto/uniprot/";
+
+  function noteFor(input) {
+    var field = input.closest(".md-uniprot-field");
+    return field ? field.querySelector(".md-uniprot-note") : null;
+  }
+
+  function rowFields(input) {
+    var row = input.closest(".md-repeat-block");
+    if (!row) return null;
+    var kind = input.getAttribute("data-uniprot-for");
+    return {
+      name: row.querySelector('[name="' + kind + '_name[]"]'),
+      sequence: row.querySelector('[name="' + kind + '_sequence[]"]'),
+    };
+  }
+
+  function fill(input) {
+    var accession = (input.value || "").trim().toUpperCase().split("-")[0].split(".")[0];
+    if (!accession) return;
+    input.value = accession;
+    var note = noteFor(input);
+    var fields = rowFields(input);
+    if (!fields) return;
+    if (note) note.textContent = "Looking up " + accession + "…";
+
+    fetch(LOOKUP + encodeURIComponent(accession) + ".json")
+      .then(function (response) { return response.json(); })
+      .then(function (entry) {
+        if (entry.error) {
+          if (note) note.textContent = entry.error;
+          return;
+        }
+        var filled = [];
+        if (fields.name && !fields.name.value.trim() && entry.gene) {
+          fields.name.value = entry.gene;
+          filled.push("short name");
+        }
+        if (fields.sequence && !fields.sequence.value.trim() && entry.sequence) {
+          fields.sequence.value = entry.sequence;
+          filled.push(entry.length + " residues");
+        }
+        if (note) {
+          note.textContent = entry.entry + " · " + (entry.name || entry.accession)
+            + (entry.organism ? " (" + entry.organism + ")" : "")
+            + (filled.length ? " — filled in " + filled.join(" and ") + "."
+                             : " — left what you had already typed.");
+        }
+      })
+      .catch(function () {
+        if (note) note.textContent = "UniProt could not be reached.";
+      });
+  }
+
+  document.addEventListener("change", function (event) {
+    var input = event.target;
+    if (input && input.matches && input.matches("[data-uniprot-for]")) fill(input);
+  });
+})();

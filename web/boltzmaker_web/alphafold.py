@@ -114,6 +114,49 @@ def accession_from_sequence(sequence: str) -> str:
     return (entries[0].get("primaryAccession") if entries else candidates[0])
 
 
+UNIPROT_ENTRY_URL = ("https://rest.uniprot.org/uniprotkb/{accession}.json"
+                     "?fields=accession,id,gene_primary,protein_name,sequence,organism_name")
+
+
+def entry(accession: str) -> dict:
+    """A UniProt entry, reduced to what the Prepare form needs.
+
+    The gene name is the short name a chain wants -- HTR2A for P28223 -- and
+    Boltz allows five characters, which most human gene symbols already fit. One
+    that does not is truncated rather than rejected: a name is an identifier for
+    the run, and the accession it came from is recorded beside it.
+    """
+    try:
+        data = _get_json(UNIPROT_ENTRY_URL.format(accession=urllib.parse.quote(accession)))
+    except AlphaFoldError as exc:
+        # UniProt answers 400 for a well-formed accession that does not exist, so
+        # the generic "the server answered 400" would be true and useless here.
+        raise AlphaFoldError(f"UniProt has no entry {accession}.") from exc
+    if not isinstance(data, dict) or not data.get("primaryAccession"):
+        raise AlphaFoldError(f"UniProt has no entry {accession}.")
+    genes = data.get("genes") or []
+    gene = ""
+    if genes:
+        gene = ((genes[0].get("geneName") or {}).get("value") or "").strip()
+    description = data.get("proteinDescription") or {}
+    name = (((description.get("recommendedName") or {}).get("fullName") or {}).get("value")
+            or ((description.get("submissionNames") or [{}])[0].get("fullName") or {}).get("value")
+            or "")
+    sequence = ((data.get("sequence") or {}).get("value") or "").strip()
+    if not sequence:
+        raise AlphaFoldError(f"UniProt entry {accession} carries no sequence.")
+    return {
+        "accession": data["primaryAccession"],
+        "entry": data.get("uniProtkbId") or "",
+        # Upper case and stripped of anything Boltz will not take in a chain id.
+        "gene": "".join(c for c in gene.upper() if c.isalnum())[:5],
+        "name": name,
+        "organism": (data.get("organism") or {}).get("scientificName") or "",
+        "sequence": sequence,
+        "length": len(sequence),
+    }
+
+
 def model_url(accession: str) -> tuple[str, str]:
     """The AlphaFold model's URL and its entry id, from the database's own API."""
     data = _get_json(AFDB_API.format(accession=urllib.parse.quote(accession)))

@@ -82,14 +82,19 @@ def _parse_form() -> tuple[bool, list[ProteinInput], list[PartnerInput], list[Li
     partner_names = request.form.getlist("partner_name[]")
     partner_sequences = request.form.getlist("partner_sequence[]")
     partners: list[PartnerInput] = []
-    for raw_name, seq in zip(partner_names, partner_sequences):
+    partner_uniprot_raw = request.form.getlist("partner_uniprot[]")
+    # zip_longest for the same reason the proteins use it: this field was added
+    # after the form shipped, and a cached page posts one fewer array.
+    for raw_name, seq, uniprot_raw in itertools.zip_longest(
+            partner_names, partner_sequences, partner_uniprot_raw, fillvalue=""):
         if not raw_name.strip() and not seq.strip():
             continue  # a fully-blank trailing row from the client's add-row UI
         name = validate_name(raw_name, used_names, field="partner_name")
         used_names.add(name)
         if not seq.strip():
             raise WizardValidationError(f"Partner '{name}' needs a sequence.", field="partner_sequence")
-        partners.append(PartnerInput(name=name, sequence=seq))
+        partners.append(PartnerInput(name=name, sequence=seq,
+                                     uniprot=clean_accession(uniprot_raw)))
     known_partner_names = {p.name for p in partners}
 
     protein_names_raw = request.form.getlist("protein_name[]")

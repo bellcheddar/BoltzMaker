@@ -121,6 +121,9 @@ class ProteinInput:
 class PartnerInput:
     name: str
     sequence: str
+    # As for a protein: website metadata, recorded so the explorer can name the
+    # entry a chain came from without guessing it back out of the sequence.
+    uniprot: str = ""
 
 
 @dataclass

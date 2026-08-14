@@ -43,6 +43,12 @@
 <template id="tpl-partner">
   <div class="md-repeat-block">
     <button type="button" class="md-remove-row" title="Remove">&times;</button>
+    <div class="md-field md-uniprot-field">
+      <label>UniProt accession (optional)</label>
+      <input type="text" name="partner_uniprot[]" maxlength="12" placeholder="e.g. P50148"
+             data-uniprot-for="partner">
+      <p class="md-hint md-uniprot-note">Fills the short name and sequence below from UniProt.</p>
+    </div>
     <div class="md-field"><label>Short name (max 5 letters)</label><input type="text" name="partner_name[]" maxlength="5"></div>
     <div class="md-field"><label>Sequence</label><textarea name="partner_sequence[]"></textarea></div>
   </div>
@@ -51,6 +57,15 @@
 <template id="tpl-protein">
   <div class="md-repeat-block">
     <button type="button" class="md-remove-row" title="Remove">&times;</button>
+    <div class="md-field md-uniprot-field">
+      <label>UniProt accession (optional)</label>
+      <input type="text" name="protein_uniprot[]" maxlength="12" placeholder="e.g. P28223"
+             data-uniprot-for="protein">
+      <p class="md-hint md-uniprot-note">Fills the short name and sequence below from
+        UniProt, and tells the explorer which AlphaFold model to overlay on this
+        protein. Left blank, the model is looked up from the sequence instead, which
+        only works when the construct is exactly a UniProt sequence.</p>
+    </div>
     <div class="md-field"><label>Short name (max 5 letters)</label><input type="text" name="protein_name[]" maxlength="5"></div>
     <div class="md-field"><label>Sequence</label><textarea name="protein_sequence[]"></textarea></div>
     <div class="md-field">
@@ -72,14 +87,6 @@
         model the explorer can overlay on this protein's prediction. It travels in
         config.json rather than boltz_input.md, so BoltzMaker.py never has to know
         about a key it does not use.  #}
-    <div class="md-field">
-      <label>UniProt accession (optional)</label>
-      <input type="text" name="protein_uniprot[]" maxlength="12" placeholder="e.g. P28223">
-      <p class="md-hint">Which AlphaFold model the explorer overlays on this protein.
-        Left blank, it is looked up from the sequence, which only works when the
-        construct is exactly a UniProt sequence -- a truncated or mutated one will not
-        match, and can be named here instead.</p>
-    </div>
     {#  The value is the row's ordinal, stamped by wizard.js, not a plain "on".
         An unchecked box posts nothing at all, so a bare name="...[]" checkbox would
         shift every later row's value up by one -- the same silent misalignment that
