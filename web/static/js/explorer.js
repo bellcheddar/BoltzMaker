@@ -525,6 +525,21 @@ var BoltzExplorer = (function () {
 
 
 
+
+  /* The height of the sticky header, published to CSS so a panel scrolled to can
+     leave room for it. Measured rather than assumed: the nav wraps to a second
+     row on a narrow screen, which makes the bar half as tall again. */
+  function trackHeaderHeight() {
+    var header = document.querySelector(".md-header");
+    if (!header) return;
+    var publish = function () {
+      document.documentElement.style.setProperty(
+        "--md-header-height", header.offsetHeight + "px");
+    };
+    publish();
+    window.addEventListener("resize", publish);
+  }
+
   // ---- the two campaign-wide overlay panes --------------------------------
 
   //: Enough colours to tell fifteen targets apart, and none of them the ligand
@@ -976,6 +991,7 @@ var BoltzExplorer = (function () {
 
     wireSequence();
 
+    trackHeaderHeight();
     loadOverlays();
 
     var nav = document.getElementById("panel-nav");

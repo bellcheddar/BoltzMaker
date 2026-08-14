@@ -579,3 +579,13 @@ tr.md-check-na .md-check-fail { color: var(--md-text-muted); }
 /* The per-motif RMSD, as two charts sharing one legend. */
 .md-motif-grid { display: grid; gap: 12px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .md-motif-grid .md-sub { margin: 0 0 4px; }
+
+/* The header is sticky, so scrolling a panel to the top of the viewport parks it
+   underneath: the jump landed on a card whose border and title were both behind
+   the blue bar. scroll-margin-top is the browser's own answer to that -- it
+   applies to scrollIntoView and to a #hash landing alike -- and the height comes
+   from the header itself, because on a phone the nav wraps and the bar is twice
+   as tall as it is on a desktop. */
+.md-card, .md-fingerprint-grid, .md-motif-grid {
+  scroll-margin-top: calc(var(--md-header-height, 60px) + 14px);
+}

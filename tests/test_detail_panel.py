@@ -346,3 +346,23 @@ def test_campaign_names_are_upper_case_where_they_are_listed():
     assert ".md-campaign-name { text-transform: uppercase; }" in css
     for name in ("runs.html", "index.html"):
         assert "md-campaign-name" in (WEB / "templates" / name).read_text()
+
+
+def test_a_panel_scrolled_to_clears_the_sticky_header():
+    """scrollIntoView parks a card's top at the top of the viewport, which is
+    behind the sticky header -- the jump landed on a panel whose border and title
+    were both under the blue bar. scroll-margin-top is the browser's own answer,
+    and it applies to a #hash landing as well as to scrollIntoView."""
+    css = (WEB / "static" / "css" / "brand.css").read_text()
+    assert "scroll-margin-top: calc(var(--md-header-height" in css
+
+
+def test_the_header_height_is_measured_not_assumed():
+    """On a narrow screen the nav wraps to a second row and the bar goes from 76px
+    to 108px. A constant would leave the panel behind it again."""
+    js = _explorer_js()
+    assert "--md-header-height" in js
+    assert "header.offsetHeight" in js
+    # Re-measured on resize, or crossing the breakpoint leaves the old value.
+    fn = js[js.index("function trackHeaderHeight"):js.index("// ---- the two campaign-wide")]
+    assert 'addEventListener("resize"' in fn
