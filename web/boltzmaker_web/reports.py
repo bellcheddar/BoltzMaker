@@ -404,3 +404,38 @@ def extract(html: str) -> tuple:
                 for match in re.findall(r'id="([^"]+)"', panel.html)}
     specs = [spec for spec in specs if spec["id"] in kept_ids]
     return panels, specs
+
+
+_LIG_CELL_RE = re.compile(r'<div class="lig-cell[^"]*">')
+_LIG_NAME_RE = re.compile(r'<div class="lig-cell-header">\s*<span>([^<]+)</span>', re.S)
+
+
+def ligand_cells(panels: list) -> dict:
+    """This campaign's ligand depictions, by ligand id.
+
+    The report draws them as a paginated grid; the detail panel wants one of them
+    beside the target it belongs to. Same markup, already through the sanitiser,
+    lifted out rather than re-rendered -- there is no chemistry toolkit in this
+    venv to redraw a structure with.
+
+    Walked rather than matched, for the third time in this file. A lig-cell holds
+    a header div, an img and a badge div, so a regex ending at "</div>" stops at
+    the header and returns a card with no structure in it.
+    """
+    cells = {}
+    for panel in panels:
+        if panel.get("title") != "Ligand structures":
+            continue
+        html = panel.get("html", "")
+        for opening in _LIG_CELL_RE.finditer(html):
+            start = opening.start()
+            depth = 0
+            for tag in re.finditer(r"<(/?)div\b[^>]*>", html[start:]):
+                depth += -1 if tag.group(1) else 1
+                if depth == 0:
+                    cell = html[start:start + tag.end()]
+                    name = _LIG_NAME_RE.search(cell)
+                    if name:
+                        cells.setdefault(name.group(1).strip(), cell)
+                    break
+    return cells

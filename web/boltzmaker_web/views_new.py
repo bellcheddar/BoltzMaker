@@ -23,6 +23,12 @@ bp = Blueprint("new", __name__)
 
 
 PDB_ID_RE = re.compile(r"^[0-9][A-Za-z0-9]{3}$")
+# UniProt's own accession grammar: six or ten characters, and the ten-character
+# form is the one modern entries (A0A2I2YKA3) use. An isoform or version suffix
+# is accepted and dropped -- P28223-1 names a sequence, and AlphaFold is keyed on
+# the entry.
+UNIPROT_RE = re.compile(
+    r"^([OPQ][0-9][A-Z0-9]{3}[0-9]|[A-NR-Z][0-9]([A-Z][A-Z0-9]{2}[0-9]){1,2})$")
 
 
 def clean_pdb_id(raw: str) -> str:
@@ -41,6 +47,25 @@ def clean_pdb_id(raw: str) -> str:
             f"'{value}' is not a PDB id -- they are four characters starting with a "
             "digit, like 2RH1. Leave it blank to have an apo structure predicted instead.",
             field="protein_apo_pdb",
+        )
+    return value
+
+
+def clean_accession(raw: str) -> str:
+    """Normalise an optional UniProt accession, or raise.
+
+    Checked here rather than trusted, for the same reason the PDB id is: it ends
+    up interpolated into a request to two external APIs.
+    """
+    value = (raw or "").strip().upper().split("-")[0].split(".")[0]
+    if not value:
+        return ""
+    if not UNIPROT_RE.match(value):
+        raise WizardValidationError(
+            f"'{value}' is not a UniProt accession -- they look like P28223 or "
+            "A0A2I2YKA3. Leave it blank and the explorer will try to find it from "
+            "the sequence instead.",
+            field="protein_uniprot",
         )
     return value
 
@@ -71,6 +96,7 @@ def _parse_form() -> tuple[bool, list[ProteinInput], list[PartnerInput], list[Li
     protein_sequences = request.form.getlist("protein_sequence[]")
     protein_partners_raw = request.form.getlist("protein_partners[]")  # comma-separated
     protein_apo_raw = request.form.getlist("protein_apo_pdb[]")
+    protein_uniprot_raw = request.form.getlist("protein_uniprot[]")
     # A set of row ordinals, not a parallel array: an unchecked box posts nothing,
     # so this field is shorter than the others by however many were left unticked.
     # Anything unparseable is ignored rather than shifting a row's meaning.
@@ -88,9 +114,10 @@ def _parse_form() -> tuple[bool, list[ProteinInput], list[PartnerInput], list[Li
     # zip_longest, not zip: the apo field was added after this form shipped, and a
     # cached page (or a saved page file from before it existed) posts one fewer array.
     # Plain zip would silently drop the last protein rather than defaulting its apo.
-    for row_index, (raw_name, seq, partners_csv, apo_raw) in enumerate(itertools.zip_longest(
-            protein_names_raw, protein_sequences, protein_partners_raw, protein_apo_raw,
-            fillvalue="")):
+    for row_index, (raw_name, seq, partners_csv, apo_raw, uniprot_raw) in enumerate(
+            itertools.zip_longest(
+                protein_names_raw, protein_sequences, protein_partners_raw,
+                protein_apo_raw, protein_uniprot_raw, fillvalue="")):
         if not raw_name.strip() and not seq.strip():
             continue
         name = validate_name(raw_name, used_names, field="protein_name")
@@ -108,6 +135,7 @@ def _parse_form() -> tuple[bool, list[ProteinInput], list[PartnerInput], list[Li
             name=name, sequence=seq, partner_names=chosen_partners,
             apo_pdb=clean_pdb_id(apo_raw),
             apo_predict=(row_index in apo_predict_rows) if apo_field_present else True,
+            uniprot=clean_accession(uniprot_raw),
         ))
 
     protein_names_defined = {p.name for p in proteins}

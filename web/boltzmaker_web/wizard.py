@@ -110,6 +110,11 @@ class ProteinInput:
     # measure against, but a predicted apo of the user's own construct is worth
     # having alongside it, and is a target in its own right.
     apo_predict: bool = True
+    # Optional, and only ever used by the website: it names the entry whose
+    # AlphaFold model the explorer overlays on this protein's prediction. Nothing
+    # in the pipeline reads it, so it travels in config.json rather than in
+    # boltz_input.md, and BoltzMaker.py never has to learn a key it does not use.
+    uniprot: str = ""
 
 
 @dataclass

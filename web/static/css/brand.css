@@ -439,6 +439,16 @@ tr.md-check-na .md-check-fail { color: var(--md-text-muted); }
 }
 .md-plip-geom i { font-style: normal; opacity: .75; }
 
+/* The metrics table is nine fixed rows; the interactions beside it run to
+   whatever PLIP found, so this pane ended halfway up its neighbour with the rest
+   of the card empty. The panes were already the same height -- grid rows stretch
+   and .md-detail-body takes the slack -- so the fix was filling the space, not
+   sizing it. The ligand goes at the bottom of it. */
+.md-detail-ligand { margin-top: auto; padding-top: 12px; }
+.md-detail-lig-page { grid-template-columns: 1fr; max-width: 260px; margin: 0 auto; }
+.md-detail-ligand .lig-cell { border: 1px solid var(--md-border); border-radius: var(--md-radius); }
+.md-detail-ligand .lig-cell img { width: 100%; height: auto; }
+
 .md-seq-pane { margin-top: 18px; border-top: 1px solid var(--md-border); padding-top: 14px; }
 /* The one thing on this page that is allowed to scroll sideways: a 470-residue
    sequence has no other honest shape, and squeezing it to the card would put
@@ -486,10 +496,12 @@ tr.md-check-na .md-check-fail { color: var(--md-text-muted); }
      stays inside its own pill instead of pushing the next one out of line. */
   .md-button-row { flex-direction: column; align-items: stretch; }
   .md-button-row .md-btn { width: 100%; text-align: center; }
-  /* The 3D viewer's style buttons are short, and three of them fit a phone
-     across, so they share a row and split it evenly. */
-  .md-viewer-controls { flex-direction: row; }
-  .md-viewer-controls .md-btn { flex: 1 1 0; padding: 6px 4px; }
+  /* The viewer's controls stay side by side rather than stacking full width --
+     five stacked pills is most of a phone screen before any structure. They wrap
+     onto a second row instead: five across a 390px screen would give each about
+     70px, and "AlphaFold" does not fit in 70px. */
+  .md-viewer-controls { flex-direction: row; flex-wrap: wrap; }
+  .md-viewer-controls .md-btn { flex: 0 1 auto; width: auto; padding: 6px 10px; font-size: 11px; }
 
   /* Tables scroll sideways here. On a desktop panel they are told to wrap
      instead, because a scrollbar hides the right-hand columns behind a gesture
@@ -516,3 +528,9 @@ tr.md-check-na .md-check-fail { color: var(--md-text-muted); }
   .md-report-plot { min-height: 240px; }
   .md-report-plot img { max-height: 240px; }
 }
+
+/* Only shown when neither the spec nor the sequence produced an accession. */
+.md-af-ask { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 12px 0 0; }
+.md-af-ask input { width: 140px; padding: 6px 8px; border: 1px solid var(--md-border);
+  border-radius: var(--md-radius); font-family: 'Roboto Mono', monospace; font-size: 12px; }
+.md-af-ask .md-btn { padding: 6px 14px; font-size: 12px; }

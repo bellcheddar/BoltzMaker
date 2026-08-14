@@ -103,6 +103,8 @@
         <button type="button" class="md-btn md-btn-secondary" data-style="cartoon">Cartoon</button>
         <button type="button" class="md-btn md-btn-secondary" data-style="surface">Surface</button>
         <button type="button" class="md-btn md-btn-secondary" data-style="spin">Spin</button>
+        <button type="button" class="md-btn md-btn-secondary" data-style="reset">Reset</button>
+        <button type="button" class="md-btn md-btn-secondary" data-style="alphafold">AlphaFold</button>
       </div>
       <p class="md-hint" id="viewer-note" style="margin-bottom:0"></p>
     </div>
@@ -113,6 +115,8 @@
         <button type="button" class="md-btn md-btn-secondary" data-style="cartoon">Cartoon</button>
         <button type="button" class="md-btn md-btn-secondary" data-style="surface">Surface</button>
         <button type="button" class="md-btn md-btn-secondary" data-style="spin">Spin</button>
+        <button type="button" class="md-btn md-btn-secondary" data-style="reset">Reset</button>
+        <button type="button" class="md-btn md-btn-secondary" data-style="alphafold">AlphaFold</button>
       </div>
       <p class="md-hint" id="contacts-note" style="margin-bottom:0"></p>
     </div>
@@ -122,14 +126,24 @@
     </div>
     <div class="md-detail-pane">
       <h3 class="md-sub">Metrics</h3>
+      {#  The metrics table is a fixed nine rows and the interactions beside it run
+          to whatever PLIP found, so this pane used to end halfway up its neighbour
+          with the rest of the card empty. The ligand takes that space.  #}
       <div class="md-detail-body">
         <table class="md-check-table" id="detail-metrics"></table>
+        <div class="md-detail-ligand" id="detail-ligand"></div>
       </div>
     </div>
   </div>
 
   {#  Full width under the four, because a sequence is long and thin and a quarter
       of a row would show forty residues of four hundred.  #}
+  <p class="md-hint md-af-ask" id="af-ask" hidden>
+    <label for="af-accession">UniProt accession</label>
+    <input type="text" id="af-accession" maxlength="12" placeholder="e.g. P28223">
+    <button type="button" class="md-btn md-btn-secondary" id="af-accession-go">Use it</button>
+  </p>
+
   <div class="md-seq-pane">
     <h3 class="md-sub" id="seq-title">Sequence</h3>
     <p class="md-hint" id="seq-note" style="margin-top:0"></p>
@@ -188,6 +202,9 @@
 {% endif %}
 
 <script id="results-payload" type="application/json">{{ payload | safe }}</script>
+{#  The ligand depictions, lifted out of the report's own grid: there is no
+    chemistry toolkit in this venv to redraw a structure with.  #}
+<script id="ligand-cards" type="application/json">{{ ligand_cards | safe }}</script>
 <script src="{{ url_for('vendor', filename='plotly-2.35.2.min.js') }}"></script>
 <script src="{{ asset('vendor/molstar-4.9.0.js') }}"></script>
 <script src="{{ asset('js/viewer.js') }}"></script>

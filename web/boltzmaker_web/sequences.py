@@ -82,6 +82,13 @@ def chains_from_cif(path: Path) -> list[dict]:
     c_seq = columns["auth_seq_id"]
     c_comp = columns["label_comp_id"]
     c_atom = columns["label_atom_id"]
+    # Coordinates are optional here: the sequence track needs none of them, and
+    # the superposition needs all of them.
+    coords = [columns.get(name) for name in ("Cartn_x", "Cartn_y", "Cartn_z")]
+    has_coords = all(index is not None for index in coords)
+    #: In an AlphaFold model the B-factor column holds pLDDT, which is what says
+    #: whether a residue's position is worth superposing on.
+    c_bfactor = columns.get("B_iso_or_equiv")
     width = len(columns)
 
     order: list[str] = []
@@ -110,13 +117,25 @@ def chains_from_cif(path: Path) -> list[dict]:
         if fields[c_atom] != "CA" and fields[c_comp] in THREE_TO_ONE:
             continue
         seen[chain].add(number)
-        residues[chain].append((number, fields[c_comp]))
+        point = None
+        if has_coords:
+            try:
+                point = [float(fields[i]) for i in coords]
+            except ValueError:
+                point = None
+        score = None
+        if c_bfactor is not None:
+            try:
+                score = float(fields[c_bfactor])
+            except ValueError:
+                score = None
+        residues[chain].append((number, fields[c_comp], point, score))
 
     out = []
     for index, chain in enumerate(order):
         rows = residues[chain]
-        letters = "".join(THREE_TO_ONE.get(comp, "X") for _, comp in rows)
-        protein = sum(1 for _, comp in rows if comp in THREE_TO_ONE) > max(1, len(rows) // 2)
+        letters = "".join(THREE_TO_ONE.get(comp, "X") for _, comp, _, _ in rows)
+        protein = sum(1 for _, comp, _, _ in rows if comp in THREE_TO_ONE) > max(1, len(rows) // 2)
         out.append({
             "id": chain,
             # A..Z by position; beyond 26 chains PLIP's own labelling breaks down
@@ -124,8 +143,11 @@ def chains_from_cif(path: Path) -> list[dict]:
             "letter": chr(ord("A") + index) if index < 26 else "",
             "kind": "protein" if protein else "ligand",
             "letters": letters,
-            "numbers": [number for number, _ in rows],
-            "restypes": [comp for _, comp in rows],
+            "numbers": [number for number, _, _, _ in rows],
+            "restypes": [comp for _, comp, _, _ in rows],
+            #: One CA position per residue, in file order, for the superposition.
+            "ca": [point for _, _, point, _ in rows],
+            "score": [score for _, _, _, score in rows],
         })
     return out
 

@@ -38,6 +38,7 @@ var BoltzExplorer = (function () {
   var viewers = { pose: { promise: null, wrapper: null },
                   contacts: { promise: null, wrapper: null } };
   var sequence = null;      // the open target's track, logo and chain map
+  var ligandCards = {};     // ligand id -> the report's own depiction
   var current = null;
   var sortKey = "confidence";
   var sortDir = -1;
@@ -190,6 +191,13 @@ var BoltzExplorer = (function () {
       ["Predicted affinity value", fmt(t.affinity, 3)],
       ["pIC50", t.pic50 === null ? "—" :
         fmt(t.pic50, 2) + (t.pic50_std === null ? "" : " ± " + fmt(t.pic50_std, 2))],
+      // Named for what it is. compare-sse measures per motif, so this is an
+      // aggregate over the regions it could align, not a whole-chain
+      // superposition -- and a row called plainly "RMSD to apo" would be read as
+      // the latter.
+      ["C\u03b1 RMSD to apo", t.apo_rmsd
+        ? t.apo_rmsd.rmsd.toFixed(2) + " \u00c5 (over " + t.apo_rmsd.motifs + " motifs)"
+        : "\u2014"],
       ["Ligand", t.ligand || "—"],
       ["Role", t.role || "—"],
       ["SMILES", t.smiles || "—"]
@@ -215,6 +223,7 @@ var BoltzExplorer = (function () {
       metrics.appendChild(tr);
     });
 
+    renderLigandCard(t);
     renderInteractions(t);
 
     // The sequence track, the conservation logo and the chain-letter mapping all
@@ -222,6 +231,7 @@ var BoltzExplorer = (function () {
     // know which chain the ligand is -- so the structures are loaded after it
     // rather than in parallel with it.
     sequence = null;
+    document.getElementById("af-ask").hidden = true;
     renderSequence(t, null);
     fetch("/auto/analysis/" + token + "/sequence/" + encodeURIComponent(t.id) + ".json")
       .then(function (response) { return response.ok ? response.json() : null; })
@@ -232,6 +242,29 @@ var BoltzExplorer = (function () {
         renderSequence(t, payload);
         loadStructures(t);
       });
+  }
+
+
+  function renderLigandCard(t) {
+    var host = document.getElementById("detail-ligand");
+    host.innerHTML = "";
+    var cell = ligandCards[t.ligand];
+    if (!cell) {
+      // An apo target genuinely has no ligand, which is not the same as a
+      // depiction having failed to come across.
+      var note = document.createElement("p");
+      note.className = "md-hint";
+      note.style.margin = "10px 0 0";
+      note.textContent = t.ligand
+        ? "No depiction was included for " + t.ligand + "."
+        : "This target has no ligand.";
+      host.appendChild(note);
+      return;
+    }
+    var wrap = document.createElement("div");
+    wrap.className = "lig-page md-detail-lig-page";
+    wrap.innerHTML = cell;
+    host.appendChild(wrap);
   }
 
   //: What each PLIP interaction is, in one line, because the type names alone
@@ -421,7 +454,7 @@ var BoltzExplorer = (function () {
           wrapper.setSpin(true);
           note.textContent = framed
             ? contacts.length + " contacting residue" + (contacts.length === 1 ? "" : "s") +
-              " and the ligand, turning. Drag to take over."
+              " and the ligand."
             : "No contacts to frame, so the whole complex is shown.";
         })
         .catch(function (err) {
@@ -457,9 +490,91 @@ var BoltzExplorer = (function () {
 
   function applyStyle(which, mode) {
     var wrapper = viewers[which].wrapper;
-    if (wrapper) wrapper.setStyle(mode);
+    if (!wrapper) return;
+    if (mode === "alphafold") {
+      toggleAlphaFold(which);
+      return;
+    }
+    if (mode === "reset") {
+      // Back to the framing the pane opened with, which is not the same in the
+      // two panes: the pose opened on the whole complex, the interaction pane on
+      // the pocket. Resetting both to "everything" would throw away the second
+      // pane's entire reason for being.
+      if (which === "contacts") {
+        var target = data.targets.filter(function (x) { return x.id === current; })[0];
+        var ligand = ((sequence && sequence.chains) || []).filter(function (c) {
+          return c.kind === "ligand";
+        })[0];
+        if (target && wrapper.focusContacts(ligand ? ligand.id : "", contactResidues(target))) return;
+      }
+      wrapper.resetCamera();
+      return;
+    }
+    wrapper.setStyle(mode);
   }
 
+
+
+  // ---- the AlphaFold overlay ----------------------------------------------
+
+  //: Per target, once resolved: the accession, how it was resolved, and the fit.
+  //: Kept so the second pane does not repeat the lookup the first one just did.
+  var alphaFold = {};
+  var typedAccession = {};
+
+  function toggleAlphaFold(which) {
+    var wrapper = viewers[which].wrapper;
+    var note = noteFor(which);
+    if (!wrapper) return;
+    if (wrapper.hasOverlay()) {
+      wrapper.removeOverlay().then(function () { note.textContent = defaultNote(which); });
+      return;
+    }
+    var target = current;
+    note.textContent = "Looking for the AlphaFold model\u2026";
+    resolveAlphaFold(target).then(function (info) {
+      if (current !== target) return;
+      if (!info || info.status !== "ok") {
+        note.textContent = (info && info.message) || "The AlphaFold model could not be loaded.";
+        // Only ask for an accession when the reason is that none was found --
+        // a network failure is not something a reader can type their way out of.
+        document.getElementById("af-ask").hidden =
+          !(info && /No UniProt entry|not a UniProt/.test(info.message || ""));
+        return;
+      }
+      document.getElementById("af-ask").hidden = true;
+      var url = "/auto/analysis/" + token + "/alphafold/" + encodeURIComponent(target) +
+                "/" + encodeURIComponent(info.accession) + ".cif";
+      return wrapper.addOverlay(url).then(function () {
+        if (current !== target) return;
+        note.textContent = info.entry + " \u00b7 " + info.source + " \u00b7 fitted on " +
+          info.matched + " C\u03b1 with pLDDT \u2265 " + info.cutoff + ", " +
+          info.rmsd + " \u00c5 RMSD. Press again to remove.";
+      });
+    }).catch(function () {
+      note.textContent = "The AlphaFold model could not be loaded.";
+    });
+  }
+
+  function resolveAlphaFold(target) {
+    if (alphaFold[target]) return Promise.resolve(alphaFold[target]);
+    var url = "/auto/analysis/" + token + "/alphafold/" + encodeURIComponent(target) + ".json";
+    if (typedAccession[target]) url += "?accession=" + encodeURIComponent(typedAccession[target]);
+    return fetch(url).then(function (response) {
+      return response.ok ? response.json() : null;
+    }).then(function (info) {
+      // Only a success is remembered: a failure is usually the network, and the
+      // next press should try again rather than repeat the old complaint.
+      if (info && info.status === "ok") alphaFold[target] = info;
+      return info;
+    });
+  }
+
+  function defaultNote(which) {
+    return which === "pose"
+      ? "Drag to rotate, scroll to zoom. Coloured by chain."
+      : "Drag to rotate, scroll to zoom.";
+  }
 
   // ---- sequence track and conservation logo -------------------------------
 
@@ -688,6 +803,8 @@ var BoltzExplorer = (function () {
   function init(sessionToken) {
     token = sessionToken;
     data = JSON.parse(document.getElementById("results-payload").textContent);
+    var cards = document.getElementById("ligand-cards");
+    ligandCards = cards ? JSON.parse(cards.textContent) : {};
 
     ["filter-text", "filter-protein", "filter-flagged"].forEach(function (id) {
       var el = document.getElementById(id);
@@ -726,6 +843,15 @@ var BoltzExplorer = (function () {
     });
 
     wireSequence();
+
+    document.getElementById("af-accession-go").addEventListener("click", function () {
+      var value = (document.getElementById("af-accession").value || "").trim().toUpperCase();
+      if (!value) return;
+      typedAccession[current] = value;
+      delete alphaFold[current];
+      document.getElementById("af-ask").hidden = true;
+      toggleAlphaFold("pose");
+    });
 
     renderTable();
 

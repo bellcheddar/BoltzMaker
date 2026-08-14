@@ -36,8 +36,8 @@ from flask import (
     Blueprint, Response, abort, current_app, render_template, request, send_file, url_for,
 )
 
-from . import (apo, bundle, options, reports as report_panels, results as bmz,
-               runs as runs_archive, sequences)
+from . import (alphafold, apo, bundle, options, reports as report_panels,
+               results as bmz, runs as runs_archive, sequences)
 from .app import new_scratch_dir, runs_root, session_root
 from .runner import BoltzMakerTimeout, extract_error_message, run_boltzmaker
 from .views_new import _parse_form
@@ -65,6 +65,9 @@ _TOKEN_RE = re.compile(r"^[A-Za-z0-9_-]{16,64}$")
 # with a ligand id, so this is generous. Checked against the loaded results as
 # well; this is only the cheap first gate before any path is built.
 _TARGET_RE = re.compile(r"^[A-Za-z0-9._+-]{1,64}$")
+# The same grammar the Prepare form validates against. Checked again here
+# because this one reaches the filesystem and two external APIs.
+_ACCESSION_RE = re.compile(r"^[A-Z0-9]{6,10}$")
 
 
 # ===========================================================================
@@ -250,6 +253,9 @@ def prepare():
         "cli_args": options.to_cli_args(cfg),
         "run_key": run_key,
         "private": private,
+        # Only the ones actually given. An empty map is the normal case and means
+        # the explorer falls back to matching the sequence.
+        "uniprot": {p.name: p.uniprot for p in proteins if p.uniprot},
     }, indent=2, sort_keys=True)
 
     try:
@@ -387,7 +393,7 @@ def _report_panels(session: Path, loaded: bmz.Results) -> tuple:
     if cache.is_file():
         try:
             cached = json.loads(cache.read_text())
-            return cached["panels"], cached["charts"]
+            return cached["panels"], cached["charts"], cached["ligands"]
         except (json.JSONDecodeError, KeyError, OSError):
             pass          # regenerate rather than fail on a half-written cache
 
@@ -418,16 +424,18 @@ def _report_panels(session: Path, loaded: bmz.Results) -> tuple:
         charts.extend(spec for spec in specs if spec["id"] not in
                       {existing["id"] for existing in charts})
 
+    ligands = report_panels.ligand_cells(panels)
     try:
-        cache.write_text(json.dumps({"panels": panels, "charts": charts}))
+        cache.write_text(json.dumps({"panels": panels, "charts": charts,
+                                     "ligands": ligands}))
     except OSError:
         pass
-    return panels, charts
+    return panels, charts, ligands
 
 
 def _render_explorer(token: str, loaded: bmz.Results):
     session = _session_dir(token)
-    panels, charts = _report_panels(session, loaded) if session else ([], [])
+    panels, charts, ligands = _report_panels(session, loaded) if session else ([], [], {})
     return render_template(
         "auto_explorer.html", active="analysis",
         token=token, results=loaded,
@@ -435,6 +443,7 @@ def _render_explorer(token: str, loaded: bmz.Results):
         low_confidence=bmz.LOW_CONFIDENCE_THRESHOLD,
         slots=report_panels.ordered_slots(panels),
         has_panels=bool(panels), report_charts=json.dumps(charts),
+        ligand_cards=json.dumps(ligands),
     )
 
 
@@ -545,6 +554,147 @@ def _sequence_payload(session: Path, loaded: bmz.Results, target: str) -> dict:
         "columns": columns,
         "aligned_count": len(others),
     }
+
+
+#: AlphaFold's own threshold for a confident residue. Superposing on everything
+#: is dominated by the disordered tails a model puts in arbitrary places: for
+#: 5-HT2A that is 18.6A over all 471 residues against 2.9A over the 289 confident
+#: ones, and the first number describes the tails rather than the protein.
+PLDDT_CUTOFF = 70.0
+
+
+def _alphafold_payload(session: Path, loaded: bmz.Results, target: str,
+                       typed: str) -> dict:
+    """Resolve, fetch and superpose an AlphaFold model for one target.
+
+    The superposed file is cached in the session, keyed by accession, so toggling
+    the overlay off and on again costs nothing and the external services are asked
+    once.
+    """
+    structures = session / "campaign" / "structures"
+    chains = sequences.chains_from_cif(structures / f"{target}.cif")
+    proteins = [c for c in chains if c["kind"] == "protein"]
+    this = {t.target_id: t for t in loaded.targets}.get(target)
+    receptor = next((c for c in proteins if this and c["id"] == this.family_id),
+                    proteins[0] if proteins else None)
+    if not receptor:
+        return {"status": "error", "message": "This structure has no protein chain."}
+
+    # Most trustworthy first, and each route is named in the answer: an overlay is
+    # a claim that this is the same protein, and the reader should see what it
+    # rests on.
+    if typed:
+        accession, source = typed, "typed here"
+    elif loaded.accessions.get(receptor["id"]):
+        accession, source = loaded.accessions[receptor["id"]], "from the campaign spec"
+    else:
+        try:
+            accession = alphafold.accession_from_sequence(receptor["letters"])
+        except alphafold.AlphaFoldError as exc:
+            return {"status": "error", "message": str(exc), "chain": receptor["id"]}
+        source = "matched by sequence"
+
+    cached = session / f"alphafold-{target}-{accession}.cif"
+    meta = session / f"alphafold-{target}-{accession}.json"
+    if cached.is_file() and meta.is_file():
+        try:
+            payload = json.loads(meta.read_text())
+            payload["cached"] = True
+            return payload
+        except (json.JSONDecodeError, OSError):
+            pass
+
+    try:
+        url, entry_id = alphafold.model_url(accession)
+        model_text = alphafold.fetch_model(url)
+    except alphafold.AlphaFoldError as exc:
+        return {"status": "error", "message": str(exc), "accession": accession,
+                "source": source, "chain": receptor["id"]}
+
+    scratch = session / f"alphafold-{target}-{accession}.raw.cif"
+    try:
+        scratch.write_text(model_text)
+        model_chains = sequences.chains_from_cif(scratch)
+    finally:
+        scratch.unlink(missing_ok=True)
+    model_chain = next((c for c in model_chains if c["kind"] == "protein"), None)
+    if not model_chain:
+        return {"status": "error", "message": "The AlphaFold file has no protein chain.",
+                "accession": accession, "source": source}
+
+    # Confident residues only, and only where both chains agree on the residue.
+    keep = {number for number, score in zip(model_chain["numbers"], model_chain["score"])
+            if score is None or score >= PLDDT_CUTOFF}
+    filtered = dict(model_chain)
+    indices = [i for i, number in enumerate(model_chain["numbers"]) if number in keep]
+    for key in ("numbers", "restypes", "ca"):
+        filtered[key] = [model_chain[key][i] for i in indices]
+    mobile, fixed = alphafold.matched_atoms(filtered, receptor)
+    try:
+        rotation, centres, rmsd = alphafold.superpose(mobile, fixed)
+    except alphafold.AlphaFoldError as exc:
+        return {"status": "error", "message": str(exc), "accession": accession,
+                "source": source}
+
+    try:
+        cached.write_text(alphafold.apply_transform(model_text, rotation, centres))
+    except (alphafold.AlphaFoldError, OSError) as exc:
+        return {"status": "error", "message": str(exc), "accession": accession,
+                "source": source}
+
+    payload = {
+        "status": "ok",
+        "accession": accession,
+        "source": source,
+        "entry": entry_id,
+        "chain": receptor["id"],
+        "rmsd": round(rmsd, 2),
+        "matched": len(mobile),
+        "cutoff": PLDDT_CUTOFF,
+        "url": url,
+        "file": cached.name,
+    }
+    try:
+        meta.write_text(json.dumps(payload))
+    except OSError:
+        pass
+    return payload
+
+
+@bp.route("/analysis/<token>/alphafold/<target>.json")
+def alphafold_model(token: str, target: str):
+    session = _session_dir(token)
+    if session is None:
+        return Response("session expired", status=404, mimetype="text/plain")
+    if not _TARGET_RE.match(target or ""):
+        return Response("bad target id", status=400, mimetype="text/plain")
+    try:
+        loaded = bmz.load(session / "campaign")
+    except bmz.BmzError:
+        return Response("session unreadable", status=404, mimetype="text/plain")
+    if target not in {t.target_id for t in loaded.targets}:
+        return Response("no such target", status=404, mimetype="text/plain")
+
+    typed = (request.args.get("accession") or "").strip().upper()
+    if typed and not _ACCESSION_RE.match(typed):
+        return Response(json.dumps({"status": "error",
+                                    "message": "That is not a UniProt accession."}),
+                        mimetype="application/json")
+    payload = _alphafold_payload(session, loaded, target, typed)
+    return Response(json.dumps(payload), mimetype="application/json")
+
+
+@bp.route("/analysis/<token>/alphafold/<target>/<accession>.cif")
+def alphafold_file(token: str, target: str, accession: str):
+    session = _session_dir(token)
+    if session is None:
+        return Response("session expired", status=404, mimetype="text/plain")
+    if not _TARGET_RE.match(target or "") or not _ACCESSION_RE.match(accession or ""):
+        return Response("bad request", status=400, mimetype="text/plain")
+    path = (session / f"alphafold-{target}-{accession}.cif").resolve()
+    if path.parent != session.resolve() or not path.is_file():
+        return Response("not found", status=404, mimetype="text/plain")
+    return send_file(path, mimetype="chemical/x-cif", max_age=SESSION_CACHE_SECONDS)
 
 
 @bp.route("/analysis/<token>/sequence/<target>.json")

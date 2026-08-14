@@ -160,3 +160,35 @@ def test_the_sequence_canvas_escapes_the_responsive_image_cap():
     assert "canvas" in css and "max-width: 100%" in css        # the global cap
     seq = css[css.index(".md-seq-canvas"):]
     assert "max-width: none" in seq[:200]
+
+
+# --- the controls and the panes added later -----------------------------------
+
+def test_both_viewers_have_reset_and_alphafold():
+    html = _explorer_html()
+    assert html.count('data-style="reset"') == 2
+    assert html.count('data-style="alphafold"') == 2
+
+
+def test_reset_returns_each_pane_to_its_own_framing():
+    """The two panes did not open on the same thing -- the pose on the whole
+    complex, the interaction pane on the pocket -- so one shared "show everything"
+    would throw away the second pane's entire reason for being."""
+    js = _explorer_js()
+    reset = js[js.index('if (mode === "reset")'):js.index("wrapper.setStyle(mode);")]
+    assert "focusContacts" in reset and "resetCamera" in reset
+
+
+def test_the_overlay_is_removed_when_the_target_changes():
+    """plugin.clear() takes the scene with it, so a wrapper still holding the old
+    overlay would refuse to load the new one and report it as already shown."""
+    js = _viewer_js()
+    load = js[js.index("Wrapper.prototype.load"):js.index("Wrapper.prototype.components")]
+    assert "self.overlay = null" in load
+
+
+def test_the_ligand_card_comes_from_the_report():
+    """There is no chemistry toolkit in this venv to redraw a structure with, so
+    the depiction is lifted out of the grid the report already drew."""
+    assert "ligand-cards" in _explorer_html()
+    assert "ligandCards" in _explorer_js()

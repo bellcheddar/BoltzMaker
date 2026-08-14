@@ -202,6 +202,8 @@ class Results:
     reports: list = field(default_factory=list)
     #: Every PLIP contact, by target_id -- the detail behind the counts.
     interactions: dict = field(default_factory=dict)
+    #: UniProt accession by protein short name, when the Prepare form was told one.
+    accessions: dict = field(default_factory=dict)
 
     @property
     def private(self) -> bool:
@@ -404,6 +406,21 @@ def load(root: Path) -> Results:
         with sse_csv.open(newline="", encoding="utf-8", errors="replace") as fh:
             sse_rows = list(csv.DictReader(fh))
 
+    # config.json is the website's own record of the campaign, written at Prepare
+    # time and carried through the bundle. The UniProt accessions live here rather
+    # than in boltz_input.md because they are metadata for this page, not an
+    # instruction to the pipeline -- BoltzMaker.py never has to learn a new key.
+    accessions: dict[str, str] = {}
+    config_path = root / "config.json"
+    if config_path.is_file():
+        try:
+            config = json.loads(config_path.read_text(encoding="utf-8"))
+            raw = config.get("uniprot") if isinstance(config, dict) else None
+            if isinstance(raw, dict):
+                accessions = {str(k): str(v) for k, v in raw.items() if v}
+        except (json.JSONDecodeError, OSError):
+            accessions = {}
+
     md_path = root / "boltz_input.md"
     families = sorted({t.family_id for t in targets if t.family_id})
 
@@ -435,12 +452,50 @@ def load(root: Path) -> Results:
         sse_rows=sse_rows,
         reports=reports,
         interactions=_load_interactions(root),
+        accessions=accessions,
     )
+
+
+def _apo_rmsd(sse_rows: list[dict]) -> dict[str, dict]:
+    """Per target, its Ca RMSD against the apo reference.
+
+    compare-sse measures per motif, not per chain, so there is no single number
+    in the file to read. This is the residue-weighted mean across a target's
+    motifs -- weighted because a 4-residue loop and a 30-residue helix are not
+    equal evidence, and a plain mean lets the shortest motif in the set move the
+    figure as much as the longest.
+
+    Reported with the motif count beside it so it reads as what it is: an
+    aggregate over the regions compare-sse could align, not a global
+    superposition of the whole chain.
+    """
+    totals: dict[str, list] = {}
+    for row in sse_rows:
+        target = (row.get("target_stem") or "").strip()
+        raw = (row.get("ca_rmsd_A") or "").strip()
+        if not target or raw in ("", "N/A"):
+            continue
+        try:
+            rmsd = float(raw)
+            weight = float(row.get("n_residues") or 0)
+        except ValueError:
+            continue
+        if weight <= 0:
+            continue
+        entry = totals.setdefault(target, [0.0, 0.0, 0])
+        entry[0] += rmsd * weight
+        entry[1] += weight
+        entry[2] += 1
+    return {
+        target: {"rmsd": round(weighted / weight, 2), "motifs": count}
+        for target, (weighted, weight, count) in totals.items() if weight
+    }
 
 
 def to_json(results: Results) -> str:
     """The payload the explorer's JavaScript reads. Serialised once, server-side,
     rather than re-fetched per view."""
+    apo = _apo_rmsd(results.sse_rows)
     return json.dumps({
         "campaign": results.campaign_name,
         "created": results.created_utc,
@@ -459,6 +514,7 @@ def to_json(results: Results) -> str:
                 "plip_status": t.plip_status, "plip": t.plip_counts, "plip_total": t.plip_total,
                 "structure": t.has_structure, "image": t.has_image,
                 "interactions": results.interactions.get(t.target_id, []),
+                "apo_rmsd": apo.get(t.target_id),
             }
             for t in results.targets
         ],

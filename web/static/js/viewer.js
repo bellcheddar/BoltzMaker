@@ -92,6 +92,7 @@
     this.plugin = viewer.plugin;
     this.host = host;
     this.structure = null;
+    this.overlay = null;
     this.spinning = false;
     this.mode = "cartoon";
   }
@@ -107,6 +108,7 @@
       });
     }).then(function () {
       var current = self.plugin.managers.structure.hierarchy.current;
+      self.overlay = null;          // cleared with the scene by plugin.clear()
       self.structure = current.structures[0] || null;
       if (!self.structure) throw new Error("the file held no structure");
       return self.setStyle(self.mode);
@@ -165,6 +167,27 @@
     });
   };
 
+  /* Everything, framed. Mol*'s own reset restores the camera it last considered
+     "home", which after a focusLoci is that residue -- so this asks for the whole
+     structure explicitly rather than for whatever home happens to be. */
+  Wrapper.prototype.resetCamera = function () {
+    var data = this.data();
+    if (!data) return;
+    this.plugin.managers.interactivity.lociSelects.deselectAll();
+    this.plugin.managers.camera.focusLoci({
+      kind: "element-loci", structure: data,
+      elements: data.units.map(function (unit) {
+        return { unit: unit, indices: allIndices(unit) };
+      }),
+    });
+  };
+
+  function allIndices(unit) {
+    var indices = new Int32Array(unit.elements.length);
+    for (var i = 0; i < indices.length; i++) indices[i] = i;
+    return indices;
+  }
+
   Wrapper.prototype.focusResidue = function (chainId, seqId) {
     var data = this.data();
     if (!data) return false;
@@ -216,6 +239,46 @@
     this.plugin.managers.structure.selection.fromLoci("set", combined);
     return true;
   };
+
+  /* A second structure in the same scene, already in the right frame -- the
+     superposition was done server-side, so nothing here has to align anything.
+     Held as its own hierarchy entry so removing it cannot take the prediction
+     with it. */
+  Wrapper.prototype.addOverlay = function (url) {
+    var self = this;
+    if (self.overlay) return Promise.resolve(true);
+    return fetch(url).then(function (response) {
+      if (!response.ok) throw new Error("overlay request failed (" + response.status + ")");
+      return response.text();
+    }).then(function (cif) {
+      var before = self.plugin.managers.structure.hierarchy.current.structures.length;
+      return self.viewer.loadStructureFromData(cif, "mmcif").then(function () {
+        var structures = self.plugin.managers.structure.hierarchy.current.structures;
+        if (structures.length <= before) throw new Error("the overlay did not load");
+        self.overlay = structures[structures.length - 1];
+        // One flat colour, so the overlay reads as a reference rather than as a
+        // second thing coloured by the same scheme as the prediction.
+        return self.plugin.managers.structure.component.updateRepresentationsTheme(
+          self.overlay.components,
+          { color: "uniform", colorParams: { value: 0x9b51e0 } });
+      });
+    }).then(function () { return true; });
+  };
+
+  Wrapper.prototype.removeOverlay = function () {
+    if (!this.overlay) return Promise.resolve(false);
+    var overlay = this.overlay;
+    this.overlay = null;
+    try {
+      return Promise.resolve(
+        this.plugin.managers.structure.hierarchy.remove([overlay])
+      ).then(function () { return true; });
+    } catch (err) {
+      return Promise.resolve(false);
+    }
+  };
+
+  Wrapper.prototype.hasOverlay = function () { return !!this.overlay; };
 
   Wrapper.prototype.dispose = function () {
     try { this.viewer.dispose(); } catch (err) { /* already gone */ }

@@ -68,6 +68,18 @@
         apo-vs-holo comparison. mmCIF is used where the PDB has no legacy file, which is
         the case for most recent cryo-EM entries.</p>
     </div>
+    {#  Website metadata, not a pipeline input: it names the entry whose AlphaFold
+        model the explorer can overlay on this protein's prediction. It travels in
+        config.json rather than boltz_input.md, so BoltzMaker.py never has to know
+        about a key it does not use.  #}
+    <div class="md-field">
+      <label>UniProt accession (optional)</label>
+      <input type="text" name="protein_uniprot[]" maxlength="12" placeholder="e.g. P28223">
+      <p class="md-hint">Which AlphaFold model the explorer overlays on this protein.
+        Left blank, it is looked up from the sequence, which only works when the
+        construct is exactly a UniProt sequence -- a truncated or mutated one will not
+        match, and can be named here instead.</p>
+    </div>
     {#  The value is the row's ordinal, stamped by wizard.js, not a plain "on".
         An unchecked box posts nothing at all, so a bare name="...[]" checkbox would
         shift every later row's value up by one -- the same silent misalignment that
