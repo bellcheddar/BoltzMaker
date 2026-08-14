@@ -430,3 +430,23 @@ def test_a_contact_is_measured_between_atoms_not_centroids():
     fn = js[js.index("Wrapper.prototype.showInteractions"):]
     assert "closestAtomLoci(data, residue, ligandCentre)" in fn
     assert "closestAtomLoci(data, ligand, residueAtom.point)" in fn
+
+
+def test_the_pocket_is_served_as_its_own_structure():
+    """Sticks need a representation, a representation needs a component, and this
+    Mol* build cannot build one from a selection: modifyByCurrentSelection takes
+    union/subtract/intersect and silently does nothing for anything else, which is
+    why the first attempt drew no sticks and reported success."""
+    src = (WEB / "boltzmaker_web" / "views_auto.py").read_text()
+    assert "def pocket(" in src
+    js = _explorer_js()
+    assert 'loadExtra("pocket"' in js
+    assert 'type: "ball-and-stick"' in js
+
+
+def test_the_pocket_is_loaded_before_the_camera_is_framed():
+    """Loading a structure resets the camera to fit everything, so loading it last
+    threw the framing away and left the pane showing the whole complex."""
+    js = _explorer_js()
+    block = js[js.index('loadExtra("pocket"'):]
+    assert block.index("focusContacts") < block.index("setSpin")

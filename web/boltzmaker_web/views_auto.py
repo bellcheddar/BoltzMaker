@@ -711,6 +711,59 @@ def _overlay_payload(session: Path, loaded: bmz.Results) -> dict:
     return payload
 
 
+@bp.route("/analysis/<token>/pocket/<target>.cif")
+def pocket(token: str, target: str):
+    """The ligand and the residues PLIP found touching it, as their own structure.
+
+    Mol* can only draw sticks over a component, and this build of the viewer
+    exports no query language to build a "ligand plus surroundings" component
+    with -- modifyByCurrentSelection takes union/subtract/intersect and silently
+    does nothing for anything else, which is why the first attempt drew no sticks
+    and reported success. A second structure needs no component at all, and the
+    coordinates are the same ones, so it lands exactly on top of the first.
+    """
+    session = _session_dir(token)
+    if session is None:
+        return Response("session expired", status=404, mimetype="text/plain")
+    if not _TARGET_RE.match(target or ""):
+        return Response("bad target id", status=400, mimetype="text/plain")
+    try:
+        loaded = bmz.load(session / "campaign")
+    except bmz.BmzError:
+        return Response("session unreadable", status=404, mimetype="text/plain")
+    if target not in {t.target_id for t in loaded.targets}:
+        return Response("no such target", status=404, mimetype="text/plain")
+
+    cached = session / f"pocket-{target}.cif"
+    if not cached.is_file():
+        path = session / "campaign" / "structures" / f"{target}.cif"
+        if not path.is_file():
+            return Response("no structure", status=404, mimetype="text/plain")
+        chains = sequences.chains_from_cif(path)
+        by_letter = {c["letter"]: c["id"] for c in chains}
+        ligands = {c["id"] for c in chains if c["kind"] == "ligand"}
+        wanted = set()
+        for row in loaded.interactions.get(target, []):
+            chain = by_letter.get(row.get("chain"), row.get("chain"))
+            if row.get("resnr") is not None:
+                wanted.add((chain, row["resnr"]))
+        if not wanted and not ligands:
+            return Response("nothing in contact", status=404, mimetype="text/plain")
+
+        text = path.read_text(encoding="utf-8", errors="replace")
+        identity = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]
+        try:
+            carved = alphafold.transform_subset(
+                text, identity, [[0.0, 0.0, 0.0], [0.0, 0.0, 0.0]],
+                lambda f, c: (f[c["auth_asym_id"]] in ligands
+                              or (f[c["auth_asym_id"]], _as_int(f[c["auth_seq_id"]])) in wanted))
+            cached.write_text(carved)
+        except (alphafold.AlphaFoldError, OSError) as exc:
+            return Response(f"could not carve the pocket: {exc}", status=500,
+                            mimetype="text/plain")
+    return send_file(cached, mimetype="chemical/x-cif", max_age=SESSION_CACHE_SECONDS)
+
+
 @bp.route("/analysis/<token>/overlay.json")
 def overlay(token: str):
     session = _session_dir(token)

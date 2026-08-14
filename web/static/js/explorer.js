@@ -459,18 +459,31 @@ var BoltzExplorer = (function () {
             return c.kind === "ligand";
           })[0];
           var contacts = contactResidues(t);
-          var framed = wrapper.focusContacts(ligand ? ligand.id : "", contacts);
-          wrapper.setSpin(true);
-          note.textContent = framed
-            ? contacts.length + " contacting residue" + (contacts.length === 1 ? "" : "s") +
-              " and the ligand, as sticks with the contacts drawn between them."
-            : "No contacts to frame, so the whole complex is shown.";
-          var drawn = wrapper.showInteractions(ligand ? ligand.id : "", contacts);
-          if (framed && drawn) {
-            note.textContent = contacts.length + " contacting residue"
-              + (contacts.length === 1 ? "" : "s") + " and the ligand, with "
-              + drawn + " contact" + (drawn === 1 ? "" : "s") + " drawn and measured.";
-          }
+          // The pocket as its own small structure, so the residues can be
+          // sticks: a representation needs a component, and this Mol* build
+          // cannot build one from a selection. Same coordinates as the full
+          // structure, so it lands exactly where those residues already are.
+          //
+          // Loaded BEFORE the framing, not after. Loading a structure resets the
+          // camera to fit everything, so doing it last threw away the framing and
+          // left the pane showing the whole complex from across the room.
+          var ligandId = ligand ? ligand.id : "";
+          return wrapper
+            .loadExtra("pocket", "/auto/analysis/" + token + "/pocket/" +
+                       encodeURIComponent(t.id) + ".cif", { type: "ball-and-stick" })
+            .catch(function () { /* the cartoon alone is still usable */ })
+            .then(function () {
+              if (current !== t.id) return;
+              var framed = wrapper.focusContacts(ligandId, contacts);
+              var drawn = wrapper.showInteractions(ligandId, contacts);
+              wrapper.setSpin(true);
+              note.textContent = !framed
+                ? "No contacts to frame, so the whole complex is shown."
+                : contacts.length + " contacting residue"
+                  + (contacts.length === 1 ? "" : "s") + " and the ligand as sticks"
+                  + (drawn ? ", with " + drawn + " contact" + (drawn === 1 ? "" : "s")
+                             + " drawn and measured." : ".");
+            });
         })
         .catch(function (err) {
           // Not every thrown value is an Error: a rejected load can be a bare
