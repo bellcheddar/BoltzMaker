@@ -180,6 +180,32 @@ class Archive:
                     pass
         return total
 
+    def forget(self, key: str) -> list[str]:
+        """Remove one run's files and record that it was asked for.
+
+        The registry is append-only, so the run is not erased from it -- a later
+        upload that names the same run_key has to find that the files are gone
+        rather than find nothing at all and quietly re-create the row. What the
+        note says is what happened: the person who owns the campaign asked.
+        """
+        run = self.get(key)
+        if run is None:
+            return []
+        removed = []
+        for kind in ("bundle", "results"):
+            path = self.path_for(run, kind)
+            if path:
+                try:
+                    os.remove(path)
+                    removed.append(kind)
+                except OSError:
+                    pass
+        self._append({"key": key, "campaign": run.campaign, "created": run.created,
+                      "bundle_name": "", "results_name": "", "bundle_bytes": 0,
+                      "results_bytes": 0,
+                      "note": "destroyed at the owner's request"})
+        return removed
+
     def prune(self) -> list[str]:
         """Drop the oldest runs until the archive is inside both caps.
 

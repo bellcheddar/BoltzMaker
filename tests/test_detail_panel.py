@@ -24,7 +24,15 @@ def _explorer_js() -> str:
 
 
 def _explorer_html() -> str:
-    return (WEB / "templates" / "auto_explorer.html").read_text()
+    """The explorer's markup, wherever it lives.
+
+    It is two templates: the page, and the panels partial the downloadable
+    package shares with it. Which half a given element sits in is an arrangement
+    detail, and tests that pinned it to one file all failed the day the panels
+    moved -- on markup that had not changed."""
+    templates = WEB / "templates"
+    return "\n".join((templates / name).read_text()
+                     for name in ("auto_explorer.html", "_explorer_panels.html"))
 
 
 # --- the viewer ---------------------------------------------------------------

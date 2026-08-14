@@ -237,7 +237,7 @@ var BoltzExplorer = (function () {
     sequence = null;
     document.getElementById("af-ask").hidden = true;
     renderSequence(t, null);
-    fetch("/auto/analysis/" + token + "/sequence/" + encodeURIComponent(t.id) + ".json")
+    fetch(sources.sequence(t.id))
       .then(function (response) { return response.ok ? response.json() : null; })
       .catch(function () { return null; })
       .then(function (payload) {
@@ -445,7 +445,7 @@ var BoltzExplorer = (function () {
       note.textContent = "Loading structure\u2026";
       ensureViewer(which)
         .then(function (wrapper) {
-          return wrapper.load("/auto/analysis/" + token + "/structure/" + encodeURIComponent(t.id));
+          return wrapper.load(sources.structure(t.id));
         })
         .then(function (wrapper) {
           if (current !== t.id) return;      // a faster click already moved on
@@ -469,8 +469,7 @@ var BoltzExplorer = (function () {
           // left the pane showing the whole complex from across the room.
           var ligandId = ligand ? ligand.id : "";
           return wrapper
-            .loadExtra("pocket", "/auto/analysis/" + token + "/pocket/" +
-                       encodeURIComponent(t.id) + ".cif", { type: "ball-and-stick" })
+            .loadExtra("pocket", sources.pocket(t.id), { type: "ball-and-stick" })
             .catch(function () { /* the cartoon alone is still usable */ })
             .then(function () {
               if (current !== t.id) return;
@@ -559,6 +558,97 @@ var BoltzExplorer = (function () {
     window.addEventListener("resize", publish);
   }
 
+
+  /* Where the data comes from.
+
+     Served by this app it is /auto/analysis/<token>/…; unpacked from the
+     downloadable package it is a directory of files sitting next to the page.
+     Everything that fetches goes through here, so the second case needs no
+     second copy of the explorer -- the package writes one line of config and the
+     same code reads it. */
+  var sources = null;
+
+  function serverSources(sessionToken) {
+    var base = "/auto/analysis/" + sessionToken + "/";
+    return {
+      sequence: function (id) { return base + "sequence/" + encodeURIComponent(id) + ".json"; },
+      structure: function (id) { return base + "structure/" + encodeURIComponent(id); },
+      pocket: function (id) { return base + "pocket/" + encodeURIComponent(id) + ".cif"; },
+      overlayIndex: function () { return base + "overlay.json"; },
+      overlay: function (kind, id) {
+        return base + "overlay/" + kind + "/" + encodeURIComponent(id) + ".cif";
+      },
+      image: function (id) { return base + "image/" + encodeURIComponent(id); },
+      alphafoldInfo: function (id, accession) {
+        return base + "alphafold/" + encodeURIComponent(id) + ".json"
+               + (accession ? "?accession=" + encodeURIComponent(accession) : "");
+      },
+      alphafold: function (id, accession) {
+        return base + "alphafold/" + encodeURIComponent(id) + "/"
+               + encodeURIComponent(accession) + ".cif";
+      },
+      // The package is a set of files, not a server: an accession it has no file
+      // for cannot be fetched on demand.
+      live: true,
+    };
+  }
+
+  function fileSources() {
+    return {
+      sequence: function (id) { return "data/sequence/" + encodeURIComponent(id) + ".json"; },
+      structure: function (id) { return "data/structures/" + encodeURIComponent(id) + ".cif"; },
+      pocket: function (id) { return "data/pocket/" + encodeURIComponent(id) + ".cif"; },
+      overlayIndex: function () { return "data/overlay.json"; },
+      overlay: function (kind, id) {
+        return "data/overlay/" + kind + "-" + encodeURIComponent(id) + ".cif";
+      },
+      image: function (id) { return "data/plip/" + encodeURIComponent(id) + ".png"; },
+      alphafoldInfo: function () { return ""; },
+      alphafold: function () { return ""; },
+      live: false,
+    };
+  }
+
+
+  /* The destroy button.
+
+     Typed confirmation rather than a dialog: this removes the only copy on the
+     server and there is nothing here that can undo it, so the cost of pressing
+     it by accident should not be one careless click. The request is a POST for
+     the same reason -- a prefetching browser or a link-scanning mail client
+     following a GET would delete somebody's campaign on their behalf. */
+  function wireDestroy() {
+    var button = document.getElementById("destroy-all");
+    if (!button || !token) return;
+    var note = document.getElementById("destroy-note");
+    button.addEventListener("click", function () {
+      var typed = window.prompt(
+        "This removes the campaign from the server and cannot be undone.\n\n" +
+        "Type DESTROY to confirm.");
+      if ((typed || "").trim().toUpperCase() !== "DESTROY") {
+        if (note) note.textContent = "Nothing was removed.";
+        return;
+      }
+      button.disabled = true;
+      if (note) note.textContent = "Removing\u2026";
+      fetch("/auto/analysis/" + token + "/destroy", { method: "POST" })
+        .then(function (response) { return response.json(); })
+        .then(function (result) {
+          if (note) {
+            note.textContent = result.status === "destroyed"
+              ? "Removed. This page is now the only copy -- nothing about this "
+                + "campaign is left on the server."
+              : "There was nothing left to remove.";
+          }
+          document.body.classList.add("md-destroyed");
+        })
+        .catch(function () {
+          button.disabled = false;
+          if (note) note.textContent = "The request failed; nothing was removed.";
+        });
+    });
+  }
+
   // ---- the two campaign-wide overlay panes --------------------------------
 
   //: Enough colours to tell fifteen targets apart, and none of them the ligand
@@ -586,7 +676,7 @@ var BoltzExplorer = (function () {
       });
       return;
     }
-    fetch("/auto/analysis/" + token + "/overlay.json")
+    fetch(sources.overlayIndex())
       .then(function (response) { return response.ok ? response.json() : null; })
       .then(function (payload) {
         if (!payload || !payload.targets || !payload.targets.length) throw new Error("none");
@@ -672,8 +762,7 @@ var BoltzExplorer = (function () {
       // is then not always the one it just added.
       return rows.reduce(function (chain, row, index) {
         return chain.then(function () {
-          var url = "/auto/analysis/" + token + "/overlay/" + kind + "/" +
-                    encodeURIComponent(row.id) + ".cif";
+          var url = sources.overlay(kind, row.id);
           return wrapper.loadExtra(row.id, url, {
             color: overlayColour(index), type: options.type,
           }).catch(function () { /* one missing file is not the whole pane */ });
@@ -700,6 +789,11 @@ var BoltzExplorer = (function () {
       return;
     }
     var target = current;
+    if (!sources.live) {
+      note.textContent = "The AlphaFold overlay needs the server that built this "
+        + "campaign; this is the downloaded copy.";
+      return;
+    }
     note.textContent = "Looking for the AlphaFold model\u2026";
     resolveAlphaFold(target).then(function (info) {
       if (current !== target) return;
@@ -712,8 +806,7 @@ var BoltzExplorer = (function () {
         return;
       }
       document.getElementById("af-ask").hidden = true;
-      var url = "/auto/analysis/" + token + "/alphafold/" + encodeURIComponent(target) +
-                "/" + encodeURIComponent(info.accession) + ".cif";
+      var url = sources.alphafold(target, info.accession);
       return wrapper.addOverlay(url).then(function () {
         if (current !== target) return;
         note.textContent = info.entry + " \u00b7 " + info.source + " \u00b7 fitted on " +
@@ -727,8 +820,7 @@ var BoltzExplorer = (function () {
 
   function resolveAlphaFold(target) {
     if (alphaFold[target]) return Promise.resolve(alphaFold[target]);
-    var url = "/auto/analysis/" + token + "/alphafold/" + encodeURIComponent(target) + ".json";
-    if (typedAccession[target]) url += "?accession=" + encodeURIComponent(typedAccession[target]);
+    var url = sources.alphafoldInfo(target, typedAccession[target]);
     return fetch(url).then(function (response) {
       return response.ok ? response.json() : null;
     }).then(function (info) {
@@ -971,6 +1063,7 @@ var BoltzExplorer = (function () {
 
   function init(sessionToken) {
     token = sessionToken;
+    sources = token ? serverSources(token) : fileSources();
     data = JSON.parse(document.getElementById("results-payload").textContent);
     var cards = document.getElementById("ligand-cards");
     ligandCards = cards ? JSON.parse(cards.textContent) : {};
@@ -1015,6 +1108,8 @@ var BoltzExplorer = (function () {
 
     trackHeaderHeight();
     loadOverlays();
+
+    wireDestroy();
 
     var nav = document.getElementById("panel-nav");
     if (nav) {

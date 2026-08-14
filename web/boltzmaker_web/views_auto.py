@@ -37,9 +37,10 @@ from flask import (
     Blueprint, Response, abort, current_app, render_template, request, send_file, url_for,
 )
 
-from . import (alphafold, apo, bundle, options, reports as report_panels,
-               results as bmz, runs as runs_archive, sequences)
-from .app import new_scratch_dir, runs_root, session_root
+from . import (alphafold, apo, bundle, options, package,
+               reports as report_panels, results as bmz,
+               runs as runs_archive, sequences)
+from .app import REPO_ROOT, WEB_ROOT, new_scratch_dir, runs_root, session_root
 from .runner import BoltzMakerTimeout, extract_error_message, run_boltzmaker
 from .views_new import _parse_form
 from .wizard import WizardValidationError, assemble_boltz_input_md
@@ -546,7 +547,7 @@ def _sequence_payload(session: Path, loaded: bmz.Results, target: str) -> dict:
                 columns.append(index)
                 position += 1
 
-    return {
+    payload = {
         "chains": [{k: c[k] for k in ("id", "letter", "kind")} for c in chains],
         "receptor": receptor["id"] if receptor else "",
         "letter": receptor["letter"] if receptor else "",
@@ -557,6 +558,14 @@ def _sequence_payload(session: Path, loaded: bmz.Results, target: str) -> dict:
         "columns": columns,
         "aligned_count": len(others),
     }
+    # Written here rather than by the route that usually asks for it: the package
+    # builder calls this function directly, and a cache that only the route fills
+    # meant every package shipped without a single sequence track.
+    try:
+        cache.write_text(json.dumps(payload))
+    except OSError:
+        pass
+    return payload
 
 
 def _rmsd_over(fit: dict, core: set, rotation: list, centres: list):
@@ -710,6 +719,72 @@ def _overlay_payload(session: Path, loaded: bmz.Results) -> dict:
     except OSError:
         pass
     return payload
+
+
+def _package_bytes(session: Path, token: str, loaded: bmz.Results) -> bytes:
+    panels, charts, ligands = _report_panels(session, loaded)
+    slots = report_panels.ordered_slots(report_panels.rebuild_panels(panels))
+    markup = render_template(
+        "_explorer_panels.html", results=loaded, token="", package=True,
+        slots=slots, nav=report_panels.navigation(slots),
+        has_panels=bool(panels), low_confidence=bmz.LOW_CONFIDENCE_THRESHOLD,
+    )
+    # The overlay files and the per-target sequence and pocket files are written
+    # on demand, so a campaign nobody has scrolled through has none of them yet.
+    # Asking for them here means the package holds a working copy rather than one
+    # that quietly lacks half its panels.
+    _overlay_payload(session, loaded)
+    for target in loaded.targets:
+        _sequence_payload(session, loaded, target.target_id)
+        try:
+            pocket(token, target.target_id)
+        except Exception:
+            pass
+    return package.build(session, WEB_ROOT, REPO_ROOT, loaded,
+                         bmz.to_json(loaded), markup, json.dumps(charts),
+                         json.dumps(ligands))
+
+
+@bp.route("/analysis/<token>/package.zip")
+def package_zip(token: str):
+    session = _session_dir(token)
+    if session is None:
+        return Response("session expired", status=404, mimetype="text/plain")
+    try:
+        loaded = bmz.load(session / "campaign")
+    except bmz.BmzError:
+        return Response("session unreadable", status=404, mimetype="text/plain")
+    body = _package_bytes(session, token, loaded)
+    name = re.sub(r"[^A-Za-z0-9._-]+", "_", loaded.campaign_name or "campaign")
+    return Response(body, mimetype="application/zip", headers={
+        "Content-Disposition": f'attachment; filename="{name}_html.zip"',
+    })
+
+
+@bp.route("/analysis/<token>/destroy", methods=["POST"])
+def destroy(token: str):
+    """Remove everything this server holds for a campaign.
+
+    Not a GET, and not reachable by following a link: a prefetching browser or a
+    link-scanning mail client would otherwise delete somebody's campaign on their
+    behalf. The archived bundle and results are removed as well as the session --
+    "all data" has to mean all of it or the button is a lie.
+    """
+    session = _session_dir(token)
+    if session is None:
+        return Response(json.dumps({"status": "gone"}), mimetype="application/json")
+    removed = []
+    try:
+        loaded = bmz.load(session / "campaign")
+        key = loaded.run_key
+    except bmz.BmzError:
+        key = ""
+    if key:
+        removed += runs_archive.Archive(runs_root(current_app)).forget(key)
+    shutil.rmtree(session, ignore_errors=True)
+    removed.append("session")
+    return Response(json.dumps({"status": "destroyed", "removed": removed}),
+                    mimetype="application/json")
 
 
 @bp.route("/uniprot/<accession>.json")
@@ -966,10 +1041,6 @@ def sequence(token: str, target: str):
         return Response("no such target", status=404, mimetype="text/plain")
 
     payload = _sequence_payload(session, loaded, target)
-    try:
-        (session / f"sequence-{target}.json").write_text(json.dumps(payload))
-    except OSError:
-        pass
     return Response(json.dumps(payload), mimetype="application/json",
                     headers={"Cache-Control": f"private, max-age={SESSION_CACHE_SECONDS}"})
 

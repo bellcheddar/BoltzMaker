@@ -246,3 +246,80 @@ def test_the_landing_page_says_what_it_is_for(client):
 def test_the_landing_page_survives_an_empty_archive(client):
     html = client.get("/").data.decode()
     assert "Nothing here yet" in html
+
+
+# --- the package, and destroying a campaign ------------------------------------
+
+def _web(*parts):
+    from pathlib import Path
+    return Path(__file__).resolve().parents[1].joinpath("web", *parts)
+
+
+def test_the_package_is_a_directory_of_files_not_one_giant_page():
+    """"Self-contained" is satisfied by a single HTML too, and Mol* alone is 5MB
+    before base64 adds a third to every structure. A directory is what a web
+    server is for, and every path inside it is relative so a subdirectory works."""
+    src = _web("boltzmaker_web", "package.py").read_text()
+    assert "zipfile.ZipFile" in src
+    assert 'href="assets/' in src and 'src="assets/' in src
+    assert "/auto/analysis" not in src        # nothing points back at this server
+
+
+def test_the_package_says_it_needs_a_web_server():
+    """The page fetches its data and a browser refuses that from a file:// page.
+    That is a rule in the browser, not something the package can arrange around,
+    so it says so rather than appearing broken."""
+    src = _web("boltzmaker_web", "package.py").read_text()
+    assert "http.server" in src
+    assert "file://" in src
+
+
+def test_the_explorer_reads_from_one_place_that_can_be_swapped():
+    """Served by the app the data is at /auto/analysis/<token>/…; unpacked it is a
+    directory beside the page. One indirection means the package needs no second
+    copy of the explorer."""
+    js = _web("static", "js", "explorer.js").read_text()
+    assert "function serverSources" in js and "function fileSources" in js
+    # Nothing builds a session URL by hand any more.
+    assert '"/auto/analysis/" + token + "/structure/' not in js
+
+
+def test_destroying_is_a_post_only():
+    """A prefetching browser or a link-scanning mail client following a GET would
+    delete somebody's campaign on their behalf."""
+    src = _web("boltzmaker_web", "views_auto.py").read_text()
+    assert 'def destroy(' in src
+    block = src[src.index("def destroy("):]
+    assert 'methods=["POST"]' in src[max(0, src.index("def destroy(") - 200):src.index("def destroy(")]
+
+
+def test_destroying_removes_the_archive_as_well_as_the_session():
+    """"All data" has to mean all of it or the button is a lie."""
+    src = _web("boltzmaker_web", "views_auto.py").read_text()
+    block = src[src.index("def destroy("):src.index("def destroy(") + 1400]
+    assert "forget(key)" in block
+    assert "shutil.rmtree(session" in block
+
+
+def test_forgetting_a_run_leaves_a_note_rather_than_erasing_the_row():
+    """The registry is append-only: a later upload naming the same run_key has to
+    find that the files are gone rather than find nothing and re-create the row."""
+    src = _web("boltzmaker_web", "runs.py").read_text()
+    block = src[src.index("def forget("):src.index("def prune(")]
+    assert "_append" in block
+    assert "destroyed at the owner" in block
+
+
+def test_the_destroy_button_only_appears_for_a_private_campaign():
+    html = _web("templates", "_explorer_panels.html").read_text()
+    assert "{% if results.private and not package %}" in html
+    assert 'id="destroy-all"' in html
+
+
+def test_destroying_asks_for_the_word_rather_than_a_click():
+    """It removes the only copy on the server and nothing here can undo it, so the
+    cost of pressing it by accident should not be one careless click."""
+    js = _web("static", "js", "explorer.js").read_text()
+    block = js[js.index("function wireDestroy"):]
+    assert "window.prompt" in block
+    assert '"DESTROY"' in block

@@ -593,3 +593,15 @@ tr.md-check-na .md-check-fail { color: var(--md-text-muted); }
 .md-card, .md-fingerprint-grid, .md-motif-grid {
   scroll-margin-top: calc(var(--md-header-height, 60px) + 14px);
 }
+
+/* ---- a private campaign's own controls ---- */
+.md-private-note {
+  margin-top: 16px; padding: 14px 16px; border-radius: var(--md-radius);
+  border: 1px solid var(--md-accent-amber); background: #fff8e6;
+}
+.md-private-note p { margin: 0 0 10px; font-size: 13px; }
+/* Red, and only this button: it is the one control on the site that destroys
+   something, and it should not look like the ones beside it that do not. */
+.md-btn-destroy { background: var(--md-accent-red); color: #fff; }
+.md-btn-destroy:hover { background: #7a1030; }
+.md-btn-destroy[disabled] { opacity: .55; cursor: default; }
