@@ -787,3 +787,22 @@ def test_the_payload_carries_the_contacts(loaded_results):
     by_id = {t["id"]: t for t in payload["targets"]}
     assert len(by_id["AAA_LIG"]["interactions"]) == 3
     assert by_id["BBB_LIG"]["interactions"] == []
+
+
+def test_the_geometry_does_not_repeat_the_distance(loaded_results):
+    """PLIP writes the headline distance twice -- once in its own column and once
+    inside the geometry string, under a key that changes with the interaction
+    type. Every hydrophobic contact rendered as "3.52 A" followed by
+    "Distance 3.52 A"."""
+    hydrophobic = loaded_results.interactions["AAA_LIG"][0]
+    assert hydrophobic["distance"] == 3.52
+    assert hydrophobic["geometry"] == []
+
+
+def test_a_geometry_distance_that_differs_is_kept(loaded_results):
+    """A hydrogen bond's donor-acceptor distance IS the headline one, but the
+    hydrogen-acceptor distance is a different measurement and has to survive."""
+    hbond = loaded_results.interactions["AAA_LIG"][1]
+    labels = [f["label"] for f in hbond["geometry"]]
+    assert "H···A" in labels        # 3.20, kept
+    assert "D···A" not in labels    # 3.67, same as the row's own

@@ -261,9 +261,18 @@ _GEOMETRY_LABELS = {
 #: dropped rather than shown as if they meant something.
 _GEOMETRY_SKIP = {"donoridx", "acceptoridx", "don_idx", "acc_idx"}
 
+#: The keys that can hold the same number as the row's own distance column.
+_GEOMETRY_DISTANCE_KEYS = {"dist", "centdist", "dist_d-a"}
 
-def _parse_geometry(raw: str) -> list[dict]:
-    """"sidechain=True; dist_h-a=3.20; ..." into labelled fields, in PLIP's order."""
+
+def _parse_geometry(raw: str, distance: float | None = None) -> list[dict]:
+    """"sidechain=True; dist_h-a=3.20; ..." into labelled fields, in PLIP's order.
+
+    A field repeating the distance the row already leads with is dropped. PLIP
+    puts the headline distance in its own column AND in the geometry string, under
+    a name that changes with the interaction type, so every hydrophobic contact
+    rendered as "3.53 A" followed by "Distance 3.53 A".
+    """
     fields = []
     for part in (raw or "").split(";"):
         part = part.strip()
@@ -274,6 +283,12 @@ def _parse_geometry(raw: str) -> list[dict]:
         if key in _GEOMETRY_SKIP:
             continue
         label, unit = _GEOMETRY_LABELS.get(key, (key.replace("_", " "), ""))
+        if distance is not None and key in _GEOMETRY_DISTANCE_KEYS:
+            try:
+                if abs(float(value) - distance) < 0.005:
+                    continue
+            except ValueError:
+                pass
         if value in ("True", "False"):
             value = "yes" if value == "True" else "no"
         fields.append({"label": label, "value": value, "unit": unit})
@@ -304,7 +319,8 @@ def _load_interactions(root: Path) -> dict[str, list[dict]]:
                 "lig_restype": (row.get("lig_restype") or "").strip(),
                 "lig_chain": (row.get("lig_chain") or "").strip(),
                 "distance": _num(row.get("distance_A")),
-                "geometry": _parse_geometry(row.get("geometry") or ""),
+                "geometry": _parse_geometry(row.get("geometry") or "",
+                                            _num(row.get("distance_A"))),
             })
     return by_target
 

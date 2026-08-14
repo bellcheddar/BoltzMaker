@@ -35,7 +35,9 @@ var BoltzExplorer = (function () {
   var CHART_NARROW = { height: 460, margin: { t: 64, b: 150, l: 46, r: 14 } };
   function isNarrow() { return window.innerWidth <= NARROW; }
   function chartMetrics() { return isNarrow() ? CHART_NARROW : CHART_WIDE; }
-  var viewer = null;
+  var viewers = { pose: { promise: null, wrapper: null },
+                  contacts: { promise: null, wrapper: null } };
+  var sequence = null;      // the open target's track, logo and chain map
   var current = null;
   var sortKey = "confidence";
   var sortDir = -1;
@@ -195,7 +197,8 @@ var BoltzExplorer = (function () {
   }
 
   function renderDetail(t) {
-    document.getElementById("detail-title").textContent = t.name || t.id;
+    var picker = document.getElementById("detail-target");
+    if (picker.value !== t.id) picker.value = t.id;
 
     var metrics = document.getElementById("detail-metrics");
     metrics.innerHTML = "";
@@ -212,110 +215,455 @@ var BoltzExplorer = (function () {
       metrics.appendChild(tr);
     });
 
-    // Counts and diagram are separate panes now, so each is filled on its own.
-    var plip = document.getElementById("detail-plip");
-    plip.innerHTML = "";
-    if (t.plip_total) {
-      var list = document.createElement("ul");
-      list.className = "md-plip-list";
-      Object.keys(t.plip).forEach(function (kind) {
-        var li = document.createElement("li");
-        li.innerHTML = "<b>" + t.plip[kind] + "</b> " + kind;
-        list.appendChild(li);
+    renderInteractions(t);
+
+    // The sequence track, the conservation logo and the chain-letter mapping all
+    // come from one request, which is also what the interaction pane needs to
+    // know which chain the ligand is -- so the structures are loaded after it
+    // rather than in parallel with it.
+    sequence = null;
+    renderSequence(t, null);
+    fetch("/auto/analysis/" + token + "/sequence/" + encodeURIComponent(t.id) + ".json")
+      .then(function (response) { return response.ok ? response.json() : null; })
+      .catch(function () { return null; })
+      .then(function (payload) {
+        if (current !== t.id) return;       // a faster click already moved on
+        sequence = payload;
+        renderSequence(t, payload);
+        loadStructures(t);
       });
-      plip.appendChild(list);
-    } else {
+  }
+
+  //: What each PLIP interaction is, in one line, because the type names alone
+  //: ("pi stacks") say what was measured and not why it matters.
+  var INTERACTION_NOTES = {
+    "hydrophobic": "greasy contact, no charge or hydrogen involved",
+    "hydrogen bonds": "a donor and an acceptor sharing a hydrogen",
+    "salt bridges": "opposite charges within reach of each other",
+    "pi stacks": "two aromatic rings face to face or edge to face",
+    "halogen bonds": "a halogen acting as an electron acceptor",
+    "water bridges": "linked through a bridging water",
+    "pi-cation": "an aromatic ring against a positive charge",
+  };
+
+  function renderInteractions(t) {
+    var host = document.getElementById("detail-plip");
+    host.innerHTML = "";
+    var rows = t.interactions || [];
+    if (!rows.length) {
       var none = document.createElement("p");
       none.className = "md-hint";
       none.textContent = t.plip_status && t.plip_status !== "ok"
         ? "PLIP did not run for this target (" + t.plip_status + ")."
-        : "No protein-ligand interactions were detected for this target.";
-      plip.appendChild(none);
-    }
-
-    var diagram = document.getElementById("detail-diagram");
-    diagram.innerHTML = "";
-    if (t.image) {
-      var img = document.createElement("img");
-      img.src = "/auto/analysis/" + token + "/image/" + encodeURIComponent(t.id);
-      img.alt = "Detected interactions for " + (t.name || t.id);
-      img.className = "md-plip-image";
-      img.loading = "lazy";
-      diagram.appendChild(img);
-    } else {
-      var noDiagram = document.createElement("p");
-      noDiagram.className = "md-hint";
-      // An apo target has no ligand, so there is nothing for PLIP to draw --
-      // which is different from PLIP having failed, and should not read as it.
-      noDiagram.textContent = t.ligand
-        ? "No interaction diagram was produced for this target."
-        : "This target has no ligand, so there are no interactions to draw.";
-      diagram.appendChild(noDiagram);
-    }
-
-    loadStructure(t);
-  }
-
-  function loadStructure(t) {
-    var host = document.getElementById("viewer");
-    var note = document.getElementById("viewer-note");
-    host.innerHTML = "";
-    if (!t.structure) {
-      note.textContent = "No structure was included for this target.";
+        : (t.ligand ? "No protein-ligand interactions were detected for this target."
+                    : "This target has no ligand, so there are no interactions to detect.");
+      host.appendChild(none);
       return;
     }
-    if (!window.$3Dmol) {
-      note.textContent = "The 3D viewer library did not load, so the pose cannot be shown. " +
-                         "Everything else on this page still works.";
-      return;
-    }
-    if (!hasWebGL()) {
-      // Worth naming explicitly rather than letting 3Dmol fail opaquely further
-      // down: this is the one failure here that is about the browser rather than
-      // the data, and the user can act on it.
-      note.textContent = "This browser has WebGL disabled or unavailable, which the 3D viewer " +
-                         "needs. The interactions and metrics on the right are unaffected.";
-      return;
-    }
-    note.textContent = "Loading structure…";
 
-    fetch("/auto/analysis/" + token + "/structure/" + encodeURIComponent(t.id))
-      .then(function (response) {
-        if (!response.ok) throw new Error("structure request failed (" + response.status + ")");
-        return response.text();
-      })
-      .then(function (cif) {
-        viewer = $3Dmol.createViewer(host, { backgroundColor: "#f4f7fb" });
-        viewer.addModel(cif, "cif");
-        applyStyle("cartoon");
-        note.textContent = "Drag to rotate, scroll to zoom. Ligand shown as sticks.";
-      })
-      .catch(function (err) {
-        // Not every thrown value is an Error: 3Dmol can reject with a bare string
-        // or an event, and "Could not load the structure: undefined" is the least
-        // useful sentence this page could produce.
-        var reason = (err && err.message) || (typeof err === "string" ? err : "") ||
-                     "the viewer could not render this structure";
-        note.textContent = "Could not load the structure: " + reason;
+    // Grouped by type and ordered by how many there are, so the interaction that
+    // dominates the pocket is the one read first.
+    var groups = {};
+    rows.forEach(function (row) { (groups[row.type] = groups[row.type] || []).push(row); });
+    var kinds = Object.keys(groups).sort(function (a, b) {
+      return groups[b].length - groups[a].length || a.localeCompare(b);
+    });
+
+    kinds.forEach(function (kind) {
+      var block = document.createElement("div");
+      block.className = "md-plip-group";
+
+      var heading = document.createElement("h4");
+      heading.className = "md-plip-kind";
+      heading.innerHTML = '<span class="md-plip-count">' + groups[kind].length + "</span> " + kind;
+      block.appendChild(heading);
+
+      if (INTERACTION_NOTES[kind]) {
+        var note = document.createElement("p");
+        note.className = "md-plip-note";
+        note.textContent = INTERACTION_NOTES[kind];
+        block.appendChild(note);
+      }
+
+      groups[kind].sort(function (a, b) { return (a.resnr || 0) - (b.resnr || 0); });
+      groups[kind].forEach(function (row) {
+        block.appendChild(interactionRow(row));
       });
+      host.appendChild(block);
+    });
   }
 
-  function applyStyle(mode) {
-    if (!viewer) return;
-    viewer.setStyle({}, {});
-    if (mode === "surface") {
-      viewer.setStyle({}, { cartoon: { color: "spectrum", opacity: 0.9 } });
-      viewer.addSurface($3Dmol.SurfaceType.VDW, { opacity: 0.55, color: "#cfe0f2" },
-                        { hetflag: false });
-    } else {
-      viewer.setStyle({}, { cartoon: { color: "spectrum" } });
+  function interactionRow(row) {
+    var item = document.createElement("div");
+    item.className = "md-plip-row";
+    item.setAttribute("data-chain", row.chain || "");
+    item.setAttribute("data-resnr", row.resnr === null ? "" : row.resnr);
+
+    var name = document.createElement("span");
+    name.className = "md-plip-res";
+    name.textContent = (row.restype || "?") + (row.resnr === null ? "" : row.resnr);
+    item.appendChild(name);
+
+    var chain = document.createElement("span");
+    chain.className = "md-plip-chain";
+    chain.textContent = "chain " + (row.chain || "?");
+    item.appendChild(chain);
+
+    if (row.distance !== null && row.distance !== undefined) {
+      var distance = document.createElement("span");
+      distance.className = "md-plip-dist";
+      distance.textContent = row.distance.toFixed(2) + " \u00c5";
+      item.appendChild(distance);
     }
-    // Hetero atoms are the ligand: always sticks, always on top, in every mode --
-    // it is the thing the campaign is actually about.
-    viewer.setStyle({ hetflag: true }, { stick: { radius: 0.22, colorscheme: "orangeCarbon" } });
-    viewer.zoomTo();
-    viewer.render();
-    if (mode === "spin") viewer.spin("y", 0.6); else viewer.spin(false);
+
+    if (row.geometry && row.geometry.length) {
+      var geometry = document.createElement("div");
+      geometry.className = "md-plip-geom";
+      row.geometry.forEach(function (field) {
+        var span = document.createElement("span");
+        span.innerHTML = '<i>' + field.label + "</i> " + field.value +
+                         (field.unit ? " " + field.unit : "");
+        geometry.appendChild(span);
+      });
+      item.appendChild(geometry);
+    }
+
+    // The row, the sequence track and the pose are three views of one residue.
+    if (row.resnr !== null && row.resnr !== undefined) {
+      item.addEventListener("click", function () { focusResidue(row.chain, row.resnr); });
+      item.addEventListener("mouseenter", function () { highlightResidue(row.chain, row.resnr); });
+      item.addEventListener("mouseleave", clearResidueHighlight);
+      item.classList.add("md-plip-clickable");
+    }
+    return item;
+  }
+
+  function chainIdFor(letter) {
+    var chains = (sequence && sequence.chains) || [];
+    for (var i = 0; i < chains.length; i++) {
+      if (chains[i].letter === letter) return chains[i].id;
+    }
+    return letter;
+  }
+
+  function focusResidue(chainLetter, resnr) {
+    var chain = chainIdFor(chainLetter);
+    ["pose", "contacts"].forEach(function (which) {
+      var wrapper = viewers[which].wrapper;
+      if (wrapper) wrapper.focusResidue(chain, resnr);
+    });
+    drawSequence(resnr);
+  }
+
+  function highlightResidue(chainLetter, resnr) {
+    var chain = chainIdFor(chainLetter);
+    ["pose", "contacts"].forEach(function (which) {
+      var wrapper = viewers[which].wrapper;
+      if (wrapper) wrapper.highlightResidue(chain, resnr);
+    });
+  }
+
+  function clearResidueHighlight() {
+    ["pose", "contacts"].forEach(function (which) {
+      var wrapper = viewers[which].wrapper;
+      if (wrapper) wrapper.clearHighlight();
+    });
+  }
+
+
+  /* Two panes, one library. Creating a Mol* viewer is async and costs a WebGL
+     context, so each pane's viewer is created once and reused for every target
+     rather than rebuilt on each selection. */
+  function ensureViewer(which) {
+    var slot = viewers[which];
+    if (slot.promise) return slot.promise;
+    var host = document.getElementById(which === "pose" ? "viewer" : "viewer-contacts");
+    slot.promise = BoltzViewer.create(host).then(function (wrapper) {
+      slot.wrapper = wrapper;
+      return wrapper;
+    });
+    return slot.promise;
+  }
+
+  function noteFor(which) {
+    return document.getElementById(which === "pose" ? "viewer-note" : "contacts-note");
+  }
+
+  function loadStructures(t) {
+    ["pose", "contacts"].forEach(function (which) {
+      var note = noteFor(which);
+      if (!t.structure) {
+        note.textContent = "No structure was included for this target.";
+        return;
+      }
+      if (!BoltzViewer.available()) {
+        note.textContent = BoltzViewer.reason();
+        return;
+      }
+      note.textContent = "Loading structure\u2026";
+      ensureViewer(which)
+        .then(function (wrapper) {
+          return wrapper.load("/auto/analysis/" + token + "/structure/" + encodeURIComponent(t.id));
+        })
+        .then(function (wrapper) {
+          if (current !== t.id) return;      // a faster click already moved on
+          if (which === "pose") {
+            note.textContent = "Drag to rotate, scroll to zoom. Coloured by chain.";
+            return;
+          }
+          // The interaction pane opens on the pocket and turns, which is the
+          // whole reason it is a viewer and not the flat diagram it replaced.
+          var ligand = (sequence && sequence.chains || []).filter(function (c) {
+            return c.kind === "ligand";
+          })[0];
+          var contacts = contactResidues(t);
+          var framed = wrapper.focusContacts(ligand ? ligand.id : "", contacts);
+          wrapper.setSpin(true);
+          note.textContent = framed
+            ? contacts.length + " contacting residue" + (contacts.length === 1 ? "" : "s") +
+              " and the ligand, turning. Drag to take over."
+            : "No contacts to frame, so the whole complex is shown.";
+        })
+        .catch(function (err) {
+          // Not every thrown value is an Error: a rejected load can be a bare
+          // string or an event, and "Could not load: undefined" helps nobody.
+          var reason = (err && err.message) || (typeof err === "string" ? err : "") ||
+                       "the viewer could not render this structure";
+          note.textContent = "Could not load the structure: " + reason;
+        });
+    });
+  }
+
+  /* PLIP's contacts as {chain, resnr} against the CIF's own chain names. PLIP
+     says "chain A" because it reads a PDB conversion where chains are lettered
+     in order; the sequence payload carries that mapping. Without it the letters
+     are passed through, which is right for any structure whose chains really
+     are called A, B, C. */
+  function contactResidues(t) {
+    var byLetter = {};
+    ((sequence && sequence.chains) || []).forEach(function (c) { byLetter[c.letter] = c.id; });
+    var seen = {};
+    var out = [];
+    (t.interactions || []).forEach(function (row) {
+      if (row.resnr === null || row.resnr === undefined) return;
+      var chain = byLetter[row.chain] || row.chain;
+      var key = chain + ":" + row.resnr;
+      if (seen[key]) return;
+      seen[key] = true;
+      out.push({ chain: chain, resnr: row.resnr, restype: row.restype });
+    });
+    return out;
+  }
+
+  function applyStyle(which, mode) {
+    var wrapper = viewers[which].wrapper;
+    if (wrapper) wrapper.setStyle(mode);
+  }
+
+
+  // ---- sequence track and conservation logo -------------------------------
+
+  //: Coloured by the property that makes a contact make sense, so a run of
+  //: greasy residues or a pair of opposite charges reads off the track itself.
+  var RESIDUE_CLASS = {
+    A: "hydrophobic", V: "hydrophobic", L: "hydrophobic", I: "hydrophobic",
+    M: "hydrophobic", P: "hydrophobic", F: "aromatic", W: "aromatic", Y: "aromatic",
+    G: "small", C: "small", S: "polar", T: "polar", N: "polar", Q: "polar",
+    D: "acidic", E: "acidic", K: "basic", R: "basic", H: "basic",
+  };
+  /* Six hues that stay apart from each other. The first attempt was six tints of
+     the same pale blue-grey, which on screen was one colour: a track that is
+     coloured by property has to make the properties distinguishable, or the
+     colour is decoration. Kept light enough for black letters on top. */
+  var CLASS_COLOUR = {
+    hydrophobic: "#f4e3c8", aromatic: "#ddd4f2", small: "#e7eaed",
+    polar: "#c8e8d6", acidic: "#f8c9d1", basic: "#c9dff8", other: "#eeeeee",
+  };
+  var CLASS_INK = {
+    hydrophobic: "#6b4a12", aromatic: "#3c2a7a", small: "#4a5561",
+    polar: "#0e5c3c", acidic: "#8a1330", basic: "#12467f", other: "#5d6b7d",
+  };
+
+  var CELL = 12;              // px per residue
+  var LOGO_HEIGHT = 56;
+  var TRACK_HEIGHT = 22;
+  var RULER_HEIGHT = 16;
+  var MAX_BITS = Math.log(20) / Math.log(2);
+
+  function residueClass(letter) { return RESIDUE_CLASS[letter] || "other"; }
+
+  function contactsByNumber(t) {
+    // Only the receptor's own contacts: a contact on a partner chain is real but
+    // has no place on this track, which is one chain's sequence.
+    var letter = sequence ? sequence.letter : "";
+    var map = {};
+    (t.interactions || []).forEach(function (row) {
+      if (row.chain !== letter || row.resnr === null || row.resnr === undefined) return;
+      (map[row.resnr] = map[row.resnr] || []).push(row);
+    });
+    return map;
+  }
+
+  function renderSequence(t, payload) {
+    var title = document.getElementById("seq-title");
+    var note = document.getElementById("seq-note");
+    var legend = document.getElementById("seq-legend");
+    var canvas = document.getElementById("seq-canvas");
+    if (!payload || !payload.letters) {
+      title.textContent = "Sequence";
+      note.textContent = payload ? "No protein chain was found in this structure."
+                                 : "Reading the sequence\u2026";
+      canvas.width = 0; canvas.height = 0;
+      legend.innerHTML = "";
+      return;
+    }
+    title.textContent = "Sequence \u00b7 chain " + payload.letter + " (" + payload.receptor + ")";
+    var contacts = Object.keys(contactsByNumber(t)).length;
+    note.textContent = payload.letters.length + " residues"
+      + (contacts ? ", " + contacts + " in contact with the ligand" : "")
+      + (payload.logo && payload.logo.length
+         ? ". The stack above each residue is how conserved that position is across the "
+           + payload.aligned_count + " distinct proteins in this campaign, in bits."
+         : ". Only one distinct protein in this campaign, so there is nothing to compare it with.")
+      + " Hover for the residue, click to open it in both viewers.";
+
+    legend.innerHTML = "";
+    ["hydrophobic", "aromatic", "polar", "acidic", "basic", "small"].forEach(function (kind) {
+      var item = document.createElement("span");
+      item.className = "md-seq-key";
+      item.innerHTML = '<i style="background:' + CLASS_COLOUR[kind] + '"></i>' + kind;
+      legend.appendChild(item);
+    });
+    var contactKey = document.createElement("span");
+    contactKey.className = "md-seq-key";
+    contactKey.innerHTML = '<i class="md-seq-key-contact"></i>contacts the ligand';
+    legend.appendChild(contactKey);
+
+    drawSequence(null);
+  }
+
+  function drawSequence(focusNumber) {
+    var canvas = document.getElementById("seq-canvas");
+    if (!sequence || !sequence.letters) return;
+    var target = data.targets.filter(function (x) { return x.id === current; })[0];
+    var contacts = target ? contactsByNumber(target) : {};
+    var count = sequence.letters.length;
+    var hasLogo = !!(sequence.logo && sequence.logo.length);
+    var logoHeight = hasLogo ? LOGO_HEIGHT : 0;
+    var height = logoHeight + TRACK_HEIGHT + RULER_HEIGHT;
+
+    // Drawn at the device's own pixel density: a canvas sized in CSS pixels is
+    // resampled on a retina screen, and 12px letters come out muddy.
+    var ratio = window.devicePixelRatio || 1;
+    canvas.width = count * CELL * ratio;
+    canvas.height = height * ratio;
+    canvas.style.width = (count * CELL) + "px";
+    canvas.style.height = height + "px";
+    var ctx = canvas.getContext("2d");
+    ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+    ctx.clearRect(0, 0, count * CELL, height);
+    ctx.textAlign = "center";
+
+    for (var i = 0; i < count; i++) {
+      var x = i * CELL;
+      var letter = sequence.letters[i];
+      var number = sequence.numbers[i];
+      var kind = residueClass(letter);
+      var isContact = !!contacts[number];
+
+      if (hasLogo) {
+        var column = sequence.logo[sequence.columns[i]] || [];
+        var y = logoHeight;
+        column.forEach(function (entry) {
+          // entry is [letter, fraction of the column, bits of information]
+          var slice = (entry[1] * entry[2] / MAX_BITS) * (logoHeight - 4);
+          if (slice < 0.6) return;
+          ctx.save();
+          ctx.translate(x + CELL / 2, y);
+          ctx.scale(1, slice / 10);          // 10px glyphs stretched to the slice
+          ctx.font = "700 10px ui-monospace, Menlo, monospace";
+          ctx.fillStyle = CLASS_INK[residueClass(entry[0])];
+          ctx.fillText(entry[0], 0, 0);
+          ctx.restore();
+          y -= slice;
+        });
+      }
+
+      var top = logoHeight;
+      ctx.fillStyle = CLASS_COLOUR[kind];
+      ctx.fillRect(x, top, CELL - 1, TRACK_HEIGHT - 2);
+      if (isContact) {
+        ctx.fillStyle = "#c0166f";
+        ctx.fillRect(x, top + TRACK_HEIGHT - 4, CELL - 1, 3);
+      }
+      if (number === focusNumber) {
+        ctx.strokeStyle = "#16202b";
+        ctx.lineWidth = 2;
+        ctx.strokeRect(x - 0.5, top - 1, CELL, TRACK_HEIGHT);
+      }
+      ctx.fillStyle = CLASS_INK[kind];
+      ctx.font = (isContact ? "700 " : "") + "11px ui-monospace, Menlo, monospace";
+      ctx.fillText(letter, x + CELL / 2, top + 15);
+
+      // A number every ten residues, against the residue it belongs to.
+      if (number % 10 === 0) {
+        ctx.fillStyle = "#6b7c93";
+        ctx.font = "9px ui-monospace, Menlo, monospace";
+        ctx.fillText(String(number), x + CELL / 2, logoHeight + TRACK_HEIGHT + 11);
+      }
+    }
+  }
+
+  function sequenceIndexAt(event) {
+    var canvas = document.getElementById("seq-canvas");
+    var rect = canvas.getBoundingClientRect();
+    var index = Math.floor((event.clientX - rect.left) / CELL);
+    if (!sequence || index < 0 || index >= sequence.letters.length) return -1;
+    return index;
+  }
+
+  function wireSequence() {
+    var canvas = document.getElementById("seq-canvas");
+    var tooltip = document.getElementById("seq-tooltip");
+
+    canvas.addEventListener("mousemove", function (event) {
+      var index = sequenceIndexAt(event);
+      if (index < 0) { tooltip.hidden = true; return; }
+      var target = data.targets.filter(function (x) { return x.id === current; })[0];
+      var contacts = target ? contactsByNumber(target) : {};
+      var number = sequence.numbers[index];
+      var rows = contacts[number] || [];
+      var parts = [sequence.restypes[index] + number + " \u00b7 chain " + sequence.letter];
+      rows.forEach(function (row) {
+        parts.push(row.type + (row.distance ? " " + row.distance.toFixed(2) + " \u00c5" : ""));
+      });
+      if (sequence.logo && sequence.logo.length) {
+        var column = sequence.logo[sequence.columns[index]] || [];
+        var top = column[column.length - 1];
+        if (top) {
+          parts.push("conserved " + Math.round(top[1] * 100) + "% as " + top[0] +
+                     " across " + sequence.aligned_count + " proteins");
+        }
+      }
+      tooltip.textContent = parts.join(" \u2014 ");
+      tooltip.hidden = false;
+      var host = canvas.parentNode.getBoundingClientRect();
+      // Clamped to the scroll box so the tooltip never hangs off the card.
+      var left = event.clientX - host.left;
+      tooltip.style.left = Math.max(0, Math.min(left, host.width - 20)) + "px";
+      highlightResidue(sequence.letter, number);
+    });
+
+    canvas.addEventListener("mouseleave", function () {
+      tooltip.hidden = true;
+      clearResidueHighlight();
+    });
+
+    canvas.addEventListener("click", function (event) {
+      var index = sequenceIndexAt(event);
+      if (index < 0) return;
+      focusResidue(sequence.letter, sequence.numbers[index]);
+    });
   }
 
   function select(targetId, skipScroll) {
@@ -359,9 +707,25 @@ var BoltzExplorer = (function () {
       });
     });
 
-    document.querySelectorAll(".md-viewer-controls button").forEach(function (btn) {
-      btn.addEventListener("click", function () { applyStyle(btn.getAttribute("data-style")); });
+    document.querySelectorAll(".md-viewer-controls").forEach(function (row) {
+      var which = row.getAttribute("data-viewer");
+      row.querySelectorAll("button").forEach(function (btn) {
+        btn.addEventListener("click", function () {
+          applyStyle(which, btn.getAttribute("data-style"));
+        });
+      });
     });
+
+    var picker = document.getElementById("detail-target");
+    picker.addEventListener("change", function () { select(picker.value); });
+    data.targets.forEach(function (t) {
+      var option = document.createElement("option");
+      option.value = t.id;
+      option.textContent = t.name || t.id;
+      picker.appendChild(option);
+    });
+
+    wireSequence();
 
     renderTable();
 

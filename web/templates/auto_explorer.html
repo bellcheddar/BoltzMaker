@@ -1,5 +1,9 @@
 {% extends "base.html" %}
 {% block title %}{{ results.campaign_name }} &middot; {{ SITE_TITLE }}{% endblock %}
+{% block extra_head %}
+<link rel="stylesheet" href="{{ asset('vendor/molstar-4.9.0.css') }}">
+{% endblock %}
+
 {% block content %}
 
 <div class="md-card">
@@ -81,7 +85,13 @@
     one-target campaign there was nothing to click, and the panels simply never
     appeared.  #}
 <div class="md-card" id="detail-card">
-  <h2 id="detail-title">Target</h2>
+  {#  The heading is the target picker. It named the open target and the only way
+      to change it was to scroll back to the table -- so the one piece of chrome
+      that was already saying "this is the target" now also chooses it.  #}
+  <h2 class="md-detail-heading">
+    <label class="md-detail-label" for="detail-target">Target</label>
+    <select id="detail-target" class="md-detail-select"></select>
+  </h2>
   {#  Four panes of equal width, rather than a tall column beside a short one: the
       pose used to leave most of its half empty while the metrics table ran on
       below the fold.  #}
@@ -89,7 +99,7 @@
     <div class="md-detail-pane">
       <h3 class="md-sub">Predicted pose</h3>
       <div class="md-detail-body"><div id="viewer" class="md-viewer"></div></div>
-      <div class="md-viewer-controls">
+      <div class="md-viewer-controls md-button-row" data-viewer="pose">
         <button type="button" class="md-btn md-btn-secondary" data-style="cartoon">Cartoon</button>
         <button type="button" class="md-btn md-btn-secondary" data-style="surface">Surface</button>
         <button type="button" class="md-btn md-btn-secondary" data-style="spin">Spin</button>
@@ -98,7 +108,13 @@
     </div>
     <div class="md-detail-pane">
       <h3 class="md-sub">Interaction diagram</h3>
-      <div class="md-detail-body" id="detail-diagram"></div>
+      <div class="md-detail-body"><div id="viewer-contacts" class="md-viewer"></div></div>
+      <div class="md-viewer-controls md-button-row" data-viewer="contacts">
+        <button type="button" class="md-btn md-btn-secondary" data-style="cartoon">Cartoon</button>
+        <button type="button" class="md-btn md-btn-secondary" data-style="surface">Surface</button>
+        <button type="button" class="md-btn md-btn-secondary" data-style="spin">Spin</button>
+      </div>
+      <p class="md-hint" id="contacts-note" style="margin-bottom:0"></p>
     </div>
     <div class="md-detail-pane">
       <h3 class="md-sub">Detected interactions</h3>
@@ -110,6 +126,18 @@
         <table class="md-check-table" id="detail-metrics"></table>
       </div>
     </div>
+  </div>
+
+  {#  Full width under the four, because a sequence is long and thin and a quarter
+      of a row would show forty residues of four hundred.  #}
+  <div class="md-seq-pane">
+    <h3 class="md-sub" id="seq-title">Sequence</h3>
+    <p class="md-hint" id="seq-note" style="margin-top:0"></p>
+    <div class="md-seq-scroll">
+      <canvas id="seq-canvas" class="md-seq-canvas"></canvas>
+    </div>
+    <div class="md-seq-tooltip" id="seq-tooltip" hidden></div>
+    <div class="md-seq-legend" id="seq-legend"></div>
   </div>
 </div>
 
@@ -161,7 +189,8 @@
 
 <script id="results-payload" type="application/json">{{ payload | safe }}</script>
 <script src="{{ url_for('vendor', filename='plotly-2.35.2.min.js') }}"></script>
-<script src="{{ url_for('vendor', filename='3Dmol-2.5.5-min.js') }}"></script>
+<script src="{{ asset('vendor/molstar-4.9.0.js') }}"></script>
+<script src="{{ asset('js/viewer.js') }}"></script>
 <script src="{{ asset('js/explorer.js') }}"></script>
 <script id="report-charts" type="application/json">{{ report_charts | safe }}</script>
 <script>

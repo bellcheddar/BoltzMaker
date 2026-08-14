@@ -389,6 +389,82 @@ tr.md-check-na .md-check-fail { color: var(--md-text-muted); }
 .md-readiness-warn { background: #fff8e6; border: 1px solid var(--md-accent-amber); color: #8a6100; }
 .md-readiness-fail { background: #fdecea; border: 1px solid var(--md-accent-red); color: #7a1030; }
 
+/* ---- the detail panel: target picker, interactions, sequence ---- */
+
+/* The heading IS the picker. It already said which target was open; now it also
+   changes it, instead of sending you back up the page to the table. */
+.md-detail-heading { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.md-detail-label {
+  font-size: 12px; letter-spacing: .08em; text-transform: uppercase;
+  color: var(--md-text-muted); font-weight: 700;
+}
+.md-detail-select {
+  font-family: inherit; font-size: 17px; font-weight: 700; color: var(--md-text);
+  background: var(--md-bg-alt); border: 1px solid var(--md-border);
+  border-radius: var(--md-radius); padding: 6px 30px 6px 10px; max-width: 100%;
+  cursor: pointer; appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 8'%3E%3Cpath d='M1 1l5 5 5-5' fill='none' stroke='%236b7c93' stroke-width='2'/%3E%3C/svg%3E");
+  background-repeat: no-repeat; background-position: right 10px center; background-size: 10px;
+}
+.md-detail-select:focus { outline: 2px solid var(--md-primary); outline-offset: 1px; }
+
+/* Mol* draws its own button column over the canvas. This page supplies the three
+   controls that matter under each pane, so the built-in set is chrome twice. */
+.md-viewer .msp-viewport-controls { display: none; }
+.md-viewer .msp-plugin { position: absolute; inset: 0; }
+
+.md-plip-group { margin-bottom: 14px; }
+.md-plip-group:last-child { margin-bottom: 0; }
+.md-plip-kind {
+  margin: 0 0 2px; font-size: 13px; font-weight: 700; color: var(--md-text);
+  display: flex; align-items: baseline; gap: 6px;
+}
+.md-plip-count {
+  background: var(--md-primary); color: #fff; border-radius: 10px;
+  padding: 0 7px; font-size: 11px; font-variant-numeric: tabular-nums;
+}
+.md-plip-note { margin: 0 0 6px; font-size: 11.5px; color: var(--md-text-muted); }
+.md-plip-row {
+  border-left: 3px solid var(--md-border); padding: 4px 0 4px 8px; margin-bottom: 4px;
+  font-size: 12px;
+}
+.md-plip-clickable { cursor: pointer; }
+.md-plip-clickable:hover { border-left-color: var(--md-primary); background: var(--md-bg-alt); }
+.md-plip-res { font-weight: 700; color: var(--md-text); }
+.md-plip-chain, .md-plip-dist { color: var(--md-text-muted); margin-left: 8px; }
+.md-plip-dist { font-variant-numeric: tabular-nums; }
+.md-plip-geom {
+  display: flex; flex-wrap: wrap; gap: 2px 12px; margin-top: 2px;
+  font-size: 11px; color: var(--md-text-muted); font-variant-numeric: tabular-nums;
+}
+.md-plip-geom i { font-style: normal; opacity: .75; }
+
+.md-seq-pane { margin-top: 18px; border-top: 1px solid var(--md-border); padding-top: 14px; }
+/* The one thing on this page that is allowed to scroll sideways: a 470-residue
+   sequence has no other honest shape, and squeezing it to the card would put
+   forty residues on screen at a pixel each. */
+.md-seq-scroll { position: relative; overflow-x: auto; overflow-y: hidden; padding-bottom: 4px; }
+/* max-width:none defeats the global `canvas { max-width: 100% }` that keeps
+   images inside their column. A 471-residue track is 5652px wide by design and
+   scrolls inside .md-seq-scroll; capped to the card it was instead squashed to
+   910px, which drew all 471 residues two pixels apart and looked like noise. */
+.md-seq-canvas { display: block; cursor: pointer; max-width: none; }
+.md-seq-tooltip {
+  position: absolute; transform: translateX(-50%); margin-top: 2px;
+  background: var(--md-text); color: #fff; font-size: 11px; padding: 4px 8px;
+  border-radius: 4px; pointer-events: none; white-space: nowrap; z-index: 5;
+}
+.md-seq-legend {
+  display: flex; flex-wrap: wrap; gap: 6px 16px; margin-top: 8px;
+  font-size: 11.5px; color: var(--md-text-muted);
+}
+.md-seq-key { display: inline-flex; align-items: center; gap: 5px; }
+.md-seq-key i {
+  width: 12px; height: 12px; border-radius: 2px; border: 1px solid var(--md-border);
+  display: inline-block;
+}
+.md-seq-key-contact { background: #c0166f; border-color: #c0166f !important; }
+
 @media (max-width: 768px) {
   .md-header-inner { padding: 10px 14px; gap: 8px; }
   .md-header-title h1 { font-size: 14px; }
@@ -402,6 +478,8 @@ tr.md-check-na .md-check-fail { color: var(--md-text-muted); }
   .lig-page { grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); }
   .md-stat-row { gap: 18px; }
   .md-viewer { min-height: 260px; }
+  .md-detail-select { font-size: 15px; }
+  .md-seq-tooltip { white-space: normal; max-width: 240px; }
   .md-mode-card { padding: 18px; }
 
   /* Buttons go full width and stack. Centre-aligned labels, so a two-line label
