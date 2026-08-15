@@ -542,3 +542,48 @@ def test_the_fingerprints_have_no_colourbar():
     fn = js[js.index("function shareFingerprintScale"):js.index("function computeFingerprintMax")]
     assert "trace.showscale = false;" in fn
     assert "spec.layout.showlegend = first" in fn
+
+
+# --- the Prepare form ----------------------------------------------------------
+
+def _wizard_js() -> str:
+    return (WEB / "static" / "js" / "wizard.js").read_text()
+
+
+def test_enter_does_not_submit_the_form():
+    """A form with a submit button submits on Enter from any text input, which on
+    a page this long means: type a protein name, press Enter out of habit, and the
+    server answers "At least one ligand is required" -- an error about the bottom
+    of the page while you are still filling in the top. The UniProt boxes made it
+    likelier, because Enter is exactly what anyone types after an accession."""
+    js = _wizard_js()
+    block = js[js.index("Enter must not submit the form"):]
+    assert 'event.key !== "Enter"' in block
+    assert "event.preventDefault();" in block
+
+
+def test_a_textarea_keeps_enter():
+    """A sequence is pasted into one and newlines belong there."""
+    js = _wizard_js()
+    block = js[js.index("Enter must not submit the form"):]
+    assert 'tag === "textarea"' in block
+
+
+def test_the_submit_button_keeps_enter():
+    """So the form can still be sent from the keyboard by someone who has tabbed
+    to it deliberately."""
+    js = _wizard_js()
+    block = js[js.index("Enter must not submit the form"):]
+    assert 'el.type === "submit"' in block
+
+
+def test_a_validation_error_names_the_section_it_is_about():
+    """The message says what is missing but not where it lives, and "at least one
+    ligand is required" can be two screens below the protein someone was filling
+    in when they triggered it."""
+    html = (WEB / "templates" / "auto_prepare.html").read_text()
+    assert 'id="form-error"' in html and 'data-field=' in html
+    src = (WEB / "boltzmaker_web" / "views_auto.py").read_text()
+    assert "error_field=getattr(exc, 'field', '')" in src
+    js = _wizard_js()
+    assert "SECTIONS" in js and 'ligands: "ligand-rows"' in js

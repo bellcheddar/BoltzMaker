@@ -8,7 +8,12 @@
 </p>
 
 {% if error %}
-<div class="md-alert md-alert-error"><pre>{{ error }}</pre></div>
+{#  The message alone says what is missing but not where it lives, and on a form
+    this long "at least one ligand is required" can be two screens from the thing
+    it is about. The section is named and the page goes to it.  #}
+<div class="md-alert md-alert-error" id="form-error" data-field="{{ error_field or '' }}">
+  <pre>{{ error }}</pre>
+</div>
 {% endif %}
 
 <form method="post" id="wizard-form">

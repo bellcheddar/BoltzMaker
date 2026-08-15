@@ -174,7 +174,8 @@ def prepare():
     try:
         cfg = options.parse_form(request.form)
     except options.OptionError as exc:
-        return _render_prepare(defaults=options.defaults(), error=str(exc), form=request.form)
+        return _render_prepare(defaults=options.defaults(), error=str(exc), form=request.form,
+                               error_field=getattr(exc, 'field', ''))
 
     # compare-sse only runs for families naming an apo structure, so unticking it is
     # what turns the whole apo arrangement off -- no companion predictions, no
@@ -184,7 +185,8 @@ def prepare():
     try:
         predict_affinity, proteins, partners, ligands = _parse_form()
     except WizardValidationError as exc:
-        return _render_prepare(defaults=cfg, error=str(exc), form=request.form)
+        return _render_prepare(defaults=cfg, error=str(exc), form=request.form,
+                               error_field=getattr(exc, 'field', ''))
 
     # Fetch any named experimental apo structures now, while the person who typed
     # the id is still here to correct it. Shipping them in the bundle also means the
@@ -198,7 +200,8 @@ def prepare():
             try:
                 data, extension = apo.fetch(protein.apo_pdb)
             except apo.ApoFetchError as exc:
-                return _render_prepare(defaults=cfg, error=str(exc), form=request.form)
+                return _render_prepare(defaults=cfg, error=str(exc), form=request.form,
+                               error_field=getattr(exc, 'field', ''))
             path = apo.reference_path(protein.apo_pdb, extension)
             extra_files[path] = data
             apo_paths[protein.name] = path
@@ -208,7 +211,8 @@ def prepare():
                                           compare_sse=compare_sse,
                                           apo_reference_paths=apo_paths)
     except WizardValidationError as exc:
-        return _render_prepare(defaults=cfg, error=str(exc), form=request.form)
+        return _render_prepare(defaults=cfg, error=str(exc), form=request.form,
+                               error_field=getattr(exc, 'field', ''))
 
     scratch = new_scratch_dir(current_app)
     try:
@@ -237,7 +241,8 @@ def prepare():
         target_count = _count_targets(scratch)
         final_md = md_path.read_text()
     except BoltzMakerTimeout as exc:
-        return _render_prepare(defaults=cfg, error=str(exc), form=request.form)
+        return _render_prepare(defaults=cfg, error=str(exc), form=request.form,
+                               error_field=getattr(exc, 'field', ''))
     finally:
         shutil.rmtree(scratch, ignore_errors=True)
 
@@ -265,7 +270,8 @@ def prepare():
         built = bundle.build(campaign_name, final_md, cfg, target_count, config_json,
                              run_key=run_key, private=private, extra_files=extra_files)
     except bundle.BundleError as exc:
-        return _render_prepare(defaults=cfg, error=str(exc), form=request.form)
+        return _render_prepare(defaults=cfg, error=str(exc), form=request.form,
+                               error_field=getattr(exc, 'field', ''))
 
     if not private:
         try:

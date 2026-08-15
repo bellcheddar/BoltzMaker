@@ -552,6 +552,10 @@ tr.md-check-na .md-check-fail { color: var(--md-text-muted); }
 .md-btn-destroy:hover { background: #7a1030; }
 .md-btn-destroy[disabled] { opacity: .55; cursor: default; }
 
+/* The section an error is about, so a message two screens away has something to
+   point at when the page arrives there. */
+.md-card-needs-attention { border-color: var(--md-accent-red); box-shadow: 0 0 0 2px rgba(216,27,140,.14); }
+
 /* ---- narrow screens ----
 
    Last in the file on purpose. Everything in here is an override meant to win at

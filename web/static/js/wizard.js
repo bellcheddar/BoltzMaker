@@ -172,3 +172,77 @@ var BoltzWizard = (function () {
     if (input && input.matches && input.matches("[data-uniprot-for]")) fill(input);
   });
 })();
+
+/* Enter must not submit the form.
+
+   A form with a submit button submits on Enter from any text input, which on a
+   page like this means: type a protein name, press Enter out of habit, and the
+   server answers "At least one ligand is required" -- an error about the bottom
+   of the page while you are still filling in the top. Adding the UniProt boxes
+   made it worse, because Enter is exactly what anyone types after an accession.
+
+   Textareas keep Enter: a sequence is pasted into one and newlines belong there.
+   The submit button keeps it too, so the form can still be sent from the
+   keyboard by anyone who has tabbed to it deliberately. */
+(function () {
+  "use strict";
+
+  document.addEventListener("DOMContentLoaded", function () {
+    var form = document.getElementById("wizard-form");
+    if (!form) return;
+    form.addEventListener("keydown", function (event) {
+      if (event.key !== "Enter" || event.shiftKey) return;
+      var el = event.target;
+      if (!el || !el.tagName) return;
+      var tag = el.tagName.toLowerCase();
+      if (tag === "textarea") return;
+      if (tag === "button" || (tag === "input" && el.type === "submit")) return;
+      event.preventDefault();
+      // Enter on an accession should do the obvious thing rather than nothing.
+      if (el.matches && el.matches("[data-uniprot-for]")) {
+        el.dispatchEvent(new Event("change", { bubbles: true }));
+      }
+    });
+  });
+})();
+
+/* Take the page to the error.
+
+   The server says what is missing; the sections say where it lives. On a form
+   this long "at least one ligand is required" can be two screens below the
+   protein someone was filling in when they triggered it, which reads as the page
+   objecting to what they were doing rather than to what they had not reached
+   yet. */
+(function () {
+  "use strict";
+
+  //: Which section a failed field belongs to. The parser's field names are the
+  //: keys because they are what the error already carries.
+  var SECTIONS = {
+    proteins: "protein-rows", protein_name: "protein-rows",
+    protein_sequence: "protein-rows", protein_partners: "protein-rows",
+    protein_apo_pdb: "protein-rows", protein_uniprot: "protein-rows",
+    partner_name: "partner-rows", partner_sequence: "partner-rows",
+    partner_uniprot: "partner-rows",
+    constraint_owner: "constraint-rows", constraint_kind: "constraint-rows",
+    ligands: "ligand-rows", ligand_name: "ligand-rows", ligand_value: "ligand-rows",
+    campaign_name: "campaign_name",
+  };
+
+  document.addEventListener("DOMContentLoaded", function () {
+    var alert = document.getElementById("form-error");
+    if (!alert) return;
+    var field = alert.getAttribute("data-field") || "";
+    var target = document.getElementById(SECTIONS[field] || "");
+    if (!target) return;
+    var card = target.closest(".md-card") || target;
+    card.classList.add("md-card-needs-attention");
+    // After the restore, which rebuilds the rows and would otherwise scroll the
+    // page out from under this.
+    window.setTimeout(function () {
+      card.scrollIntoView({ behavior: "smooth", block: "start" });
+      var first = card.querySelector("input, textarea, select");
+      if (first) first.focus({ preventScroll: true });
+    }, 250);
+  });
+})();
