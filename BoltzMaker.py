@@ -573,6 +573,7 @@ _bootstrap_or_relaunch(sys.argv)
 import argparse
 import ast
 import base64
+import contextlib
 import html
 import io
 import json
@@ -1807,6 +1808,31 @@ def check_plip_env() -> CheckResult:
                         f"skipped (optional; {fix} to enable)")
 
 
+def check_boltz_patches() -> CheckResult:
+    """Verify patches/apply_boltz_patches.py is applied to the installed boltz.
+
+    WARN rather than FAIL: an unpatched boltz still runs, it just loses the
+    containment that stops one target's numerical failure aborting every target
+    queued behind it. A `pip install -U boltz` silently reverts all three, and the
+    symptom -- a run that looks alive for hours while producing nothing -- is
+    expensive to diagnose from scratch, so it is worth a line in every preflight.
+    """
+    script = SCRIPT_DIR / "patches" / "apply_boltz_patches.py"
+    if not script.is_file():
+        return CheckResult("boltz_patches", "WARN", f"patch script not found at {script}")
+    try:
+        proc = subprocess.run([sys.executable, str(script), "--check"],
+                              capture_output=True, text=True, timeout=60)
+    except (OSError, subprocess.SubprocessError) as e:
+        return CheckResult("boltz_patches", "WARN", f"could not check boltz patches: {e}")
+    if proc.returncode == 0:
+        return CheckResult("boltz_patches", "PASS", "boltz numerical-failure patches applied")
+    outstanding = [l.strip() for l in proc.stdout.splitlines() if "NOT APPLIED" in l or "CANNOT" in l]
+    return CheckResult("boltz_patches", "WARN",
+                       f"{len(outstanding)} boltz patch(es) not applied -- one target's numerical "
+                       f"failure can abort the whole batch; run `python3 {script}`")
+
+
 def run_preflight(manifest: list, output_dir: Path, campaign: Campaign, md_path: Path, strict: bool = False,
                    memory_warn_tokens: int = 1000, json_output: bool = False) -> bool:
     results = [
@@ -1825,6 +1851,7 @@ def run_preflight(manifest: list, output_dir: Path, campaign: Campaign, md_path:
         check_hidden_files(output_dir),
         check_duplicate_targets(manifest),
         check_plip_env(),
+        check_boltz_patches(),
     ]
     worst = "PASS"
     for r in results:
@@ -1885,6 +1912,82 @@ def _stage_targets(yaml_dir: Path, targets: list, stage_dir: Path) -> None:
     for t in targets:
         src = (yaml_dir / f"{t.stem}.yaml").resolve()
         (stage_dir / f"{t.stem}.yaml").symlink_to(src)
+
+
+def _unpark_boltz_records(results_dir: Path) -> int:
+    """Restore any records parked by an earlier run that was killed mid-batch.
+
+    `results_dir` is Boltz's *internal* output root -- <out_dir>/boltz_results_<stage>,
+    the parent of `predictions` -- not the --out_dir we hand the CLI. Pointing this at
+    --out_dir finds no records/ directory and silently parks nothing, which looks
+    exactly like success.
+    """
+    records_dir = results_dir / "processed" / "records"
+    parked_dir = results_dir / "processed" / "records_parked"
+    if not parked_dir.is_dir():
+        return 0
+    records_dir.mkdir(parents=True, exist_ok=True)
+    restored = 0
+    for rec in parked_dir.glob("*.json"):
+        dest = records_dir / rec.name
+        if dest.exists():
+            rec.unlink()          # the live copy wins; the parked one is a stale duplicate
+        else:
+            rec.rename(dest)
+        restored += 1
+    with contextlib.suppress(OSError):
+        parked_dir.rmdir()
+    return restored
+
+
+@contextlib.contextmanager
+def _boltz_records_restricted_to(results_dir: Path, pending: list):
+    """Make Boltz's manifest match exactly the targets we staged.
+
+    Staging one YAML is not enough to make Boltz run one target. `boltz predict`
+    ignores the input dir once a target has been processed before: check_inputs()
+    filters the staged input out as "All inputs are already processed", then
+    rebuilds the manifest from *every* record in <out_dir>/processed/records/, and
+    predict iterates that manifest. So a supposedly isolated single-target retry
+    silently re-runs the whole campaign in one process -- which is how a run here
+    spent 14.5 hours and 20 invocations producing nothing: the first target in
+    manifest order raised, and the nine queued behind it were never attempted.
+    It is also what turns one missing pre_affinity_*.npz into a crash of the shared
+    affinity phase, because that phase iterates the same over-broad manifest.
+
+    Parking the other records for the duration makes the rebuilt manifest contain
+    only `pending`, so isolation is real and the affinity phase only ever asks for
+    files that this batch produced. Records are small JSON pointers -- the MSAs,
+    processed structures and predictions they refer to are untouched, so parking
+    costs nothing and is fully reversible.
+    """
+    records_dir = results_dir / "processed" / "records"
+    parked_dir = results_dir / "processed" / "records_parked"
+    _unpark_boltz_records(results_dir)  # recover from an earlier hard kill before parking again
+    if not records_dir.is_dir():
+        # Genuine on a first run (Boltz has processed nothing yet). If it happens on a
+        # resume, the path is wrong and scoping is silently inert -- hence the _info.
+        _info(f"no processed records yet at {records_dir} -- Boltz batch scoping not needed")
+        yield
+        return
+    keep = {t.stem for t in pending}
+    moved = []
+    try:
+        for rec in sorted(records_dir.glob("*.json")):
+            if rec.stem not in keep:
+                parked_dir.mkdir(parents=True, exist_ok=True)
+                dest = parked_dir / rec.name
+                rec.rename(dest)
+                moved.append((dest, rec))
+        _info(f"Boltz batch scoped to {len(keep)} target(s); {len(moved)} other record(s) "
+              f"parked for the duration.")
+        yield
+    finally:
+        for dest, orig in moved:
+            if dest.exists():
+                dest.rename(orig)
+        with contextlib.suppress(OSError):
+            parked_dir.rmdir()
 
 
 def resolve_accelerator(choice: str) -> str:
@@ -2196,7 +2299,8 @@ def run_boltz(yaml_dir: Path, out_dir: Path, manifest: list, workers: int, accel
               mps_watermark: float = 1.0, max_parallel_samples: int = 1,
               recycling_steps: int = None, sampling_steps: int = None, diffusion_samples: int = 1,
               diffusion_samples_affinity: int = None, sampling_steps_affinity: int = None,
-              max_msa_seqs: int = None, max_retries: int = 2) -> None:
+              max_msa_seqs: int = None, max_retries: int = 2,
+              use_potentials: bool = True) -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
     stage_dir = yaml_dir / "_stage_run"
     pred_dir = _predictions_dir_for(out_dir, stage_dir.name)
@@ -2225,7 +2329,8 @@ def run_boltz(yaml_dir: Path, out_dir: Path, manifest: list, workers: int, accel
         _run_boltz_batch_with_retry(batch, len(pending), len(manifest), len(complete), yaml_dir, stage_dir,
                           pred_dir, out_dir, workers, accelerator, campaign_dir, mps_watermark,
                           max_parallel_samples, recycling_steps, sampling_steps, diffusion_samples,
-                          diffusion_samples_affinity, sampling_steps_affinity, max_msa_seqs, max_retries)
+                          diffusion_samples_affinity, sampling_steps_affinity, max_msa_seqs, max_retries,
+                          use_potentials)
 
 
 _RETRY_SETTLE_SECONDS = 15  # pause between attempts so the OS fully reclaims a crashed subprocess's memory
@@ -2236,7 +2341,8 @@ def _run_boltz_batch_with_retry(batch: list, total_pending: int, manifest_len: i
                                  accelerator: str, campaign_dir: Path, mps_watermark: float,
                                  max_parallel_samples: int, recycling_steps: int, sampling_steps: int,
                                  diffusion_samples: int, diffusion_samples_affinity: int,
-                                 sampling_steps_affinity: int, max_msa_seqs: int, max_retries: int) -> None:
+                                 sampling_steps_affinity: int, max_msa_seqs: int, max_retries: int,
+                                 use_potentials: bool = True) -> None:
     """Runs a batch, then automatically retries any target that didn't complete.
 
     A real 4-target cascade on `5ht2_gq_panel` showed why this matters: an OOM during
@@ -2257,7 +2363,8 @@ def _run_boltz_batch_with_retry(batch: list, total_pending: int, manifest_len: i
             _run_boltz_batch(remaining, total_pending, manifest_len, complete_len, yaml_dir, stage_dir,
                               pred_dir, out_dir, workers, accelerator, campaign_dir, mps_watermark,
                               max_parallel_samples, recycling_steps, sampling_steps, diffusion_samples,
-                              diffusion_samples_affinity, sampling_steps_affinity, max_msa_seqs)
+                              diffusion_samples_affinity, sampling_steps_affinity, max_msa_seqs,
+                              use_potentials)
         else:
             _step(f"retrying {len(remaining)} incomplete target(s) in isolation "
                   f"(attempt {attempt}/{max_retries}, one at a time, {_RETRY_SETTLE_SECONDS}s pause "
@@ -2267,10 +2374,22 @@ def _run_boltz_batch_with_retry(batch: list, total_pending: int, manifest_len: i
                 _run_boltz_batch([t], total_pending, manifest_len, complete_len, yaml_dir, stage_dir,
                                   pred_dir, out_dir, workers, accelerator, campaign_dir, mps_watermark,
                                   max_parallel_samples, recycling_steps, sampling_steps, diffusion_samples,
-                                  diffusion_samples_affinity, sampling_steps_affinity, max_msa_seqs)
+                                  diffusion_samples_affinity, sampling_steps_affinity, max_msa_seqs,
+                                  use_potentials)
 
+        before = len(remaining)
         remaining = [t for t in remaining if not _target_complete(pred_dir, t.stem, t.needs_affinity)]
         if not remaining:
+            return
+        # A retry pass that completes nothing has proved the failure is deterministic, so
+        # running the identical pass again just burns hours: 20 invocations over 14.5h once
+        # died on the same linalg.svd error in the same target and produced not one model.
+        # Stop and say so, rather than spending the remaining budget re-proving it.
+        if attempt >= 1 and len(remaining) == before:
+            _err(f"attempt {attempt} completed no targets at all -- all {len(remaining)} failed "
+                 f"again in isolation: {[t.stem for t in remaining]}. The failure is reproducible, "
+                 f"so further identical retries are not attempted. Read the newest per-target log "
+                 f"under {campaign_dir} for the real error before re-running.")
             return
         attempt += 1
         if attempt > max_retries:
@@ -2286,17 +2405,38 @@ def _run_boltz_batch(pending: list, total_pending: int, manifest_len: int, compl
                       accelerator: str, campaign_dir: Path, mps_watermark: float, max_parallel_samples: int,
                       recycling_steps: int, sampling_steps: int, diffusion_samples: int,
                       diffusion_samples_affinity: int, sampling_steps_affinity: int,
-                      max_msa_seqs: int) -> None:
+                      max_msa_seqs: int, use_potentials: bool = True) -> None:
+    # Staging alone does not scope the run -- see _boltz_records_restricted_to. The
+    # records live under Boltz's internal results root (pred_dir's parent), not --out_dir.
+    with _boltz_records_restricted_to(pred_dir.parent, pending):
+        _run_boltz_batch_body(pending, total_pending, manifest_len, complete_len, yaml_dir, stage_dir,
+                               pred_dir, out_dir, workers, accelerator, campaign_dir, mps_watermark,
+                               max_parallel_samples, recycling_steps, sampling_steps, diffusion_samples,
+                               diffusion_samples_affinity, sampling_steps_affinity, max_msa_seqs,
+                               use_potentials)
+
+
+def _run_boltz_batch_body(pending: list, total_pending: int, manifest_len: int, complete_len: int,
+                      yaml_dir: Path, stage_dir: Path, pred_dir: Path, out_dir: Path, workers: int,
+                      accelerator: str, campaign_dir: Path, mps_watermark: float, max_parallel_samples: int,
+                      recycling_steps: int, sampling_steps: int, diffusion_samples: int,
+                      diffusion_samples_affinity: int, sampling_steps_affinity: int,
+                      max_msa_seqs: int, use_potentials: bool = True) -> None:
     _stage_targets(yaml_dir, pending, stage_dir)
     check_hidden_files(stage_dir)
 
     boltz_bin = _boltz_bin()
     cmd = [
         str(boltz_bin), "predict", str(stage_dir),
-        "--use_potentials", "--diffusion_samples", str(diffusion_samples), "--use_msa_server",
+        "--diffusion_samples", str(diffusion_samples), "--use_msa_server",
         "--num_workers", str(workers), "--accelerator", accelerator,
         "--out_dir", str(out_dir),
     ]
+    if use_potentials:
+        # FK steering plus the physical-guidance coordinate update. Boltz recommends it and
+        # it is on by default, but it is also a plausible source of a diffusion trajectory
+        # diverging to NaN, so it has to be switchable per campaign.
+        cmd.append("--use_potentials")
     optional_flags = {
         "--max_parallel_samples": max_parallel_samples,
         "--recycling_steps": recycling_steps,
@@ -4594,8 +4734,10 @@ def _build_argparser() -> argparse.ArgumentParser:
         sp.add_argument("md_path", type=Path, help="path to boltz_input.md")
         sp.add_argument("--output-dir", type=Path, default=None, help="override settings.output_dir")
         sp.add_argument("--out-dir", type=Path, default=None, help="boltz predict --out_dir (default ./boltz_output beside the md)")
-        sp.add_argument("--workers", type=int, default=2, help="dataloader workers (Boltz's own default; "
-                        "each worker can duplicate large in-memory structures for big complexes)")
+        sp.add_argument("--workers", type=int, default=0, help="dataloader workers. Boltz's own default "
+                        "is 2, but each worker duplicates large in-memory structures, and on unified-memory "
+                        "hardware that is paid for out of the same pool the model is using -- 0 is what a "
+                        "26-target GPCR campaign (~1300 tokens/target) actually needed on a 64GB M1 Max")
         sp.add_argument("--accelerator", choices=["auto", "gpu", "cpu"], default="auto")
         sp.add_argument("--limit", type=int, default=None, help="cap how many pending targets `run` submits")
         sp.add_argument("--max-retries", type=int, default=2, help="if a target doesn't complete (e.g. an "
@@ -4607,7 +4749,9 @@ def _build_argparser() -> argparse.ArgumentParser:
         sp.add_argument("--mps-watermark", type=float, default=1.0, help="PYTORCH_MPS_HIGH_WATERMARK_RATIO -- "
                         "caps MPS memory at this x the device's recommended max, so an oversized complex fails "
                         "fast with a clear OOM instead of swap-thrashing (default 1.0; set higher to allow more "
-                        "overcommit, 0 to disable the cap entirely)")
+                        "overcommit, 0 to disable the cap entirely). This is a HARD allocation ceiling, not a "
+                        "swap-avoidance dial: 0.7 on a 64GB M1 Max caps allocation at 36GB against a ~34GB "
+                        "requirement and every batch OOMs immediately. Lower it only above a measured peak")
         sp.add_argument("--max-parallel-samples", type=int, default=1, help="boltz --max_parallel_samples "
                         "(default 1 here for Mac memory safety; Boltz's own default is unbounded)")
         sp.add_argument("--recycling-steps", type=int, default=None, help="boltz --recycling_steps passthrough "
@@ -4623,9 +4767,15 @@ def _build_argparser() -> argparse.ArgumentParser:
                         "--diffusion_samples_affinity passthrough (default: Boltz's own default of 5)")
         sp.add_argument("--sampling-steps-affinity", type=int, default=None, help="boltz "
                         "--sampling_steps_affinity passthrough (default: Boltz's own default of 200)")
-        sp.add_argument("--max-msa-seqs", type=int, default=None, help="boltz --max_msa_seqs passthrough "
-                        "(default: Boltz's own default of 8192)")
-        sp.add_argument("--memory-warn-tokens", type=int, default=1000, help="preflight WARNs if a target's "
+        sp.add_argument("--max-msa-seqs", type=int, default=4096, help="boltz --max_msa_seqs passthrough. "
+                        "Boltz's own default is 8192; 4096 halves the co-evolution feature block, which is one "
+                        "of the few levers that measurably cuts peak memory on large complexes. Pass 8192 to "
+                        "restore Boltz's default if you have the headroom")
+        sp.add_argument("--no-potentials", dest="use_potentials", action="store_false", default=True,
+                        help="disable boltz --use_potentials (FK steering and the physical-guidance "
+                             "coordinate update). On by default, matching Boltz's recommended setting; "
+                             "turning it off is worth trying when a target's diffusion diverges to NaN.")
+        sp.add_argument("--memory-warn-tokens", type=int, default=1500, help="preflight WARNs if a target's "
                         "total residue/atom count exceeds this (empirical heuristic, see preflight check)")
         sp.add_argument("--skip-interactions", action="store_true", help="skip cif2plip protein-ligand "
                         "interaction analysis during `analyze`, even if `setup-plip` has been run")
@@ -4698,7 +4848,7 @@ def main() -> None:
                   diffusion_samples=args.diffusion_samples,
                   diffusion_samples_affinity=args.diffusion_samples_affinity,
                   sampling_steps_affinity=args.sampling_steps_affinity, max_msa_seqs=args.max_msa_seqs,
-                  max_retries=args.max_retries)
+                  max_retries=args.max_retries, use_potentials=args.use_potentials)
 
     if args.command in ("analyze", "all"):
         df = analyze(output_dir, out_dir, campaign_dir, campaign,
