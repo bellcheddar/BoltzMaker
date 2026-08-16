@@ -2,7 +2,7 @@
 
 > **BoltzMaker: Boltz2 campaign-scale structure and affinity prediction, binding analysis, and run control, orchestrated end to end from a single spec file.**
 
-[![live](https://img.shields.io/badge/live-boltzmaker.mdeller.com-00d084?logo=icloud&logoColor=white)](https://boltzmaker.mdeller.com) ![python](https://img.shields.io/badge/python-3.12.3-3776AB?logo=python&logoColor=white) ![flask](https://img.shields.io/badge/flask-3.1.3-000000?logo=flask&logoColor=white) ![gunicorn](https://img.shields.io/badge/gunicorn-26.0.0-499848?logo=gunicorn&logoColor=white) ![nginx](https://img.shields.io/badge/nginx-1.24.0-009639?logo=nginx&logoColor=white) ![boltz](https://img.shields.io/badge/boltz-2-00897B) ![rdkit](https://img.shields.io/badge/RDKit-2026.03-00d084) ![gemmi](https://img.shields.io/badge/gemmi-0.6.5-8a3ffc) ![biopython](https://img.shields.io/badge/Biopython-1.84-1a6b8f) ![plip](https://img.shields.io/badge/PLIP-2025-9b51e0) ![pymol](https://img.shields.io/badge/PyMOL-3.1-ff6900) ![plotly](https://img.shields.io/badge/Plotly.js-2.35.2-3F4F75?logo=plotly&logoColor=white) ![3dmoljs](https://img.shields.io/badge/3Dmol.js-3D%20viewer-fcb900) ![molstar](https://img.shields.io/badge/Mol*-4.9.0-1a6b8f) ![pytest](https://img.shields.io/badge/pytest-347%20passing-0A9EDC?logo=pytest&logoColor=white) ![data](https://img.shields.io/badge/data-GPCRdb%20%C2%B7%20KLIFS%20%C2%B7%20PDBe-467FF7) ![licence](https://img.shields.io/badge/licence-MIT-467FF7) ![author](https://img.shields.io/badge/author-Marc%20C.%20Deller%2C%20D.Phil.-1C244B)
+[![live](https://img.shields.io/badge/live-boltzmaker.mdeller.com-00d084?logo=icloud&logoColor=white)](https://boltzmaker.mdeller.com) ![python](https://img.shields.io/badge/python-3.12.3-3776AB?logo=python&logoColor=white) ![flask](https://img.shields.io/badge/flask-3.1.3-000000?logo=flask&logoColor=white) ![gunicorn](https://img.shields.io/badge/gunicorn-26.0.0-499848?logo=gunicorn&logoColor=white) ![nginx](https://img.shields.io/badge/nginx-1.24.0-009639?logo=nginx&logoColor=white) ![boltz](https://img.shields.io/badge/boltz-2-00897B) ![rdkit](https://img.shields.io/badge/RDKit-2026.03-00d084) ![gemmi](https://img.shields.io/badge/gemmi-0.6.5-8a3ffc) ![biopython](https://img.shields.io/badge/Biopython-1.84-1a6b8f) ![plip](https://img.shields.io/badge/PLIP-2025-9b51e0) ![pymol](https://img.shields.io/badge/PyMOL-3.1-ff6900) ![plotly](https://img.shields.io/badge/Plotly.js-2.35.2-3F4F75?logo=plotly&logoColor=white) ![3dmoljs](https://img.shields.io/badge/3Dmol.js-3D%20viewer-fcb900) ![molstar](https://img.shields.io/badge/Mol*-4.9.0-1a6b8f) ![pytest](https://img.shields.io/badge/pytest-349%20passing-0A9EDC?logo=pytest&logoColor=white) ![data](https://img.shields.io/badge/data-GPCRdb%20%C2%B7%20KLIFS%20%C2%B7%20PDBe-467FF7) ![licence](https://img.shields.io/badge/licence-MIT-467FF7) ![author](https://img.shields.io/badge/author-Marc%20C.%20Deller%2C%20D.Phil.-1C244B)
 
 <table>
 <tr>
@@ -543,6 +543,15 @@ being killed, worth knowing about before running anything large. Mitigations bui
   `--strict`. The default was raised from 1000 because a GPCR + G-protein campaign runs at
   1307-1333 tokens, so 1000 warned on all 26 targets and separated nothing -- a warning
   that fires on everything carries no signal.
+- An out-of-memory skip actually frees memory. Boltz's three OOM handlers call
+  `torch.cuda.empty_cache()`, which is a **silent no-op** on a machine with no CUDA -- so
+  on Apple silicon a skip reclaimed nothing, the allocator kept its cached blocks, and the
+  next target inherited the same pressure. One campaign OOM-skipped 11 targets in a row
+  that way. `patches/apply_boltz_patches.py` adds `torch.mps.empty_cache()` alongside it.
+- Every completed target's peak RSS is recorded to `.boltzmaker_target_memory.jsonl`, so
+  the size check can eventually be derived from what this machine actually did rather than
+  a hand-set token threshold -- which on a real campaign separated nothing, every target
+  falling between 1307 and 1333 tokens whether it succeeded or OOM'd.
 - `run`'s progress bar shows live memory usage (RSS summed across the whole `boltz
   predict` process tree), and logs a warning if usage stays above 90% of system RAM for
   60+ seconds with no new completed target: a sign of thrashing, not genuine progress.
@@ -1132,6 +1141,18 @@ example campaigns.
   revert them.
 - [x] Add `--no-potentials` and default the run settings to the values a real 26-target
   GPCR campaign needed (`--workers 0`, `--max-msa-seqs 4096`, `--memory-warn-tokens 1500`).
+- [x] Make an OOM skip reclaim memory on Apple silicon (`torch.mps.empty_cache()`), and
+  record each completed target's peak RSS to `.boltzmaker_target_memory.jsonl`.
+- [ ] Classify the failure before retrying, and escalate along the axis that addresses it:
+  a memory ladder (isolation, then `--max-msa-seqs 2048`) and a NaN ladder
+  (`--no-potentials`, then fp32). Retrying with identical parameters is already known to be
+  worthless -- 20 invocations produced nothing. Any rung past the first changes the science,
+  so the rung used has to appear in the report. Do not vary `--mps-watermark` (a hard
+  ceiling, not a pressure valve), `--workers` (already at its floor of 0), or the seed (the
+  failing run was unseeded and still failed identically 20/20).
+- [ ] Re-derive `preflight`'s size check from the recorded peaks rather than
+  `--memory-warn-tokens`, so it reports "this is the size of a target that peaked at 61GB
+  here" instead of a threshold someone guessed.
 - [ ] Recover `GLP1R_orfo`, the one target whose diffusion diverges to all-NaN denoised
   coordinates: try `--no-potentials` first, then fp32 for that single target.
 - [ ] Work out whether the NaN divergence is bf16-specific by exposing Boltz's hardcoded

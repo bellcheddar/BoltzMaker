@@ -290,3 +290,32 @@ def test_long_phase_names_are_shortened_rather_than_truncated(bm):
     for full, short in bm._PHASE_SHORT.items():
         assert len(short) <= bm._LABEL_WIDTH, f"{short} does not fit the label column"
     assert bm._PHASE_SHORT["structure prediction"] != bm._PHASE_SHORT["affinity prediction"]
+
+
+# ---------------------------------------------------------------------------
+#  Measured per-target memory
+# ---------------------------------------------------------------------------
+#  Preflight's size check is a hand-set token threshold, and on a real campaign
+#  it separated nothing: every target sat between 1307 and 1333 tokens, and both
+#  the ones that completed and the ones that OOM'd were inside that band. These
+#  records are what a size check should eventually be derived from.
+
+def test_target_memory_is_recorded_one_json_line_per_target(bm, tmp_path):
+    bm._record_target_memory(tmp_path, "GLP1R_LIG1", 41.372, tokens=1307)
+    bm._record_target_memory(tmp_path, "GIPR_LIG4", 58.9, tokens=1310)
+
+    lines = (tmp_path / bm.TARGET_MEMORY_FILE).read_text().splitlines()
+    assert len(lines) == 2
+    first, second = (json.loads(l) for l in lines)
+    assert first["target"] == "GLP1R_LIG1"
+    assert first["peak_rss_gb"] == 41.37          # rounded, not truncated
+    assert first["tokens"] == 1307
+    assert first["total_ram_gb"] > 0              # so a record is comparable across machines
+    assert second["target"] == "GIPR_LIG4"
+
+
+def test_recording_memory_never_fails_a_run(bm, tmp_path):
+    """A measurement is diagnostics, not the product. An unwritable path must not
+    take down a campaign that is otherwise succeeding."""
+    unwritable = tmp_path / "does" / "not" / "exist"
+    bm._record_target_memory(unwritable, "GLP1R_LIG1", 41.0)   # must not raise

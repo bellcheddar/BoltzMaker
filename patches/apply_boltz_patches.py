@@ -146,6 +146,40 @@ PATCHES = [
         )
         manifest = Manifest([r for r in manifest.records if r.id not in missing_pre])""",
     ),
+    dict(
+        name="OOM skip frees MPS memory, not just CUDA",
+        relpath="boltz/model/models/boltz2.py",
+        marker="# BOLTZMAKER-PATCH: mps-flush-loop",
+        count=2,
+        old="""                    torch.cuda.empty_cache()
+                    gc.collect()
+                    return""",
+        new="""                    # BOLTZMAKER-PATCH: mps-flush-loop -- torch.cuda.empty_cache() is a
+                    # silent no-op without CUDA, so on Apple silicon an OOM skip freed
+                    # nothing: the allocator kept its cached blocks and the next target
+                    # inherited the same pressure. One campaign OOM-skipped 11 targets in a
+                    # row this way. Free the pool that is actually in use.
+                    torch.cuda.empty_cache()
+                    if torch.backends.mps.is_available():
+                        torch.mps.empty_cache()
+                    gc.collect()
+                    return""",
+    ),
+    dict(
+        name="predict_step's OOM skip frees MPS memory too",
+        relpath="boltz/model/models/boltz2.py",
+        marker="# BOLTZMAKER-PATCH: mps-flush-step",
+        old="""                print("| WARNING: ran out of memory, skipping batch")
+                torch.cuda.empty_cache()
+                gc.collect()""",
+        new="""                print("| WARNING: ran out of memory, skipping batch")
+                # BOLTZMAKER-PATCH: mps-flush-step -- see mps-flush-loop; without this an
+                # OOM skip on Apple silicon reclaims nothing at all.
+                torch.cuda.empty_cache()
+                if torch.backends.mps.is_available():
+                    torch.mps.empty_cache()
+                gc.collect()""",
+    ),
 ]
 
 
@@ -180,6 +214,12 @@ def main() -> int:
             print(f"  NOT APPLIED  {p['name']}  ({p['relpath']})")
             missing += 1
             continue
+        expected = p.get("count", 1)
+        if text.count(p["old"]) != expected:
+            print(f"  CANNOT APPLY  {p['name']}: anchor found {text.count(p['old'])}x, expected "
+                  f"{expected} -- boltz has changed, re-derive against {p['relpath']}")
+            missing += 1
+            continue
         if p["old"] not in text:
             print(f"  CANNOT APPLY  {p['name']}: anchor text not found -- boltz has changed, "
                   f"re-derive the patch against {p['relpath']}")
@@ -188,7 +228,7 @@ def main() -> int:
         backup = path.with_suffix(path.suffix + ".orig")
         if not backup.exists():
             shutil.copy2(path, backup)
-        path.write_text(text.replace(p["old"], p["new"], 1))
+        path.write_text(text.replace(p["old"], p["new"], expected))
         print(f"  applied  {p['name']}  (backup {backup.name})")
         applied += 1
 

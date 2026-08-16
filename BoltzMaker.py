@@ -2121,6 +2121,29 @@ def _memory_gauge(rss_gb: float, total_gb: float, width: int = 8) -> tuple:
     return ("\u2593" * filled) + ("\u2591" * (width - filled)), colour
 
 
+TARGET_MEMORY_FILE = ".boltzmaker_target_memory.jsonl"
+
+
+def _record_target_memory(campaign_dir: Path, stem: str, peak_gb: float, tokens: int = 0) -> None:
+    """Append one measured peak-RSS observation for a completed target.
+
+    Preflight's size check is a hand-set token threshold, and on a real campaign it
+    could not separate success from failure at all: every target sat between 1307 and
+    1333 tokens, and both the ones that completed and the ones that OOM'd were inside
+    that 26-token band. A measured peak, on this machine, for a target of this size is
+    the thing that would actually have predicted trouble -- so record it as we go and
+    let the check be derived from it rather than guessed.
+    """
+    try:
+        record = {"target": stem, "peak_rss_gb": round(peak_gb, 2), "tokens": tokens,
+                  "recorded": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                  "total_ram_gb": round(psutil.virtual_memory().total / 1e9, 1)}
+        with (campaign_dir / TARGET_MEMORY_FILE).open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(record) + "\n")
+    except OSError:
+        pass          # a measurement is never worth failing a run over
+
+
 MEMORY_THRASH_FRACTION = 0.90  # fraction of total system RAM considered "at risk of thrashing"
 MEMORY_THRASH_SECONDS = 60  # how long sustained high memory must persist before warning
 
@@ -2531,7 +2554,13 @@ def _run_boltz_batch_body(pending: list, total_pending: int, manifest_len: int, 
     # forks matter here) so the progress bar can show real usage, and so a repeat of the
     # thrashing incident gets a loud warning instead of Marc staring at a silent hang.
     total_ram_gb = psutil.virtual_memory().total / 1e9
-    mem_state = {"rss_gb": 0.0, "high_since": None}
+    # `segment_peak` is the running peak since the last target completed, so a grouped
+    # batch still yields one figure per target rather than a single number for the whole
+    # invocation. `seen` starts from what already exists so a resumed campaign does not
+    # re-attribute old targets to this run's memory profile.
+    mem_state = {"rss_gb": 0.0, "high_since": None, "peak_gb": 0.0, "segment_peak": 0.0}
+    seen_complete = {t.stem for t in pending
+                     if (pred_dir / t.stem / f"{t.stem}_model_0.cif").is_file()}
     stop_monitor = threading.Event()
 
     def _memory_monitor():
@@ -2545,6 +2574,15 @@ def _run_boltz_batch_body(pending: list, total_pending: int, manifest_len: int, 
                     except psutil.NoSuchProcess:
                         pass
                 mem_state["rss_gb"] = rss / 1e9
+                mem_state["peak_gb"] = max(mem_state["peak_gb"], mem_state["rss_gb"])
+                mem_state["segment_peak"] = max(mem_state["segment_peak"], mem_state["rss_gb"])
+                for t in pending:
+                    if t.stem in seen_complete:
+                        continue
+                    if (pred_dir / t.stem / f"{t.stem}_model_0.cif").is_file():
+                        seen_complete.add(t.stem)
+                        _record_target_memory(campaign_dir, t.stem, mem_state["segment_peak"])
+                        mem_state["segment_peak"] = mem_state["rss_gb"]
                 if rss > MEMORY_THRASH_FRACTION * psutil.virtual_memory().total:
                     if mem_state["high_since"] is None:
                         mem_state["high_since"] = time.time()
