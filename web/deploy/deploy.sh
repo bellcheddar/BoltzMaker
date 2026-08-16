@@ -41,6 +41,7 @@ PAYLOAD_BYTES=$(rsync -az --delete --dry-run --stats ${SSH_OPTS[@]+"${SSH_OPTS[@
   --exclude '__pycache__/' --exclude '*.pyc' --exclude '.git/' --exclude '.git' --exclude 'web/.env' \
   --exclude 'examples/*/boltz_output/' --exclude '.sse_cache/' --exclude '.plip_env/' \
   --exclude 'dist/' --exclude '.DS_Store' \
+  --exclude 'boltzmaker_web_test/' \
   --exclude '.pixi/' --exclude '*.command' --exclude '*.bmz' \
   --exclude 'boltz_output/' --exclude 'boltz_yamls/' --exclude 'boltz_cif/' \
   --exclude 'boltz_plip/' --exclude 'boltz_dashboard*' --exclude 'boltz_sse_*' \
@@ -62,6 +63,7 @@ rsync -az --delete ${SSH_OPTS[@]+"${SSH_OPTS[@]}"} \
   --exclude '__pycache__/' --exclude '*.pyc' --exclude '.git/' --exclude '.git' --exclude 'web/.env' \
   --exclude 'examples/*/boltz_output/' --exclude '.sse_cache/' --exclude '.plip_env/' \
   --exclude 'dist/' --exclude '.DS_Store' \
+  --exclude 'boltzmaker_web_test/' \
   --exclude '.pixi/' --exclude '*.command' --exclude '*.bmz' \
   --exclude 'boltz_output/' --exclude 'boltz_yamls/' --exclude 'boltz_cif/' \
   --exclude 'boltz_plip/' --exclude 'boltz_dashboard*' --exclude 'boltz_sse_*' \

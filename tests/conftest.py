@@ -40,7 +40,7 @@ def adrb2_apo_path():
 
 @pytest.fixture
 def adrb2_holo_cif_path():
-    return EXAMPLES / "adrb2_gs_panel" / "boltz_cif" / "ADRB2_ISO1_model_0.cif"
+    return SSE_FIXTURES / "ADRB2_ISO1_model_0.cif"
 
 
 @pytest.fixture
@@ -50,4 +50,4 @@ def egfr_apo_path():
 
 @pytest.fixture
 def egfr_holo_cif_path():
-    return EXAMPLES / "egfr_covalent" / "boltz_cif" / "EGFR_FRAG1_model_0.cif"
+    return SSE_FIXTURES / "EGFR_FRAG1_model_0.cif"

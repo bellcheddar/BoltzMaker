@@ -119,9 +119,14 @@ def packed_bmz(tmp_path, built_bundle):
 
 def test_blank_numeric_field_means_the_default_not_zero():
     """A cleared box and a deliberate 0 are different intents, and several of
-    these options take 0 as a real value."""
-    cfg = options.parse_form({"workers": "", "recycling_steps": ""})
-    assert cfg["workers"] == 2          # the registry default
+    these options take 0 as a real value.
+
+    Asserted against max_msa_seqs rather than workers: workers' registry default
+    is itself 0 now (unified-memory hardware pays for every dataloader worker out
+    of the model's own pool), so it can no longer tell "fell back to the default"
+    apart from "was read as zero" -- which is the entire point of this test."""
+    cfg = options.parse_form({"max_msa_seqs": "", "recycling_steps": ""})
+    assert cfg["max_msa_seqs"] == 4096     # the registry default
     assert cfg["recycling_steps"] is None  # omit the flag, defer to Boltz
 
 

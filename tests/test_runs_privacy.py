@@ -47,7 +47,13 @@ def archive(app):
     return runs_archive.Archive(pathlib.Path(app.config["RUNS_ROOT"]))
 
 
-def _prepare(client, name: str, private: bool):
+# Every current browser sends this on a same-site form POST; no scripted HTTP client
+# does. The archive gate requires it, so the tests that exercise archiving have to
+# present themselves as the browser they are standing in for.
+BROWSER = {"Sec-Fetch-Site": "same-origin"}
+
+
+def _prepare(client, name: str, private: bool, headers=None):
     form = MultiDict([
         ("campaign_name", name),
         ("protein_name[]", "T4L"), ("protein_sequence[]", SEQUENCE), ("protein_partners[]", ""),
@@ -55,7 +61,8 @@ def _prepare(client, name: str, private: bool):
     ])
     if private:
         form.add("keep_private", "1")
-    response = client.post("/auto/prepare", data=form)
+    response = client.post("/auto/prepare", data=form,
+                           headers=BROWSER if headers is None else headers)
     assert response.status_code == 200, response.data[:300]
     return response
 
@@ -123,7 +130,7 @@ def test_private_results_are_not_archived(client, archive, tmp_path):
     response = client.post(
         "/auto/analysis",
         data={"results_file": (io.BytesIO(packed.read_bytes()), "r.bmz")},
-        content_type="multipart/form-data")
+        content_type="multipart/form-data", headers=BROWSER)
     assert response.status_code == 200          # it still explores normally
     assert not [run for run in archive.list() if run.has_results]
 
@@ -135,7 +142,7 @@ def test_a_public_run_merges_onto_one_row(client, archive, tmp_path):
     packed = _pack(response, tmp_path)
     client.post("/auto/analysis",
                 data={"results_file": (io.BytesIO(packed.read_bytes()), "r.bmz")},
-                content_type="multipart/form-data")
+                content_type="multipart/form-data", headers=BROWSER)
     rows = [run for run in archive.list() if run.has_bundle or run.has_results]
     assert len(rows) == 1
     assert rows[0].has_bundle and rows[0].has_results
@@ -154,7 +161,7 @@ def test_archived_files_can_be_downloaded_and_explored(client, archive, tmp_path
     packed = _pack(response, tmp_path)
     client.post("/auto/analysis",
                 data={"results_file": (io.BytesIO(packed.read_bytes()), "r.bmz")},
-                content_type="multipart/form-data")
+                content_type="multipart/form-data", headers=BROWSER)
     key = [run for run in archive.list() if run.has_results][0].key
 
     assert client.get(f"/runs/{key}/bundle").status_code == 200
@@ -323,3 +330,41 @@ def test_destroying_asks_for_the_word_rather_than_a_click():
     block = js[js.index("function wireDestroy"):]
     assert "window.prompt" in block
     assert '"DESTROY"' in block
+
+
+# --- the archive gate itself -------------------------------------------------
+# Three bundles of a real, private campaign were published on /runs because the
+# archive trusted every caller to have ticked "Keep private". Automated form posts
+# made while testing against the live site had not. The gate now needs positive
+# evidence of a person submitting the form from this site, and fails closed.
+
+def test_a_scripted_post_is_never_archived(client, archive):
+    """No Sec-Fetch-Site and no Referer: exactly what a script sends."""
+    _prepare(client, "Scripted run", private=False, headers={})
+    assert archive.list() == []
+
+
+def test_a_client_can_opt_out_explicitly(client, archive):
+    _prepare(client, "Opted out", private=False,
+             headers={**BROWSER, "X-BoltzMaker-No-Archive": "1"})
+    assert archive.list() == []
+
+
+def test_a_cross_site_post_is_not_archived(client, archive):
+    _prepare(client, "Cross site", private=False, headers={"Sec-Fetch-Site": "cross-site"})
+    assert archive.list() == []
+
+
+def test_a_same_origin_referer_is_accepted_when_sec_fetch_is_absent(client, archive):
+    """Older browsers send no Sec-Fetch-Site; a same-origin Referer still counts."""
+    _prepare(client, "Referred run", private=False,
+             headers={"Referer": "http://localhost/auto/prepare"})
+    assert len(archive.list()) == 1
+
+
+def test_a_scripted_results_upload_is_not_archived(client, archive, tmp_path):
+    packed = _pack(_prepare(client, "Scripted results", private=False), tmp_path)
+    client.post("/auto/analysis",
+                data={"results_file": (io.BytesIO(packed.read_bytes()), "r.bmz")},
+                content_type="multipart/form-data")           # no browser headers
+    assert not [run for run in archive.list() if run.has_results]

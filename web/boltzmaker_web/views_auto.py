@@ -155,6 +155,36 @@ def overview():
 #  Step 1 -- Prepare
 # ===========================================================================
 
+def archiving_allowed() -> tuple[bool, str]:
+    """Whether this request may leave a row on the public /runs page.
+
+    The archive gate used to be a single check of the "Keep private" box, which
+    trusts every caller to have ticked it. Automated form submissions made while
+    testing against the live site did not, and three bundles of a real, private
+    campaign were published on /runs and the front page, downloadable by anyone.
+    Ticking a box is the wrong place for that guarantee to live.
+
+    So archiving now requires positive evidence that a person submitted the form
+    from this site in a browser, and fails closed otherwise. `Sec-Fetch-Site` is
+    sent by every current browser on a form POST and by no scripted HTTP client;
+    where it is absent we fall back to a same-origin Referer. A browser that
+    strips both still gets its bundle -- it simply is not listed, which is the
+    safe direction to fail in. `X-BoltzMaker-No-Archive` lets any client opt out
+    explicitly, which is what automated tests should send.
+    """
+    if request.headers.get("X-BoltzMaker-No-Archive"):
+        return False, "client sent X-BoltzMaker-No-Archive"
+    fetch_site = request.headers.get("Sec-Fetch-Site")
+    if fetch_site is not None:
+        if fetch_site == "same-origin":
+            return True, ""
+        return False, f"Sec-Fetch-Site: {fetch_site}"
+    referer = request.headers.get("Referer", "")
+    if referer.startswith(request.url_root):
+        return True, ""
+    return False, "no same-origin Sec-Fetch-Site or Referer (not a browser form submission)"
+
+
 def _render_prepare(**kwargs):
     return render_template(
         "auto_prepare.html", active="prepare",
@@ -251,7 +281,13 @@ def prepare():
     # to consult later and nothing to leak -- which is precisely why the marker
     # travels in the bundle rather than in a table on this server.
     run_key = runs_archive.new_private_key()
-    private = bool(cfg.get("keep_private"))
+    # Either the user asked for privacy, or the request cannot be shown to have come
+    # from a person using this site -- both mean nothing is archived, and the marker
+    # travels in the bundle so the results upload is not archived later either.
+    may_archive, why_not = archiving_allowed()
+    private = bool(cfg.get("keep_private")) or not may_archive
+    if not may_archive and not cfg.get("keep_private"):
+        current_app.logger.info("not archiving this run: %s", why_not)
 
     config_json = json.dumps({
         "campaign_name": campaign_name,
@@ -350,10 +386,14 @@ def analysis():
         bmz.extract(raw, extracted)
         loaded = bmz.load(extracted)
 
-        if loaded.private:
-            # Recognised as private from the file itself. Nothing is archived, and
-            # the upload is removed as soon as it has been read -- the explorer
-            # serves from the extracted copy, which the session sweep removes.
+        upload_may_archive, upload_why_not = archiving_allowed()
+        if loaded.private or not upload_may_archive:
+            # Recognised as private from the file itself, or not demonstrably a
+            # person uploading through this site. Nothing is archived, and the
+            # upload is removed as soon as it has been read -- the explorer serves
+            # from the extracted copy, which the session sweep removes.
+            if not loaded.private:
+                current_app.logger.info("not archiving this upload: %s", upload_why_not)
             raw.unlink(missing_ok=True)
         else:
             try:

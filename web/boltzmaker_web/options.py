@@ -44,9 +44,18 @@ class Option:
     minimum: float = None
     maximum: float = None
     group: str = "run"   # which fieldset it renders under
+    false_flag: str = "" # emitted when a bool is False, for options that default to on
 
 
 RUN_OPTIONS: tuple[Option, ...] = (
+    Option(
+        name="use_potentials", flag="", false_flag="--no-potentials", kind="bool", default=True,
+        label="Use potentials",
+        hint="Boltz's FK steering and physical-guidance coordinate update, which keep predicted "
+             "geometry physically sensible. On by default, matching Boltz's own recommendation. "
+             "Switch it off if a target's diffusion diverges (a NaN coordinate failure), since "
+             "the guidance update is one of the places that can happen.",
+    ),
     Option(
         name="accelerator", flag="--accelerator", kind="choice", default="auto",
         choices=("auto", "gpu", "cpu"),
@@ -55,23 +64,29 @@ RUN_OPTIONS: tuple[Option, ...] = (
              "slow enough that it is really only for checking a campaign runs at all.",
     ),
     Option(
-        name="workers", flag="--workers", kind="int", default=2, minimum=0, maximum=16,
+        name="workers", flag="--workers", kind="int", default=0, minimum=0, maximum=16,
         label="Data-loading workers",
-        hint="Matches Boltz's own default of 2. Lower it to 0 if you hit memory pressure on a Mac.",
+        hint="Boltz's own default is 2, but each worker duplicates large in-memory structures, and on "
+             "unified-memory hardware that comes out of the same pool the model is using. 0 is what a "
+             "26-target GPCR campaign (~1300 tokens per target) actually needed on a 64GB M1 Max.",
     ),
     Option(
         name="max_parallel_samples", flag="--max-parallel-samples", kind="int", default=1,
         minimum=1, maximum=8,
         label="Parallel diffusion samples",
         hint="How many diffusion samples Boltz holds in memory at once. 1 is the safe default on "
-             "unified-memory hardware; raising it multiplies peak memory.",
+             "unified-memory hardware; raising it multiplies peak memory and buys no throughput on an "
+             "M1 Max, where this stage is compute-bound rather than memory-bound.",
     ),
     Option(
         name="mps_watermark", flag="--mps-watermark", kind="float", default=1.0,
         minimum=0.1, maximum=2.0,
         label="MPS high-watermark ratio",
         hint="Apple Silicon only (PYTORCH_MPS_HIGH_WATERMARK_RATIO). Caps how much unified memory "
-             "PyTorch will claim before it errors instead of swap-thrashing. Ignored elsewhere.",
+             "PyTorch will claim before it errors instead of swap-thrashing. It is a hard allocation "
+             "ceiling, not a swap-avoidance dial: 0.7 on a 64GB M1 Max caps allocation at 36GB against a "
+             "~34GB requirement, and every batch then OOMs immediately. Lower it only above a measured "
+             "peak. Ignored elsewhere.",
     ),
     Option(
         name="recycling_steps", flag="--recycling-steps", kind="int", default=None,
@@ -108,11 +123,12 @@ RUN_OPTIONS: tuple[Option, ...] = (
         hint="Leave blank for Boltz's own default.",
     ),
     Option(
-        name="max_msa_seqs", flag="--max-msa-seqs", kind="int", default=None,
+        name="max_msa_seqs", flag="--max-msa-seqs", kind="int", default=4096,
         minimum=1, maximum=100000,
         label="Max MSA sequences",
-        hint="Leave blank for Boltz's own default. Lowering it is one of the few levers that "
-             "meaningfully cuts memory on very large complexes.",
+        hint="Boltz's own default is 8192. 4096 halves the co-evolution feature block and is one of the "
+             "few levers that measurably cuts peak memory on large complexes. Raise it back to 8192 if "
+             "you have the headroom -- it is a quality/memory trade, not a free win.",
     ),
     Option(
         name="max_retries", flag="--max-retries", kind="int", default=2, minimum=0, maximum=10,
@@ -121,11 +137,14 @@ RUN_OPTIONS: tuple[Option, ...] = (
              "target at a time. 0 disables retrying.",
     ),
     Option(
-        name="memory_warn_tokens", flag="--memory-warn-tokens", kind="int", default=1000,
+        name="memory_warn_tokens", flag="--memory-warn-tokens", kind="int", default=1500,
         minimum=100, maximum=100000,
         label="Preflight size-warning threshold",
         hint="Preflight warns when a target's combined residue/atom count exceeds this. It is a "
-             "warning, not a limit.",
+             "warning, not a limit -- it only blocks a run if you also tick \"Treat preflight "
+             "warnings as failures\". Raised from 1000 because a GPCR + G-protein campaign runs at "
+             "1307-1333 tokens, so 1000 warned on every target and separated nothing; 1500 still "
+             "catches a genuinely oversized complex, which is what the heuristic is for.",
     ),
     Option(
         name="limit", flag="--limit", kind="int", default=None, minimum=1, maximum=10000,
@@ -234,14 +253,18 @@ def to_cli_args(cfg: dict[str, Any]) -> list[str]:
     """
     args: list[str] = []
     for opt in RUN_OPTIONS:
-        if not opt.flag:      # web-only settings never reach the CLI
+        if not opt.flag and not opt.false_flag:   # web-only settings never reach the CLI
             continue
         value = cfg.get(opt.name, opt.default)
         if value is None:
             continue
         if opt.kind == "bool":
-            if value:
-                args.append(opt.flag)
+            # An option that is on by default carries no flag when it is on, and its
+            # false_flag when it is off -- writing the "on" flag explicitly would pin
+            # a default the CLI is entitled to change.
+            flag = opt.flag if value else opt.false_flag
+            if flag:
+                args.append(flag)
         else:
             args.extend([opt.flag, str(value)])
     return args
@@ -259,14 +282,15 @@ def to_cli_lines(cfg: dict[str, Any]) -> list[str]:
     """
     lines: list[str] = []
     for opt in RUN_OPTIONS:
-        if not opt.flag:      # web-only settings never reach the CLI
+        if not opt.flag and not opt.false_flag:   # web-only settings never reach the CLI
             continue
         value = cfg.get(opt.name, opt.default)
         if value is None:
             continue
         if opt.kind == "bool":
-            if value:
-                lines.append(opt.flag)
+            flag = opt.flag if value else opt.false_flag
+            if flag:
+                lines.append(flag)
         else:
             lines.append(f"{opt.flag} {value}")
     return lines
