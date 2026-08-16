@@ -69,6 +69,7 @@ def create_app() -> Flask:
 
     from .views_auto import bp as auto_bp
     from .views_auto import runs_bp
+    from .views_auto import share_bp
     from .views_new import bp as new_bp
     from .views_generate import bp as generate_bp
     from .views_preflight import bp as preflight_bp
@@ -76,6 +77,7 @@ def create_app() -> Flask:
 
     app.register_blueprint(auto_bp)
     app.register_blueprint(runs_bp)
+    app.register_blueprint(share_bp)
     app.register_blueprint(new_bp)
     app.register_blueprint(generate_bp)
     app.register_blueprint(preflight_bp)

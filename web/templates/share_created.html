@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="md-card" style="max-width:44rem;margin:2rem auto;">
+{% if error %}
+  <h2>Could not create the share</h2>
+  <div class="md-alert md-alert-error">{{ error }}</div>
+{% else %}
+  <h2>Share created</h2>
+  <p>A copy of this campaign's HTML report now lives on this server at the link below,
+    behind the password. It is <b>not</b> listed on the Runs page or anywhere else, and
+    it stays until you revoke it.</p>
+
+  {#  Shown exactly once. Only hashes are stored, so there is deliberately no way to
+      look either of these up again -- that is what makes a leaked share.json useless. #}
+  <div class="md-alert md-alert-warn"><b>Copy these now.</b> The password and the revoke
+    link are shown on this page and never again -- this server keeps only their hashes,
+    so neither can be recovered or reset.</div>
+
+  <div class="md-field">
+    <label for="share-url">Share link</label>
+    <input type="text" id="share-url" readonly value="{{ share_url }}"
+           onclick="this.select()">
+  </div>
+  <div class="md-field">
+    <label for="share-password">Password</label>
+    <input type="text" id="share-password" readonly value="{{ password }}"
+           class="mono" onclick="this.select()">
+  </div>
+  <p class="md-hint">Send the link and the password separately if you can: together in
+    one message, the password adds nothing that the unguessable link did not already.</p>
+
+  <div class="md-field">
+    <label for="revoke-url">Revoke link (keep private)</label>
+    <input type="text" id="revoke-url" readonly value="{{ revoke_url }}"
+           onclick="this.select()">
+  </div>
+  <p class="md-hint">Opening it asks for confirmation before anything is deleted. The
+    Destroy all data button on the report also removes every share made from this
+    campaign.</p>
+{% endif %}
+  <div class="md-button-row" style="margin-top:1.5rem;">
+    <a class="md-btn md-btn-secondary"
+       href="{{ url_for('auto.analysis_session', token=back_token) }}">Back to the report</a>
+  </div>
+</div>
+{% endblock %}

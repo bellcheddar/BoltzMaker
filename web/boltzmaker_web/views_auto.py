@@ -34,12 +34,13 @@ import time
 from pathlib import Path
 
 from flask import (
-    Blueprint, Response, abort, current_app, render_template, request, send_file, url_for,
+    Blueprint, Response, abort, current_app, redirect, render_template, request,
+    send_file, send_from_directory, url_for,
 )
 
 from . import (alphafold, apo, bundle, options, package,
                reports as report_panels, results as bmz,
-               runs as runs_archive, sequences)
+               runs as runs_archive, sequences, shares)
 from .app import REPO_ROOT, WEB_ROOT, new_scratch_dir, runs_root, session_root
 from .runner import BoltzMakerTimeout, extract_error_message, run_boltzmaker
 from .views_new import _parse_form
@@ -827,6 +828,9 @@ def destroy(token: str):
         key = ""
     if key:
         removed += runs_archive.Archive(runs_root(current_app)).forget(key)
+        # Scoped to this campaign's shares. Wiping the whole shares directory would
+        # take other campaigns' links down too, which this button does not promise.
+        removed += shares.forget_for_run(runs_root(current_app), key)
     shutil.rmtree(session, ignore_errors=True)
     removed.append("session")
     return Response(json.dumps({"status": "destroyed", "removed": removed}),
@@ -1151,6 +1155,113 @@ def summary_csv(token: str):
 # ===========================================================================
 #  Runs -- what was kept
 # ===========================================================================
+
+share_bp = Blueprint("share", __name__, url_prefix="/share")
+
+SHARE_COOKIE = "bm_share"
+
+
+@bp.route("/analysis/<token>/share", methods=["POST"])
+def share_create(token: str):
+    """Host this private campaign's HTML package behind a password.
+
+    POST only, for the same reason Destroy is: a prefetching browser or a
+    link-scanning mail client must not be able to publish somebody's private
+    campaign by following a link.
+    """
+    session = _session_dir(token)
+    if session is None:
+        return Response("session expired", status=404, mimetype="text/plain")
+    try:
+        loaded = bmz.load(session / "campaign")
+    except bmz.BmzError:
+        return Response("session unreadable", status=404, mimetype="text/plain")
+    if not loaded.private:
+        # A public campaign is already on /runs with an explore link; a second,
+        # password-gated copy of the same data would only be confusing.
+        return Response("this campaign is not private", status=400, mimetype="text/plain")
+
+    package = _package_bytes(session, token, loaded)
+    try:
+        share, password, revoke_token = shares.create(
+            runs_root(current_app), package, loaded.campaign_name or "campaign",
+            run_key=loaded.run_key or "")
+    except shares.ShareError as exc:
+        return render_template("share_created.html", active="analysis", error=str(exc),
+                               back_token=token), 507
+
+    return render_template(
+        "share_created.html", active="analysis", share=share, password=password,
+        share_url=url_for("share.view", token=share.token, _external=True),
+        revoke_url=url_for("share.revoke", token=share.token,
+                           revoke_token=revoke_token, _external=True),
+        back_token=token,
+    )
+
+
+def _authorised(token: str) -> bool:
+    return shares.cookie_valid(runs_root(current_app), token,
+                               request.cookies.get(f"{SHARE_COOKIE}_{token}", ""))
+
+
+@share_bp.route("/<token>", methods=["GET", "POST"])
+def view(token: str):
+    share = shares.get(runs_root(current_app), token)
+    if share is None:
+        abort(404)
+    if _authorised(token):
+        return redirect(url_for("share.page", token=token, filename="index.html"))
+
+    error = ""
+    if request.method == "POST":
+        if share.is_locked:
+            error = "Too many attempts. Try again in a few minutes."
+        elif shares.verify_password(runs_root(current_app), token, request.form.get("password", "")):
+            response = redirect(url_for("share.page", token=token, filename="index.html"))
+            value = shares.cookie_value(runs_root(current_app), token)
+            response.set_cookie(
+                f"{SHARE_COOKIE}_{token}", value or "", httponly=True, samesite="Lax",
+                secure=request.url.startswith("https://"), path=f"/share/{token}",
+            )
+            return response
+        else:
+            error = "That password is not right."
+    # The campaign name is deliberately not shown before the password is accepted.
+    return render_template("share_password.html", active=None, token=token, error=error), \
+        (200 if request.method == "GET" else 401)
+
+
+@share_bp.route("/<token>/page/<path:filename>")
+def page(token: str, filename: str):
+    if shares.get(runs_root(current_app), token) is None:
+        abort(404)
+    if not _authorised(token):
+        return redirect(url_for("share.view", token=token))
+    site = shares.site_dir(runs_root(current_app), token)
+    if site is None:
+        abort(404)
+    # send_from_directory refuses to escape the directory it is given, which is
+    # what keeps a crafted filename from reading the rest of the disk.
+    return send_from_directory(site, filename)
+
+
+@share_bp.route("/<token>/revoke/<revoke_token>", methods=["GET", "POST"])
+def revoke(token: str, revoke_token: str):
+    """GET renders a confirmation; only POST deletes.
+
+    A revoke link ends up in mail clients and chat apps that fetch URLs to build
+    previews, and a GET that deletes would let one of them destroy the share
+    before its recipient ever saw it.
+    """
+    share = shares.get(runs_root(current_app), token)
+    if request.method == "GET":
+        return render_template("share_revoke.html", active=None, token=token,
+                               revoke_token=revoke_token, gone=share is None)
+    done = shares.revoke(runs_root(current_app), token, revoke_token)
+    return render_template("share_revoke.html", active=None, token=token,
+                           revoke_token=revoke_token, gone=True, done=done), \
+        (200 if done or share is None else 403)
+
 
 runs_bp = Blueprint("runs", __name__, url_prefix="/runs")
 

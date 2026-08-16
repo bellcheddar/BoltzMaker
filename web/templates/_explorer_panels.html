@@ -48,8 +48,16 @@
     <p><b>This campaign is marked private.</b> Nothing about it is listed on the Runs
       page and no bundle or results file is archived. What is on this server is this
       session, and it is here so this page can draw itself.</p>
+    <p class="md-hint">To show it to someone without publishing it, create a share link:
+      a copy of the HTML report hosted at an unguessable URL behind a password you pass
+      on separately. A share is still not listed anywhere, and it stays until you revoke
+      it.</p>
     <div class="md-button-row">
       <a class="md-btn md-btn-secondary" href="{{ url_for('auto.package_zip', token=token) }}">Download HTML package</a>
+      <form method="post" action="{{ url_for('auto.share_create', token=token) }}"
+            style="display:inline">
+        <button type="submit" class="md-btn md-btn-secondary">Create share link&hellip;</button>
+      </form>
       <button type="button" class="md-btn md-btn-destroy" id="destroy-all">Destroy all data</button>
     </div>
     <p class="md-hint" id="destroy-note" style="margin-bottom:0">Removes the extracted

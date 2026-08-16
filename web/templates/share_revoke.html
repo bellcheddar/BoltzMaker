@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="md-card" style="max-width:36rem;margin:3rem auto;">
+  {% if done %}
+    <h2>Share revoked</h2>
+    <p>The link and its files have been deleted from this server. Anyone holding the
+      URL and password now gets nothing.</p>
+  {% elif gone %}
+    <h2>Nothing to revoke</h2>
+    <p>This share does not exist, which means it was already revoked or destroyed.</p>
+  {% else %}
+    <h2>Revoke this share?</h2>
+    <p>This deletes the hosted report and its password from the server. The link stops
+      working immediately, for everyone, and it cannot be undone.</p>
+    {#  A revoke link ends up in mail clients and chat apps that fetch URLs to build
+        previews. If GET deleted, one of those would destroy the share before its
+        recipient ever opened it -- so the destructive step is a POST behind a button. #}
+    <form method="post">
+      <div class="md-button-row">
+        <button type="submit" class="md-btn md-btn-destroy">Revoke this share</button>
+      </div>
+    </form>
+  {% endif %}
+</div>
+{% endblock %}
