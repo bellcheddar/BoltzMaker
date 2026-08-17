@@ -47,13 +47,30 @@ class PDBeClient:
             data = resp.json()
             entry = data.get(pdb_id.lower(), {})
             domains = []
+            skipped = 0
             for pfam_id, info in entry.get("Pfam", {}).items():
                 label = info.get("name") or pfam_id
                 for m in info.get("mappings", []):
-                    domains.append([m["start"]["author_residue_number"], m["end"]["author_residue_number"],
-                                     label, m.get("chain_id")])
+                    start = m.get("start", {}).get("author_residue_number")
+                    end = m.get("end", {}).get("author_residue_number")
+                    # PDBe returns null here for a boundary residue that is not
+                    # observed in the deposited model, which is common and not an
+                    # error. It used to be taken at face value and handed to
+                    # range(), so one such mapping raised "'NoneType' object cannot
+                    # be interpreted as an integer" and lost *every* domain for the
+                    # structure -- 3 of 6 mappings for 7dty are like this, including
+                    # the receptor's own PF02793, which is why GIPR ended up with no
+                    # motifs at all and compare-sse had nothing to compare.
+                    if start is None or end is None:
+                        skipped += 1
+                        continue
+                    domains.append([start, end, label, m.get("chain_id")])
             if not domains:
-                raise ValueError(f"no Pfam mappings found for '{pdb_id}'")
+                raise ValueError(f"no usable Pfam mappings found for '{pdb_id}' "
+                                 f"({skipped} skipped for unobserved boundary residues)")
+            if skipped:
+                print(f"BoltzMaker: note: skipped {skipped} Pfam mapping(s) for '{pdb_id}' "
+                      "whose boundary residues are unobserved in the model")
             return domains
 
         result = cached_lookup(self.cache_dir, key, fetch, refresh=refresh)
@@ -108,6 +125,8 @@ class PfamFallbackAnnotator(MotifAnnotator):
         # far larger than this kind of chance noise (244 vs 13 residues in that test).
         motifs = []
         for start_resnum, end_resnum, label, _chain_id in domains:
+            if start_resnum is None or end_resnum is None:
+                continue          # a cache entry written before the fix above
             fam_positions = sorted({apo_to_fam[apo_resnum_to_pos[r]]
                                      for r in range(start_resnum, end_resnum + 1)
                                      if r in apo_resnum_to_pos and apo_resnum_to_pos[r] in apo_to_fam})

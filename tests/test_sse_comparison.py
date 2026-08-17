@@ -563,3 +563,36 @@ def test_sse_table_sorted_by_ligand_then_kind_then_motif():
         ("ISO1", "TM1", "helix"), ("ISO1", "ICL1", "loop"),
         ("PRO1", "TM1", "helix"), ("PRO1", "TM2", "helix"),
     ]
+
+
+# ---------------------------------------------------------------------------
+#  PDBe null boundary residues
+# ---------------------------------------------------------------------------
+#  PDBe returns null for author_residue_number when a domain's boundary residue
+#  is not observed in the deposited model. That is common, not an error: 3 of 6
+#  mappings for 7dty are like this, including the receptor's own PF02793. Taken
+#  at face value it reached range() as None and raised "'NoneType' object cannot
+#  be interpreted as an integer", losing EVERY domain for the structure -- which
+#  is how a real GIPR campaign ended up with no motifs and compare-sse produced
+#  nothing to compare.
+
+class _NullBoundaryPDBeClient:
+    """Mimics PDBe returning a null boundary alongside perfectly good domains."""
+
+    def lookup_domains(self, pdb_id, chain_id=None, refresh=False):
+        domains = [(None, 340, "WD40_Gbeta", "B"),      # unusable
+                   (None, None, "G-gamma", "G"),        # unusable
+                   (141, 398, "7tm_2", "A"),            # usable, and the one that matters
+                   (59, None, "HRM", "A")]              # unusable
+        return [d for d in domains if chain_id is None or d[3] == chain_id]
+
+
+def test_a_null_boundary_does_not_discard_the_usable_domains(adrb2_apo_path, adrb2_sequence):
+    """One unusable mapping must cost only itself."""
+    from sse_comparison.annotators.pfam import PfamFallbackAnnotator
+    ann = PfamFallbackAnnotator(client=_NullBoundaryPDBeClient())
+    motifs = ann.annotate(adrb2_sequence, pdb_id="7dty", structure_path=str(adrb2_apo_path))
+    # It must not raise, and the good domain must survive the bad ones.
+    names = {m.name for m in motifs}
+    assert "7tm_2" in names, f"the usable domain was lost; got {names}"
+    assert "G-gamma" not in names and "WD40_Gbeta" not in names
