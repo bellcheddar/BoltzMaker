@@ -276,3 +276,20 @@ def test_a_pocket_row_is_not_a_repeat_block(client):                      # noqa
     tpl = re.search(r'<template id="tpl-pocket">(.*?)</template>', body, re.S).group(1)
     assert "md-pocket-row" in tpl
     assert "md-repeat-block" not in tpl, "pocket rows must not claim the repeat-block class"
+
+
+def test_a_bundle_ships_and_applies_the_boltz_patches(client, monkeypatch):  # noqa: F811
+    """Every bundle solves a fresh environment, so the patches come back every time
+    unless the run script re-applies them. A campaign once ran unpatched for five
+    minutes before anyone noticed."""
+    seqs = __import__("json").loads((FIXTURES / "sequences.json").read_text())
+    form = _form()
+    form.setlist("protein_sequence[]", [seqs["GLP1R"]])
+    response = client.post("/auto/prepare", data=form, headers=BROWSER)
+    assert response.status_code == 200, response.data[:300]
+    members = bundle.unpack(response.data)
+    assert "patches/apply_boltz_patches.py" in members, sorted(members)[:12]
+    script = members["run_campaign.sh"].decode()
+    assert "patches/apply_boltz_patches.py" in script
+    # applied before the campaign, not after it
+    assert script.index("apply_boltz_patches.py") < script.index("BoltzMaker.py all")

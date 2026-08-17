@@ -64,7 +64,7 @@ REPO_FILES = ("BoltzMaker.py", "pixi.toml", "pixi.lock")
 # vendor/ is 4.9MB of third-party JavaScript and dominates the bundle size. It
 # is included anyway: the whole promise is a self-contained run, and without it
 # the offline dashboard cannot embed its own charts.
-REPO_DIRS = ("sse_comparison", "vendor")
+REPO_DIRS = ("sse_comparison", "vendor", "patches")
 
 # Never packed: compiled bytecode is per-interpreter, and the bundle's Python is
 # not necessarily the one that produced it.

@@ -133,6 +133,21 @@ run_step "installing plip and pdb-tools" pixi run postinstall
 # `|| true` because this is a warm-up, not a test: preflight is the thing that
 # reports on boltz, a few lines further down.
 run_step "warming the boltz CLI (compiles the torch stack, slow once)" pixi run boltz --help || true
+
+# Boltz ships with defects that cost a real campaign 14.5 hours for zero structures,
+# and every bundle solves a fresh environment, so they come back every time unless
+# they are re-applied here. The script is idempotent and keeps a .orig of each file,
+# so re-running this step on an already-patched environment is a no-op.
+#
+# Not fatal on failure: an unpatched boltz still predicts, it just loses the
+# containment that stops one target's numerical failure aborting every target queued
+# behind it, and on Apple silicon it loses the memory reclaim on an out-of-memory
+# skip and runs its fragile steps in bfloat16.
+if [ -f patches/apply_boltz_patches.py ]; then
+  run_step "patching boltz (containment, MPS memory, precision guards)" \
+    pixi run python3 patches/apply_boltz_patches.py || \
+    warn "boltz patches did not apply cleanly -- the campaign will still run; see preflight's boltz_patches row"
+fi
 ok "environment ready"
 
 # ---------------------------------------------------------------------------
