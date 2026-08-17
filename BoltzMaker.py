@@ -620,6 +620,10 @@ import plotly.io as pio
 class Settings:
     output_dir: str = "./boltz_yamls"
     predict_affinity: bool = False
+    # How far a ligand may sit from the named pocket contacts. Boltz's own default
+    # is 6.0; only emitted when a family actually has pocket contacts, so a campaign
+    # without them is unaffected.
+    pocket_distance: float = 6.0
 
 
 @dataclass
@@ -1262,6 +1266,16 @@ def parse_md(path: Path) -> Campaign:
     for record_type, name, fields, lineno in records:
         if record_type == "settings":
             settings.output_dir = fields.get("output folder", settings.output_dir)
+            raw_distance = fields.get("pocket distance", "").strip()
+            if raw_distance:
+                try:
+                    settings.pocket_distance = float(raw_distance)
+                except ValueError:
+                    raise CampaignError(
+                        f"Settings: 'Pocket distance: {raw_distance}' is not a number.")
+                if not 1.0 <= settings.pocket_distance <= 50.0:
+                    raise CampaignError(
+                        f"Settings: 'Pocket distance: {raw_distance}' is outside 1-50 A.")
             settings.predict_affinity = _parse_yesno(fields.get("predict affinity", ""), settings.predict_affinity)
         elif record_type == "partner":
             partners[name] = _build_partner_record(name, fields, lineno)
@@ -1360,7 +1374,12 @@ def _build_yaml_doc(fam: ProteinFamily, lig: object, campaign: Campaign) -> dict
         # [chain, residue_or_atom] pair (verified against the installed boltz 2.2.1
         # schema parser) -- there is no whole-chain-only shorthand, so a family with
         # no pocket_contacts gets no pocket constraint at all (unconstrained folding).
-        constraints.append({"pocket": {"binder": lig.id, "contacts": fam.pocket_contacts}})
+        pocket = {"binder": lig.id, "contacts": fam.pocket_contacts}
+        # Only written when it differs from Boltz's own default, so an existing
+        # campaign's YAML is byte-identical to what it was before this setting existed.
+        if campaign.settings.pocket_distance != 6.0:
+            pocket["max_distance"] = campaign.settings.pocket_distance
+        constraints.append({"pocket": pocket})
     for atom1, atom2 in (fam.bond_constraints or []):
         constraints.append({"bond": {"atom1": atom1, "atom2": atom2}})
     for entry in (fam.contact_constraints or []):
