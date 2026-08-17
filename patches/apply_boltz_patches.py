@@ -147,6 +147,90 @@ PATCHES = [
         manifest = Manifest([r for r in manifest.records if r.id not in missing_pre])""",
     ),
     dict(
+        name="steering: the diagnostic reporter itself",
+        relpath="boltz/model/modules/diffusionv2.py",
+        marker="# BOLTZMAKER-PATCH: nan-reporter",
+        old="""import boltz.model.layers.initialize as init""",
+        new="""# BOLTZMAKER-PATCH: nan-reporter -- says WHICH quantity went non-finite first and
+# how often it had to be repaired. A target sanitised at 2 steps of 200 is
+# essentially untouched; one sanitised at 150 had substantially synthetic steering
+# and its structure should be read with that in mind. Printing the count is what
+# makes that judgeable per target rather than a blanket caveat.
+_BM_NAN = {"count": 0, "first": None}
+
+
+def _bm_note(where, n, step_idx):
+    _BM_NAN["count"] += 1
+    if _BM_NAN["first"] is None:
+        _BM_NAN["first"] = where
+        print(f"| STEERING_NAN first non-finite in {where} at step {step_idx} "
+              f"({n} values) -- sanitised, steering continues", flush=True)
+    elif _BM_NAN["count"] % 25 == 0:
+        print(f"| STEERING_NAN sanitised {_BM_NAN['count']} times so far "
+              f"(latest {where}, step {step_idx})", flush=True)
+
+
+import boltz.model.layers.initialize as init""",
+    ),
+    dict(
+        name="steering: sanitise non-finite energies and say so",
+        relpath="boltz/model/modules/diffusionv2.py",
+        marker="# BOLTZMAKER-PATCH: steering-nan-guard",
+        old="""                    # Compute log G values
+                    if step_idx == 0:
+                        log_G = -1 * energy
+                    else:
+                        log_G = energy_traj[:, -2] - energy_traj[:, -1]""",
+        new="""                    # BOLTZMAKER-PATCH: steering-nan-guard -- log_G is a difference of
+                    # consecutive energies, so a steric clash that sends one to +inf makes
+                    # this inf - inf = NaN. That NaN reaches the softmax below, the
+                    # resampling weights, and finally the coordinates, which come back
+                    # entirely non-finite. It is deterministic (a clash is a property of
+                    # the structure, not of the noise), which is why it survived every
+                    # precision and MSA-depth change we tried, and why turning potentials
+                    # off was the only thing that helped.
+                    #
+                    # NaN becomes 0.0 -- an undefined energy change should leave a particle
+                    # neither favoured nor penalised -- and infinities become large finite
+                    # values so the ordering between particles is preserved. This branch
+                    # only runs when a value is ALREADY non-finite, so a trajectory that
+                    # never clashes is bit-identical to an unpatched run.
+                    if step_idx == 0:
+                        log_G = -1 * energy
+                    else:
+                        log_G = energy_traj[:, -2] - energy_traj[:, -1]
+                    if not torch.isfinite(log_G).all():
+                        _bm_note("log_G", int((~torch.isfinite(log_G)).sum()), step_idx)
+                        log_G = torch.nan_to_num(log_G, nan=0.0, posinf=1e6, neginf=-1e6)""",
+    ),
+    dict(
+        name="steering: fall back to uniform weights rather than NaN ones",
+        relpath="boltz/model/modules/diffusionv2.py",
+        marker="# BOLTZMAKER-PATCH: steering-weights-guard",
+        old="""                    resample_weights = F.softmax(
+                        (ll_difference + steering_args["fk_lambda"] * log_G).reshape(
+                            -1, steering_args["num_particles"]
+                        ),
+                        dim=1,
+                    )""",
+        new="""                    resample_weights = F.softmax(
+                        (ll_difference + steering_args["fk_lambda"] * log_G).reshape(
+                            -1, steering_args["num_particles"]
+                        ),
+                        dim=1,
+                    )
+                    # BOLTZMAKER-PATCH: steering-weights-guard -- second line of defence.
+                    # ll_difference divides by the noise variance, which shrinks towards the
+                    # end of sampling, so it can go non-finite even with the energies clean.
+                    # Uniform weights mean "no particle is preferred at this step", which
+                    # degrades that one step rather than destroying the target.
+                    if not torch.isfinite(resample_weights).all():
+                        _bm_note("resample_weights", int((~torch.isfinite(resample_weights)).sum()),
+                                 step_idx)
+                        resample_weights = torch.full_like(
+                            resample_weights, 1.0 / resample_weights.shape[-1])""",
+    ),
+    dict(
         name="report peak MPS memory per target",
         relpath="boltz/model/models/boltz2.py",
         marker="# BOLTZMAKER-PATCH: mps-peak",
