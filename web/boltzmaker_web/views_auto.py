@@ -230,10 +230,22 @@ def prepare():
         # up with protein_name[] even when a row is blank.
         # One entry per rendered ligand row; a <select> always posts, so these line up
         # with ligand_name[] even when a row is left blank.
-        pocket_pdbs = dict(zip(request.form.getlist("protein_name[]"),
-                               request.form.getlist("protein_pocket_pdb[]")))
-        pocket_choices = dict(zip(request.form.getlist("protein_name[]"),
-                                  request.form.getlist("protein_pocket_ligand[]")))
+        # Pocket rows repeat inside repeating protein rows, so each carries the
+        # ordinal of the protein it belongs to rather than relying on position.
+        # Names are read from the same ordinals so a blank protein row cannot shift
+        # a pocket onto the wrong protein.
+        row_names = request.form.getlist("protein_name[]")
+        pockets_by_protein: dict = {}
+        for owner, pdb_id, chosen in zip(request.form.getlist("pocket_owner[]"),
+                                         request.form.getlist("pocket_pdb[]"),
+                                         request.form.getlist("pocket_ligand[]")):
+            if not (pdb_id or "").strip() or not (chosen or "").strip():
+                continue
+            try:
+                name = row_names[int(owner)]
+            except (ValueError, IndexError):
+                continue
+            pockets_by_protein.setdefault(name, []).append((pdb_id.strip(), chosen.strip()))
     except WizardValidationError as exc:
         return _render_prepare(defaults=cfg, error=str(exc), form=request.form,
                                error_field=getattr(exc, 'field', ''))
@@ -272,69 +284,65 @@ def prepare():
                               "meaningless. Use a ligand-free structure here; the pocket comes "
                               "from a holo structure on the ligand rows.")
 
-    # Every site named anywhere in the campaign is run against every protein, so two
-    # proteins each naming one gives the full matrix: 7E14/V6G on GLP1R and 7RBT/41Y on
-    # GIPR yields four combinations per ligand plus a baseline each. Applying a site to
-    # a protein it was not solved on is a projection through a sequence alignment -- a
-    # hypothesis, not a reproduction, and worth saying so in the write-up.
+    # Each protein's pockets are the sites its ligands are run against, plus an
+    # unconstrained baseline. A site is applied to the protein that named it; when the
+    # reference was solved on a different protein the contacts are projected through a
+    # sequence alignment, which is a hypothesis rather than a reproduction and worth
+    # labelling as such in the write-up.
     if use_same_pocket:
-        sites = {}
+        seen_codes: dict = {}
         for protein in proteins:
-            pdb_id = (pocket_pdbs.get(protein.name) or "").strip()
-            chosen = (pocket_choices.get(protein.name) or "").strip()
-            if not pdb_id or not chosen:
-                continue
-            try:
-                data, extension = apo.fetch(pdb_id)
-            except apo.ApoFetchError as exc:
-                return _render_prepare(defaults=cfg, form=request.form,
-                                       error_field="protein_pocket_pdb[]",
-                                       error=f"{protein.name}: {exc}")
-            if extension != "cif":
-                return _render_prepare(
-                    defaults=cfg, form=request.form, error_field="protein_pocket_pdb[]",
-                    error=f"{protein.name}: {pdb_id.upper()} is only available in a format "
-                          "the pocket finder cannot read.")
-            text = data.decode("utf-8", errors="replace")
-            found = pocket_finder.ligand_candidates(text)
-            if not found:
-                return _render_prepare(
-                    defaults=cfg, form=request.form, error_field="protein_pocket_pdb[]",
-                    error=f"{protein.name}: {pdb_id.upper()} contains no ligand, so it is an "
-                          "apo structure. A pocket has to come from a holo one.")
-            candidate = next((c for c in found if c.key == chosen), None)
-            if candidate is None:
-                return _render_prepare(
-                    defaults=cfg, form=request.form, error_field="protein_pocket_ligand[]",
-                    error=f"{protein.name}: '{chosen}' is not a ligand in {pdb_id.upper()}. "
-                          "Re-pick it from the list.")
-            # Target stems are keyed by the ligand code, so two references contributing
-            # the same code would silently overwrite each other's targets.
-            if candidate.code in sites and sites[candidate.code][0] != pdb_id.upper():
-                return _render_prepare(
-                    defaults=cfg, form=request.form, error_field="protein_pocket_ligand[]",
-                    error=f"Two pocket references both use ligand {candidate.code} "
-                          f"({sites[candidate.code][0]} and {pdb_id.upper()}). Target names are "
-                          "keyed by that code, so they would collide. Pick different sites.")
-            protein.pocket_pdb, protein.pocket_ligand = pdb_id.upper(), candidate.code
-            sites[candidate.code] = (pdb_id.upper(), text, candidate)
+            for pdb_id, chosen in pockets_by_protein.get(protein.name, []):
+                try:
+                    data, extension = apo.fetch(pdb_id)
+                except apo.ApoFetchError as exc:
+                    return _render_prepare(defaults=cfg, form=request.form,
+                                           error_field="pocket_pdb[]",
+                                           error=f"{protein.name}: {exc}")
+                if extension != "cif":
+                    return _render_prepare(
+                        defaults=cfg, form=request.form, error_field="pocket_pdb[]",
+                        error=f"{protein.name}: {pdb_id.upper()} is only available in a format "
+                              "the pocket finder cannot read.")
+                text = data.decode("utf-8", errors="replace")
+                found = pocket_finder.ligand_candidates(text)
+                if not found:
+                    return _render_prepare(
+                        defaults=cfg, form=request.form, error_field="pocket_pdb[]",
+                        error=f"{protein.name}: {pdb_id.upper()} contains no ligand, so it is "
+                              "an apo structure. A pocket has to come from a holo one.")
+                candidate = next((c for c in found if c.key == chosen), None)
+                if candidate is None:
+                    return _render_prepare(
+                        defaults=cfg, form=request.form, error_field="pocket_ligand[]",
+                        error=f"{protein.name}: '{chosen}' is not a ligand in "
+                              f"{pdb_id.upper()}. Re-pick it from the list.")
+                # Target stems are keyed by the ligand code, so two references
+                # contributing the same code would overwrite each other's targets.
+                previous = seen_codes.get((protein.name, candidate.code))
+                if previous and previous != pdb_id.upper():
+                    return _render_prepare(
+                        defaults=cfg, form=request.form, error_field="pocket_ligand[]",
+                        error=f"{protein.name}: two pocket references both use ligand "
+                              f"{candidate.code} ({previous} and {pdb_id.upper()}). Target "
+                              "names are keyed by that code, so they would collide.")
+                seen_codes[(protein.name, candidate.code)] = pdb_id.upper()
 
-        for code, (pdb_id, text, candidate) in sorted(sites.items()):
-            placed = 0
-            for protein in proteins:
                 chain = pocket_finder.best_chain_for_sequence(text, protein.sequence)
                 if not chain:
-                    continue
+                    return _render_prepare(
+                        defaults=cfg, form=request.form, error_field="pocket_pdb[]",
+                        error=f"{protein.name}: no chain of {pdb_id.upper()} aligns to this "
+                              "protein, so its site cannot be placed here.")
                 contacts = pocket_finder.contact_residues(text, candidate, pocket_distance, chain)
                 positions = pocket_finder.map_to_sequence(text, chain, contacts, protein.sequence)
-                if positions:
-                    protein.pockets[code] = positions
-                    placed += 1
-            if not placed:
-                return _render_prepare(
-                    defaults=cfg, form=request.form, error_field="protein_pocket_pdb[]",
-                    error=f"{pdb_id} ligand {code}: no protein in this campaign aligns to any "
-                          "chain of that structure, so its site cannot be placed anywhere.")
+                if not positions:
+                    return _render_prepare(
+                        defaults=cfg, form=request.form, error_field="pocket_distance",
+                        error=f"{protein.name}: no residues lie within {pocket_distance:g} A of "
+                              f"{candidate.code} in {pdb_id.upper()}. Try a larger distance.")
+                protein.pockets[candidate.code] = positions
+                protein.pocket_pdb, protein.pocket_ligand = pdb_id.upper(), candidate.code
 
     try:
         md_text = assemble_boltz_input_md(predict_affinity, proteins, partners, ligands,

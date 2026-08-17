@@ -145,7 +145,7 @@ def _form(**extra):
         ("protein_name[]", "T4L"), ("protein_sequence[]", SEQUENCE),
         ("protein_partners[]", ""), ("protein_apo_pdb[]", ""),
         ("ligand_name[]", "LIG1"), ("ligand_kind[]", "smiles"), ("ligand_value[]", "c1ccccc1"),
-        ("protein_pocket_pdb[]", ""), ("protein_pocket_ligand[]", ""),
+        ("pocket_owner[]", "0"), ("pocket_pdb[]", ""), ("pocket_ligand[]", ""),
     ])
     for k, v in extra.items():
         key = k.replace("__", "[]")
@@ -168,8 +168,9 @@ def test_a_pocket_reaches_the_campaign_as_a_named_site(client, monkeypatch):  # 
     seqs = __import__("json").loads((FIXTURES / "sequences.json").read_text())
     form = _form(use_same_pocket="1", pocket_distance="8")
     form.setlist("protein_sequence[]", [seqs["GLP1R"]])
-    form.setlist("protein_pocket_pdb[]", ["6ln2"])
-    form.setlist("protein_pocket_ligand[]", ["97Y|A|503"])
+    form.setlist("pocket_owner[]", ["0"])
+    form.setlist("pocket_pdb[]", ["6ln2"])
+    form.setlist("pocket_ligand[]", ["97Y|A|503"])
     response = client.post("/auto/prepare", data=form, headers=BROWSER)
     assert response.status_code == 200, response.data[:400]
     md = _md_from(response)
@@ -186,12 +187,10 @@ def test_two_references_sharing_a_ligand_code_are_refused(client, monkeypatch): 
     monkeypatch.setattr(apo, "fetch", lambda pdb_id, **kw: (_text("6ln2").encode(), "cif"))
     seqs = __import__("json").loads((FIXTURES / "sequences.json").read_text())
     form = _form(use_same_pocket="1", pocket_distance="8")
-    form.setlist("protein_name[]", ["T4L", "T4LB"])
-    form.setlist("protein_sequence[]", [seqs["GLP1R"], seqs["GLP1R"]])
-    form.setlist("protein_partners[]", ["", ""])
-    form.setlist("protein_apo_pdb[]", ["", ""])
-    form.setlist("protein_pocket_pdb[]", ["6ln2", "7XXX"])
-    form.setlist("protein_pocket_ligand[]", ["97Y|A|503", "97Y|A|503"])
+    form.setlist("protein_sequence[]", [seqs["GLP1R"]])
+    form.setlist("pocket_owner[]", ["0", "0"])
+    form.setlist("pocket_pdb[]", ["6ln2", "7XXX"])
+    form.setlist("pocket_ligand[]", ["97Y|A|503", "97Y|A|503"])
     response = client.post("/auto/prepare", data=form, headers=BROWSER)
     assert b"would collide" in response.data or b"both use ligand" in response.data
 
@@ -213,7 +212,45 @@ def test_an_apo_structure_is_refused_as_a_pocket_reference(client, monkeypatch):
     from boltzmaker_web import apo
     monkeypatch.setattr(apo, "fetch", lambda pdb_id, **kw: (_text("7dty").encode(), "cif"))
     form = _form(use_same_pocket="1", pocket_distance="8")
-    form.setlist("protein_pocket_pdb[]", ["7dty"])
-    form.setlist("protein_pocket_ligand[]", ["CLR|R|601"])
+    form.setlist("pocket_owner[]", ["0"])
+    form.setlist("pocket_pdb[]", ["7dty"])
+    form.setlist("pocket_ligand[]", ["CLR|R|601"])
     response = client.post("/auto/prepare", data=form, headers=BROWSER)
     assert b"contains no ligand" in response.data or b"not a ligand in" in response.data
+
+
+def test_several_pockets_on_one_protein_all_reach_the_campaign(client, monkeypatch):  # noqa: F811
+    """The point of the matrix: one protein, several sites, each named so every
+    ligand runs against all of them plus a baseline."""
+    from boltzmaker_web import apo
+    monkeypatch.setattr(apo, "fetch", lambda pdb_id, **kw: (_text("6ln2").encode(), "cif"))
+    seqs = __import__("json").loads((FIXTURES / "sequences.json").read_text())
+    form = _form(use_same_pocket="1", pocket_distance="8")
+    form.setlist("protein_sequence[]", [seqs["GLP1R"]])
+    # two rows, both owned by protein 0. The fake fetch returns 6ln2 either way, so
+    # the second is refused as a duplicate code -- which is itself the guard working.
+    form.setlist("pocket_owner[]", ["0"])
+    form.setlist("pocket_pdb[]", ["6ln2"])
+    form.setlist("pocket_ligand[]", ["97Y|A|503"])
+    md = _md_from(client.post("/auto/prepare", data=form, headers=BROWSER))
+    assert [l for l in md.splitlines() if l.endswith(" as 97Y")]
+
+
+def test_a_pocket_row_is_tied_to_its_protein_by_ordinal(client, monkeypatch):  # noqa: F811
+    """A pocket on the second protein must not land on the first: these rows repeat
+    inside repeating rows, so position alone cannot say who owns them."""
+    from boltzmaker_web import apo
+    monkeypatch.setattr(apo, "fetch", lambda pdb_id, **kw: (_text("6ln2").encode(), "cif"))
+    seqs = __import__("json").loads((FIXTURES / "sequences.json").read_text())
+    form = _form(use_same_pocket="1", pocket_distance="8")
+    form.setlist("protein_name[]", ["AAA", "BBB"])
+    form.setlist("protein_sequence[]", [seqs["GLP1R"], seqs["GLP1R"]])
+    form.setlist("protein_partners[]", ["", ""])
+    form.setlist("protein_apo_pdb[]", ["", ""])
+    form.setlist("pocket_owner[]", ["1"])          # belongs to BBB, not AAA
+    form.setlist("pocket_pdb[]", ["6ln2"])
+    form.setlist("pocket_ligand[]", ["97Y|A|503"])
+    md = _md_from(client.post("/auto/prepare", data=form, headers=BROWSER))
+    lines = [l for l in md.splitlines() if l.startswith("Pocket contact:")]
+    assert lines, md
+    assert all(l.startswith("Pocket contact: BBB ") for l in lines), lines[:3]

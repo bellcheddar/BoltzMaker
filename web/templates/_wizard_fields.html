@@ -112,16 +112,14 @@
         combinations per ligand, plus an unconstrained baseline each. Applying a site to
         a protein it was not solved on is a projection through a sequence alignment, and
         a hypothesis rather than a reproduction.  #}
-    <div class="md-field md-pocket-field">
-      <label>Pocket reference PDB id (holo &mdash; optional)</label>
-      <input type="text" name="protein_pocket_pdb[]" maxlength="4" placeholder="e.g. 7E14" disabled>
-    </div>
-    <div class="md-field md-pocket-field">
-      <label>Pocket ligand</label>
-      <select name="protein_pocket_ligand[]" disabled>
-        <option value="">None &mdash; no pocket from this protein</option>
-      </select>
-      <p class="md-hint md-pocket-status">Tick <b>Use same pocket</b> in Settings to enable.</p>
+    <div class="md-pocket-field">
+      <label>Pocket references (holo &mdash; optional)</label>
+      <p class="md-hint">Each one is a site this protein's ligands are run against, plus an
+        unconstrained baseline. Add several to compare sites: a run is named after the
+        pocket's ligand, so 7E14/V6G and 7RBT/41Y give <code>&hellip;_V6G</code> and
+        <code>&hellip;_41Y</code> alongside the unconstrained one.</p>
+      <div class="md-pocket-rows"></div>
+      <button type="button" class="md-add-row-btn add-pocket" disabled>+ Add pocket reference</button>
     </div>
 
     {#  Website metadata, not a pipeline input: it names the entry whose AlphaFold
@@ -167,6 +165,28 @@
     <div class="md-field"><label>Other residue number (covalent bond / distance constraint only)</label><input type="text" name="constraint_residue2[]"></div>
     <div class="md-field"><label>Other atom name (covalent bond only)</label><input type="text" name="constraint_atom2[]"></div>
     <div class="md-field"><label>Max distance in Angstrom (distance constraint only, default 6.0)</label><input type="text" name="constraint_distance[]"></div>
+  </div>
+</template>
+
+{#  One pocket reference. `pocket_owner[]` carries the ordinal of the protein row it
+    sits in, stamped by wizard.js: these rows repeat inside a repeating row, so
+    position alone cannot say which protein a pocket belongs to once any row is
+    added or removed. Same reasoning as protein_apo_predict[] above.  #}
+<template id="tpl-pocket">
+  <div class="md-repeat-block md-pocket-row">
+    <button type="button" class="md-remove-row" aria-label="Remove">&times;</button>
+    <input type="hidden" name="pocket_owner[]" value="0">
+    <div class="md-field">
+      <label>Holo PDB id</label>
+      <input type="text" name="pocket_pdb[]" maxlength="4" placeholder="e.g. 7E14">
+    </div>
+    <div class="md-field">
+      <label>Pocket ligand</label>
+      <select name="pocket_ligand[]">
+        <option value="">Enter a PDB id to list its ligands</option>
+      </select>
+      <p class="md-hint md-pocket-status">Waters, ions, sugars and lipids are filtered out.</p>
+    </div>
   </div>
 </template>
 

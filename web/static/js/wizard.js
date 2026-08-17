@@ -247,85 +247,113 @@ var BoltzWizard = (function () {
   });
 })();
 
-/* "Use same pocket": list the ligands in each PROTEIN row's holo reference and let
-   the user pick which one names a site to test.
+/* "Use same pocket": repeatable pocket references on each protein row.
 
-   Every site named across all proteins is run against every protein, so two proteins
-   each naming one gives the full matrix. Waters, ions, buffers, sugars and lipids are
-   filtered server-side in pocket.py, so this file never has to know that cholesterol
-   is not a ligand -- and an empty list is a real answer that gets said out loud.  */
+   Each reference names a site the protein's ligands are run against, alongside an
+   unconstrained baseline. `pocket_owner[]` carries the ordinal of the protein row a
+   pocket sits in, restamped on every change and again on submit: these rows repeat
+   inside a repeating row, so position alone cannot say which protein a pocket belongs
+   to once any row is added or removed.
+
+   Waters, ions, buffers, sugars and lipids are filtered server-side in pocket.py, so
+   this file never has to know that cholesterol is not a ligand, and an empty list is a
+   real answer that gets said out loud.  */
 (function () {
   var LOOKUP = "/auto/pocket-ligands/";
   var toggle = document.getElementById("use-same-pocket");
   if (!toggle) return;
 
-  /* Enabled rather than revealed: hiding these made the feature invisible to anyone
-     who had not already found the checkbox, which is most people looking for it. */
-  function showHide() {
-    var on = toggle.checked;
-    var controls = document.querySelectorAll(
-      '.md-pocket-field input, .md-pocket-field select, .md-pocket-distance input');
-    for (var i = 0; i < controls.length; i++) controls[i].disabled = !on;
-    var notes = document.querySelectorAll(".md-pocket-status");
-    for (var k = 0; k < notes.length; k++) {
-      if (!on) notes[k].textContent = "Tick Use same pocket in Settings to enable.";
-      else if (/Tick /.test(notes[k].textContent))
-        notes[k].textContent = "Enter a holo PDB id above to list its ligands.";
-    }
-    if (on) {
-      var ids = document.querySelectorAll('input[name="protein_pocket_pdb[]"]');
-      for (var j = 0; j < ids.length; j++) if (ids[j].value.trim()) load(ids[j]);
+  function proteinRows() {
+    var c = document.getElementById("protein-rows");
+    return c ? c.querySelectorAll(".md-repeat-block") : [];
+  }
+
+  /* Ordinals are only meaningful at the moment they are read, so restamp rather than
+     trusting whatever a cloned row happened to carry. */
+  function restamp() {
+    var rows = proteinRows();
+    for (var i = 0; i < rows.length; i++) {
+      var owners = rows[i].querySelectorAll('input[name="pocket_owner[]"]');
+      for (var j = 0; j < owners.length; j++) owners[j].value = String(i);
     }
   }
 
-  function partsFor(input) {
-    var row = input.closest(".md-row") || input.parentNode.parentNode;
-    return {
-      select: row ? row.querySelector('select[name="protein_pocket_ligand[]"]') : null,
-      status: row ? row.querySelector(".md-pocket-status") : null
-    };
+  function setEnabled() {
+    var on = toggle.checked;
+    var dist = document.querySelector(".md-pocket-distance");
+    if (dist) dist.hidden = false;
+    var controls = document.querySelectorAll(
+      '.md-pocket-distance input, .add-pocket, .md-pocket-row input, .md-pocket-row select');
+    for (var i = 0; i < controls.length; i++) controls[i].disabled = !on;
   }
+
+  function statusOf(row) { return row.querySelector(".md-pocket-status"); }
 
   function load(input) {
-    var p = partsFor(input);
-    if (!p.select || !p.status) return;
+    var row = input.closest(".md-pocket-row");
+    if (!row) return;
+    var select = row.querySelector('select[name="pocket_ligand[]"]');
+    var status = statusOf(row);
     var id = input.value.trim();
-    if (!id) { p.status.textContent = "Enter a holo PDB id above to list its ligands."; return; }
-    p.status.textContent = "Looking up ligands in " + id.toUpperCase() + "\u2026";
+    if (!select || !status) return;
+    if (!id) { status.textContent = "Waters, ions, sugars and lipids are filtered out."; return; }
+    status.textContent = "Looking up ligands in " + id.toUpperCase() + "\u2026";
     fetch(LOOKUP + encodeURIComponent(id) + ".json")
       .then(function (r) { return r.json().then(function (d) { return { ok: r.ok, d: d }; }); })
       .then(function (res) {
-        while (p.select.options.length > 1) p.select.remove(1);
-        if (!res.ok) { p.status.textContent = res.d.error || "Lookup failed."; return; }
+        while (select.options.length > 1) select.remove(1);
+        if (!res.ok) { status.textContent = res.d.error || "Lookup failed."; return; }
         var ligands = res.d.ligands || [];
         if (!ligands.length) {
-          p.status.textContent = res.d.pdb_id + " has no ligand that could define a pocket "
-            + "\u2014 only waters, ions, sugars or lipids. That is an apo structure, not a "
-            + "holo one; pick a structure with this ligand bound.";
+          status.textContent = res.d.pdb_id + " has no ligand that could define a pocket "
+            + "\u2014 only waters, ions, sugars or lipids. That is an apo structure; a pocket "
+            + "needs a holo one.";
           return;
         }
         for (var i = 0; i < ligands.length; i++) {
           var o = document.createElement("option");
           o.value = ligands[i].key;
           o.textContent = ligands[i].label;
-          p.select.appendChild(o);
+          select.appendChild(o);
         }
-        p.select.selectedIndex = 1;      /* largest, which the endpoint sorts first */
-        p.status.textContent = ligands.length === 1
-          ? "One ligand found; its pocket will be used."
+        select.selectedIndex = 1;      /* largest, which the endpoint sorts first */
+        status.textContent = ligands.length === 1
+          ? "One ligand found; its site will be used."
           : ligands.length + " ligands found \u2014 the largest is selected.";
       })
-      .catch(function () { p.status.textContent = "Could not reach the server."; });
+      .catch(function () { status.textContent = "Could not reach the server."; });
   }
 
-  toggle.addEventListener("change", showHide);
+  document.addEventListener("click", function (event) {
+    var el = event.target;
+    if (!el || !el.matches) return;
+    if (el.matches(".add-pocket")) {
+      var host = el.closest(".md-repeat-block");
+      var container = host ? host.querySelector(".md-pocket-rows") : null;
+      var tpl = document.getElementById("tpl-pocket");
+      if (container && tpl) {
+        container.appendChild(tpl.content.cloneNode(true));
+        var added = container.lastElementChild;
+        var remove = added.querySelector(".md-remove-row");
+        if (remove) remove.addEventListener("click", function () {
+          added.parentNode.removeChild(added); restamp();
+        });
+        restamp(); setEnabled();
+      }
+    }
+    if (el.id === "add-protein") setTimeout(function () { restamp(); setEnabled(); }, 0);
+  });
+
   document.addEventListener("change", function (event) {
     var el = event.target;
-    if (!toggle.checked || !el || !el.matches) return;
-    if (el.matches('input[name="protein_pocket_pdb[]"]')) load(el);
+    if (!el || !el.matches) return;
+    if (el === toggle) setEnabled();
+    if (el.matches('input[name="pocket_pdb[]"]')) load(el);
   });
-  document.addEventListener("click", function (event) {
-    if (event.target && event.target.id === "add-protein") setTimeout(showHide, 0);
-  });
-  showHide();
+
+  /* Ordinals must be right at submit time above all. */
+  var form = document.querySelector("form");
+  if (form) form.addEventListener("submit", restamp);
+
+  restamp(); setEnabled();
 })();
