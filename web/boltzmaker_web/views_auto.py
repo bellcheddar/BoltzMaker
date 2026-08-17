@@ -228,8 +228,12 @@ def prepare():
                 field="pocket_distance")
         # One entry per rendered protein row; a <select> always posts, so these line
         # up with protein_name[] even when a row is blank.
-        pocket_choices = dict(zip(request.form.getlist("protein_name[]"),
-                                  request.form.getlist("protein_pocket_ligand[]")))
+        # One entry per rendered ligand row; a <select> always posts, so these line up
+        # with ligand_name[] even when a row is left blank.
+        pocket_pdbs = dict(zip(request.form.getlist("ligand_name[]"),
+                               request.form.getlist("ligand_pocket_pdb[]")))
+        pocket_choices = dict(zip(request.form.getlist("ligand_name[]"),
+                                  request.form.getlist("ligand_pocket_ligand[]")))
     except WizardValidationError as exc:
         return _render_prepare(defaults=cfg, error=str(exc), form=request.form,
                                error_field=getattr(exc, 'field', ''))
@@ -252,36 +256,72 @@ def prepare():
             extra_files[path] = data
             apo_paths[protein.name] = path
 
-            # Derive the pocket while the reference is already in hand. Keyed by
-            # protein NAME rather than row index: _parse_form drops blank rows, so
-            # zipping by position would silently attach one protein's pocket to
-            # another the moment a row is left empty.
-            chosen = pocket_choices.get(protein.name, "")
-            if use_same_pocket and chosen and extension == "cif":
-                text = data.decode("utf-8", errors="replace")
-                candidate = next((c for c in pocket_finder.ligand_candidates(text)
-                                  if c.key == chosen), None)
-                if candidate is None:
-                    return _render_prepare(
-                        defaults=cfg, form=request.form, error_field="protein_pocket_ligand[]",
-                        error=f"{protein.name}: '{chosen}' is not a ligand in "
-                              f"{protein.apo_pdb.upper()}. Re-pick it from the list.")
-                chain = pocket_finder.best_chain_for_sequence(text, protein.sequence)
-                if not chain:
+            # The apo reference is for compare-sse, which measures what changes
+            # between ligand-free and ligand-bound. A structure with a ligand in it is
+            # not apo, and comparing holo against holo measures nothing -- a real
+            # campaign ran for weeks with 6ln2 (a modulator+Fab complex) and 7dty
+            # (peptide-bound) as its "apo" references.
+            if extension == "cif":
+                bound = pocket_finder.ligand_candidates(data.decode("utf-8", errors="replace"))
+                if bound:
                     return _render_prepare(
                         defaults=cfg, form=request.form, error_field="protein_apo_pdb[]",
-                        error=f"{protein.name}: no chain in {protein.apo_pdb.upper()} matches "
-                              "this protein's sequence, so a pocket taken from it would be "
-                              "meaningless. Use a reference of this protein, or untick "
-                              "'Use same pocket'.")
+                        error=f"{protein.name}: {protein.apo_pdb.upper()} is not an apo "
+                              f"structure -- it contains {bound[0].code}. The apo reference is "
+                              "for the apo-vs-holo comparison, so a bound ligand makes it "
+                              "meaningless. Use a ligand-free structure here; the pocket comes "
+                              "from a holo structure on the ligand rows.")
+
+    # Each ligand's pocket comes from its own holo reference, applied to every protein
+    # in the campaign that the reference actually is. "Actually is" means a near-identity
+    # sequence match, not mere homology: GLP1R and GIPR are homologous enough to align,
+    # but their small-molecule sites share 3 residues out of ~60, so transferring one to
+    # the other would invent a pocket rather than reproduce one.
+    if use_same_pocket:
+        for ligand in ligands:
+            pdb_id = (pocket_pdbs.get(ligand.name) or "").strip()
+            chosen = (pocket_choices.get(ligand.name) or "").strip()
+            if not pdb_id or not chosen:
+                continue
+            try:
+                data, extension = apo.fetch(pdb_id)
+            except apo.ApoFetchError as exc:
+                return _render_prepare(defaults=cfg, form=request.form,
+                                       error_field="ligand_pocket_pdb[]",
+                                       error=f"{ligand.name}: {exc}")
+            if extension != "cif":
+                return _render_prepare(
+                    defaults=cfg, form=request.form, error_field="ligand_pocket_pdb[]",
+                    error=f"{ligand.name}: {pdb_id.upper()} is only available in a format "
+                          "the pocket finder cannot read.")
+            text = data.decode("utf-8", errors="replace")
+            found = pocket_finder.ligand_candidates(text)
+            if not found:
+                return _render_prepare(
+                    defaults=cfg, form=request.form, error_field="ligand_pocket_pdb[]",
+                    error=f"{ligand.name}: {pdb_id.upper()} contains no ligand, so it is an "
+                          "apo structure. A pocket has to come from a holo one.")
+            candidate = next((c for c in found if c.key == chosen), None)
+            if candidate is None:
+                return _render_prepare(
+                    defaults=cfg, form=request.form, error_field="ligand_pocket_ligand[]",
+                    error=f"{ligand.name}: '{chosen}' is not a ligand in {pdb_id.upper()}. "
+                          "Re-pick it from the list.")
+            ligand.pocket_pdb, ligand.pocket_ligand = pdb_id, candidate.code
+            for protein in proteins:
+                chain = pocket_finder.best_chain_for_sequence(text, protein.sequence)
+                if not chain:
+                    continue
                 contacts = pocket_finder.contact_residues(text, candidate, pocket_distance, chain)
-                protein.pocket_contacts = pocket_finder.map_to_sequence(
-                    text, chain, contacts, protein.sequence)
-                if not protein.pocket_contacts:
-                    return _render_prepare(
-                        defaults=cfg, form=request.form, error_field="pocket_distance",
-                        error=f"{protein.name}: no residues of chain {chain} lie within "
-                              f"{pocket_distance:g} A of {candidate.code}. Try a larger distance.")
+                positions = pocket_finder.map_to_sequence(text, chain, contacts, protein.sequence)
+                if positions:
+                    ligand.pocket_contacts[protein.name] = positions
+            if not ligand.pocket_contacts:
+                return _render_prepare(
+                    defaults=cfg, form=request.form, error_field="ligand_pocket_pdb[]",
+                    error=f"{ligand.name}: no protein in this campaign matches a chain of "
+                          f"{pdb_id.upper()}, so its pocket cannot be transferred. Use a "
+                          "structure of one of your own proteins.")
 
     try:
         md_text = assemble_boltz_input_md(predict_affinity, proteins, partners, ligands,

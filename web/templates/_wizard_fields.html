@@ -98,21 +98,13 @@
     <div class="md-field">
       <label>Apo structure PDB id (optional)</label>
       <input type="text" name="protein_apo_pdb[]" maxlength="4" placeholder="e.g. 2RH1">
-      <p class="md-hint">An experimental ligand-free structure of this protein, for the
-        apo-vs-holo comparison. mmCIF is used where the PDB has no legacy file, which is
-        the case for most recent cryo-EM entries.</p>
+      <p class="md-hint">An experimental <b>ligand-free</b> structure of this protein, used
+        only for the apo-vs-holo comparison &mdash; not for the pocket, which comes from a
+        holo structure on each ligand below. A structure with a bound ligand is not an apo
+        reference and will be flagged. mmCIF is used where the PDB has no legacy file, which
+        is the case for most recent cryo-EM entries.</p>
     </div>
-    {#  Populated by wizard.js from the PDB id above, via /auto/pocket-ligands. Waters,
-        ions, buffers, sugars and lipids are filtered out server-side, so a reference
-        whose only heteroatom is cholesterol offers nothing here rather than offering
-        the cholesterol -- which would pin every ligand into the lipid groove.  #}
-    <div class="md-field md-pocket-field" hidden>
-      <label>Pocket ligand (from the structure above)</label>
-      <select name="protein_pocket_ligand[]">
-        <option value="">None &mdash; fold without a pocket constraint</option>
-      </select>
-      <p class="md-hint md-pocket-status">Enter a PDB id above to list its ligands.</p>
-    </div>
+
     {#  Website metadata, not a pipeline input: it names the entry whose AlphaFold
         model the explorer can overlay on this protein's prediction. It travels in
         config.json rather than boltz_input.md, so BoltzMaker.py never has to know
@@ -178,6 +170,25 @@
       </select>
     </div>
     <div class="md-field"><label>Value</label><input type="text" name="ligand_value[]" placeholder="SMILES string or CCD code"></div>
+    {#  Per ligand, not per protein: a pocket is a property of the ligand-receptor
+        pair. Measured on GLP1R/GIPR, orforglipron's site on GLP1R and LSN1's site on
+        GIPR share 3 residues out of ~60 once projected onto each other, so one pocket
+        per receptor would force one chemotype into the wrong site.
+
+        This must be a HOLO structure -- one with this ligand, or a close analogue,
+        actually bound. The apo field on each protein is a different thing and is used
+        only for the apo-vs-holo comparison.  #}
+    <div class="md-field md-pocket-field" hidden>
+      <label>Pocket reference PDB id (holo &mdash; optional)</label>
+      <input type="text" name="ligand_pocket_pdb[]" maxlength="4" placeholder="e.g. 7E14">
+    </div>
+    <div class="md-field md-pocket-field" hidden>
+      <label>Pocket ligand</label>
+      <select name="ligand_pocket_ligand[]">
+        <option value="">None &mdash; fold this ligand without a pocket constraint</option>
+      </select>
+      <p class="md-hint md-pocket-status">Enter a holo PDB id above to list its ligands.</p>
+    </div>
   </div>
 </template>
 

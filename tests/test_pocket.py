@@ -131,3 +131,73 @@ def test_the_endpoint_reports_a_failed_download(client, monkeypatch):  # noqa: F
     response = client.get("/auto/pocket-ligands/6ln2.json")
     assert response.status_code == 502
     assert "6LN2" in response.get_json()["error"]
+
+
+# --- end to end through the Prepare form ------------------------------------
+
+from werkzeug.datastructures import MultiDict  # noqa: E402
+from test_runs_privacy import BROWSER, SEQUENCE, bundle  # noqa: E402,F401
+
+
+def _form(**extra):
+    form = MultiDict([
+        ("campaign_name", "Pocket test"),
+        ("protein_name[]", "T4L"), ("protein_sequence[]", SEQUENCE),
+        ("protein_partners[]", ""), ("protein_apo_pdb[]", ""),
+        ("ligand_name[]", "LIG1"), ("ligand_kind[]", "smiles"), ("ligand_value[]", "c1ccccc1"),
+        ("ligand_pocket_pdb[]", ""), ("ligand_pocket_ligand[]", ""),
+    ])
+    for k, v in extra.items():
+        key = k.replace("__", "[]")
+        if key in form:
+            form.setlist(key, [v])
+        else:
+            form.add(key, v)
+    return form
+
+
+def _md_from(response):
+    members = bundle.unpack(response.data)
+    return members["boltz_input.md"].decode()
+
+
+def test_a_ligands_pocket_reaches_the_campaign_scoped_to_that_ligand(client, monkeypatch):  # noqa: F811
+    from boltzmaker_web import apo, pocket as pk
+    monkeypatch.setattr(apo, "fetch", lambda pdb_id, **kw: (_text("6ln2").encode(), "cif"))
+    # pretend the campaign's protein IS 6ln2's receptor
+    seqs = __import__("json").loads((FIXTURES / "sequences.json").read_text())
+    form = _form(use_same_pocket="1", pocket_distance="8")
+    form.setlist("protein_sequence[]", [seqs["GLP1R"]])
+    form.setlist("ligand_pocket_pdb[]", ["6ln2"])
+    form.setlist("ligand_pocket_ligand[]", ["97Y|A|503"])
+    response = client.post("/auto/prepare", data=form, headers=BROWSER)
+    assert response.status_code == 200, response.data[:400]
+    md = _md_from(response)
+    assert "Pocket distance: 8" in md
+    lines = [l for l in md.splitlines() if l.startswith("Pocket contact:")]
+    assert lines, md
+    assert all(l.endswith(" for LIG1") for l in lines), lines[:3]
+    assert "# pocket from 6LN2 ligand 97Y" in md
+
+
+def test_an_apo_reference_with_a_ligand_in_it_is_refused(client, monkeypatch):   # noqa: F811
+    """6ln2 was used as an 'apo' reference for weeks; it is a modulator+Fab complex,
+    so the apo-vs-holo comparison was holo against holo."""
+    from boltzmaker_web import apo
+    monkeypatch.setattr(apo, "fetch", lambda pdb_id, **kw: (_text("6ln2").encode(), "cif"))
+    form = _form()
+    form.setlist("protein_apo_pdb[]", ["6ln2"])
+    response = client.post("/auto/prepare", data=form, headers=BROWSER)
+    assert b"not an apo structure" in response.data
+    assert b"97Y" in response.data
+
+
+def test_an_apo_structure_is_refused_as_a_pocket_reference(client, monkeypatch):  # noqa: F811
+    """Holo is enforced: 7dty has only cholesterol, so it cannot define a pocket."""
+    from boltzmaker_web import apo
+    monkeypatch.setattr(apo, "fetch", lambda pdb_id, **kw: (_text("7dty").encode(), "cif"))
+    form = _form(use_same_pocket="1", pocket_distance="8")
+    form.setlist("ligand_pocket_pdb[]", ["7dty"])
+    form.setlist("ligand_pocket_ligand[]", ["CLR|R|601"])
+    response = client.post("/auto/prepare", data=form, headers=BROWSER)
+    assert b"contains no ligand" in response.data or b"not a ligand in" in response.data

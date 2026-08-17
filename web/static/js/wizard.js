@@ -247,28 +247,27 @@ var BoltzWizard = (function () {
   });
 })();
 
-/* "Use same pocket": list the ligands in each protein's reference structure and
-   let the user pick which one defines the pocket.
+/* "Use same pocket": list the ligands in each LIGAND row's holo reference and let
+   the user pick which one defines that ligand's pocket.
 
-   The exclusion of waters, ions, buffers, sugars and lipids happens server-side in
-   pocket.py, so this file never has to know that cholesterol is not a ligand -- it
-   renders whatever the endpoint offers, and an empty list is a real answer that
-   gets said out loud rather than an empty dropdown.  */
+   Per ligand rather than per protein because a pocket belongs to the pair: measured
+   on GLP1R/GIPR, orforglipron's site on GLP1R and LSN1's site on GIPR share 3
+   residues out of ~60. Waters, ions, buffers, sugars and lipids are filtered
+   server-side in pocket.py, so this file never has to know that cholesterol is not a
+   ligand -- and an empty list is a real answer that gets said out loud.  */
 (function () {
   var LOOKUP = "/auto/pocket-ligands/";
   var toggle = document.getElementById("use-same-pocket");
   if (!toggle) return;
 
-  function distanceField() { return document.querySelector(".md-pocket-distance"); }
-
   function showHide() {
     var on = toggle.checked;
-    var dist = distanceField();
+    var dist = document.querySelector(".md-pocket-distance");
     if (dist) dist.hidden = !on;
     var fields = document.querySelectorAll(".md-pocket-field");
     for (var i = 0; i < fields.length; i++) fields[i].hidden = !on;
     if (on) {
-      var ids = document.querySelectorAll('input[name="protein_apo_pdb[]"]');
+      var ids = document.querySelectorAll('input[name="ligand_pocket_pdb[]"]');
       for (var j = 0; j < ids.length; j++) if (ids[j].value.trim()) load(ids[j]);
     }
   }
@@ -276,8 +275,7 @@ var BoltzWizard = (function () {
   function partsFor(input) {
     var row = input.closest(".md-row") || input.parentNode.parentNode;
     return {
-      field: row ? row.querySelector(".md-pocket-field") : null,
-      select: row ? row.querySelector('select[name="protein_pocket_ligand[]"]') : null,
+      select: row ? row.querySelector('select[name="ligand_pocket_ligand[]"]') : null,
       status: row ? row.querySelector(".md-pocket-status") : null
     };
   }
@@ -286,11 +284,8 @@ var BoltzWizard = (function () {
     var p = partsFor(input);
     if (!p.select || !p.status) return;
     var id = input.value.trim();
-    if (!id) {
-      p.status.textContent = "Enter a PDB id above to list its ligands.";
-      return;
-    }
-    p.status.textContent = "Looking up ligands in " + id.toUpperCase() + "…";
+    if (!id) { p.status.textContent = "Enter a holo PDB id above to list its ligands."; return; }
+    p.status.textContent = "Looking up ligands in " + id.toUpperCase() + "\u2026";
     fetch(LOOKUP + encodeURIComponent(id) + ".json")
       .then(function (r) { return r.json().then(function (d) { return { ok: r.ok, d: d }; }); })
       .then(function (res) {
@@ -298,9 +293,9 @@ var BoltzWizard = (function () {
         if (!res.ok) { p.status.textContent = res.d.error || "Lookup failed."; return; }
         var ligands = res.d.ligands || [];
         if (!ligands.length) {
-          p.status.textContent = res.d.pdb_id + " contains no ligand that could define a "
-            + "pocket — only waters, ions, sugars or lipids. Pick a different reference, "
-            + "or leave this protein unconstrained.";
+          p.status.textContent = res.d.pdb_id + " has no ligand that could define a pocket "
+            + "\u2014 only waters, ions, sugars or lipids. That is an apo structure, not a "
+            + "holo one; pick a structure with this ligand bound.";
           return;
         }
         for (var i = 0; i < ligands.length; i++) {
@@ -312,7 +307,7 @@ var BoltzWizard = (function () {
         p.select.selectedIndex = 1;      /* largest, which the endpoint sorts first */
         p.status.textContent = ligands.length === 1
           ? "One ligand found; its pocket will be used."
-          : ligands.length + " ligands found — the largest is selected.";
+          : ligands.length + " ligands found \u2014 the largest is selected.";
       })
       .catch(function () { p.status.textContent = "Could not reach the server."; });
   }
@@ -321,12 +316,10 @@ var BoltzWizard = (function () {
   document.addEventListener("change", function (event) {
     var el = event.target;
     if (!toggle.checked || !el || !el.matches) return;
-    if (el.matches('input[name="protein_apo_pdb[]"]')) load(el);
+    if (el.matches('input[name="ligand_pocket_pdb[]"]')) load(el);
   });
-  /* Rows are added dynamically, so a newly added protein starts hidden unless the
-     box is already ticked. */
   document.addEventListener("click", function (event) {
-    if (event.target && event.target.id === "add-protein") setTimeout(showHide, 0);
+    if (event.target && event.target.id === "add-ligand") setTimeout(showHide, 0);
   });
   showHide();
 })();
