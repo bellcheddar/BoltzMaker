@@ -264,3 +264,15 @@ def test_the_prepare_page_carries_a_run_summary(client):                  # noqa
                    "sum-pockets", "sum-apo", "sum-total"):
         assert anchor in body, anchor
     assert body.index("Run summary") < body.index("Build the bundle")
+
+
+def test_a_pocket_row_is_not_a_repeat_block(client):                      # noqa: F811
+    """form_state.js and the wizard both enumerate .md-repeat-block with a descendant
+    query. A nested pocket row carrying that class is read as another protein, which
+    restored a saved page with duplicate and empty proteins and stamped pockets onto
+    the wrong protein."""
+    import re
+    body = client.get("/auto/prepare").data.decode()
+    tpl = re.search(r'<template id="tpl-pocket">(.*?)</template>', body, re.S).group(1)
+    assert "md-pocket-row" in tpl
+    assert "md-repeat-block" not in tpl, "pocket rows must not claim the repeat-block class"

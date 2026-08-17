@@ -166,6 +166,17 @@ img, canvas { max-width: 100%; height: auto; }
 .md-repeat-block { border: 1px solid var(--md-border); border-radius: var(--md-radius); padding: 16px; margin-bottom: 12px; background: var(--md-bg-alt); position: relative; }
 .md-repeat-block .md-remove-row { position: absolute; top: 10px; right: 10px; background: none; border: none; color: var(--md-text-muted); cursor: pointer; font-size: 16px; line-height: 1; }
 .md-repeat-block .md-remove-row:hover { color: var(--md-accent-red); }
+/* Pocket rows repeat INSIDE a protein row. They deliberately do not carry
+   .md-repeat-block: form_state.js and the wizard both enumerate that class with a
+   descendant query, so a nested one is read as another protein -- which restored a
+   saved page with duplicate and empty proteins, and stamped pockets onto the wrong
+   protein. Same look, different hook. */
+.md-pocket-row { border: 1px solid var(--md-border); border-radius: var(--md-radius);
+                 padding: 12px; margin-bottom: 10px; position: relative; }
+.md-pocket-row .md-remove-row { position: absolute; top: 8px; right: 8px; background: none;
+                                border: none; font-size: 18px; line-height: 1; cursor: pointer;
+                                color: var(--md-text-muted); }
+.md-pocket-row .md-remove-row:hover { color: var(--md-accent-red); }
 .md-add-row-btn { background: none; border: 1px dashed var(--md-border); color: var(--md-primary); border-radius: var(--md-radius); padding: 8px 14px; cursor: pointer; font-size: 13px; width: 100%; text-align: center; }
 .md-add-row-btn:hover { border-color: var(--md-primary); background: var(--md-bg-alt); }
 

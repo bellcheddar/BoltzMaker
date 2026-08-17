@@ -263,9 +263,14 @@ var BoltzWizard = (function () {
   var toggle = document.getElementById("use-same-pocket");
   if (!toggle) return;
 
+  /* Direct children only. Pocket rows are themselves .md-repeat-block and are nested
+     inside protein rows, so a descendant query returns protein0, pocket0, protein1,
+     pocket1... -- the indices shift and every pocket ends up stamped with the wrong
+     owner. That put a pocket meant for the first protein onto the second in a real
+     campaign. */
   function proteinRows() {
     var c = document.getElementById("protein-rows");
-    return c ? c.querySelectorAll(".md-repeat-block") : [];
+    return c ? c.querySelectorAll(":scope > .md-repeat-block") : [];
   }
 
   /* Ordinals are only meaningful at the moment they are read, so restamp rather than
@@ -273,7 +278,10 @@ var BoltzWizard = (function () {
   function restamp() {
     var rows = proteinRows();
     for (var i = 0; i < rows.length; i++) {
-      var owners = rows[i].querySelectorAll('input[name="pocket_owner[]"]');
+      // Only this protein's own pocket container, so nothing can reach across rows.
+      var container = rows[i].querySelector(".md-pocket-rows");
+      if (!container) continue;
+      var owners = container.querySelectorAll('input[name="pocket_owner[]"]');
       for (var j = 0; j < owners.length; j++) owners[j].value = String(i);
     }
   }
@@ -419,7 +427,7 @@ var BoltzWizard = (function () {
 
   function recount() {
     if (!document.querySelector(".md-run-summary")) return;
-    var proteinRows = document.querySelectorAll("#protein-rows .md-repeat-block");
+    var proteinRows = document.querySelectorAll("#protein-rows > .md-repeat-block");
     var ligands = filled(fields("ligand_value[]"));
     var partners = filled(fields("partner_sequence[]"));
 
