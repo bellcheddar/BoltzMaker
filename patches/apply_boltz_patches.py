@@ -183,6 +183,53 @@ PATCHES = [
 ]
 
 
+AUTOCAST_RULES = [
+    ('with torch.autocast("cuda", enabled=False):',
+     'with torch.autocast("cuda", enabled=False), torch.autocast("mps", enabled=False):'),
+    ('with torch.amp.autocast("cuda", enabled=False):',
+     'with torch.amp.autocast("cuda", enabled=False), torch.amp.autocast("mps", enabled=False):'),
+]
+
+
+def apply_autocast_mps(sp: Path, check: bool) -> tuple[int, int]:
+    """Make every full-precision guard in boltz work off CUDA.
+
+    boltz wraps its numerically fragile operations -- triangular attention,
+    pairformer, attention, the distogram and confidence heads, the encoders and
+    the diffusion sampler itself -- in `torch.autocast("cuda", enabled=False)`,
+    because those steps overflow in reduced precision. The device type is
+    hardcoded, so on Apple silicon (where autocast runs with device_type "mps")
+    every one of those guards is inert and the fragile operations run in bfloat16
+    anyway. Measured on torch 2.10: inside an MPS bf16 autocast, a matmul under
+    boltz's own guard still returns bfloat16; adding an "mps" disable returns
+    float32, which is what the guard was written to guarantee.
+
+    Nesting a second context manager rather than rewriting the device is
+    deliberate: it is a mechanical, reviewable change, and it is a no-op on a
+    CUDA box, so a patched checkout still behaves identically where boltz is
+    normally run.
+    """
+    changed = files = 0
+    for path in sorted(sp.glob("boltz/**/*.py")):
+        if path.suffix != ".py" or path.name.endswith(".orig"):
+            continue
+        text = path.read_text()
+        new = text
+        for old, repl in AUTOCAST_RULES:
+            if old in new:
+                new = new.replace(old, repl)
+        if new == text:
+            continue
+        hits = sum(text.count(old) for old, _ in AUTOCAST_RULES)
+        files += 1
+        changed += hits
+        if not check:
+            backup = path.with_suffix(path.suffix + ".orig")
+            if not backup.exists():
+                shutil.copy2(path, backup)
+            path.write_text(new)
+    return changed, files
+
 def find_site_packages() -> Path:
     for p in sys.path:
         if p and (Path(p) / "boltz").is_dir():
@@ -230,6 +277,16 @@ def main() -> int:
             shutil.copy2(path, backup)
         path.write_text(text.replace(p["old"], p["new"], expected))
         print(f"  applied  {p['name']}  (backup {backup.name})")
+        applied += 1
+
+    hits, files = apply_autocast_mps(sp, args.check)
+    if hits:
+        verb = "would fix" if args.check else "fixed"
+        print(f"  {verb}  full-precision guards inert off CUDA: {hits} site(s) in {files} file(s)")
+        if args.check:
+            missing += 1
+    else:
+        print("  already applied  full-precision guards work off CUDA")
         applied += 1
 
     print(f"\n{applied} applied, {missing} outstanding  [{sp}]")
