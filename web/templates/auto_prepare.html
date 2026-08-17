@@ -64,6 +64,32 @@
   </div>
   {% endfor %}
 
+  {#  Filled in by wizard.js from the form as it stands, using the same fan-out rule
+      BoltzMaker applies: each protein runs every ligand once unconstrained, plus once
+      per pocket reference, and each ligand-free companion is a target in its own
+      right. The number that matters is Predictions -- it is what the run costs, and
+      it grows faster than people expect once pockets are added.  #}
+  <div class="md-card">
+    <h2>Run summary</h2>
+    <table class="md-check-table md-run-summary">
+      <tbody>
+        <tr><th>Proteins</th><td id="sum-proteins">0</td>
+            <td class="md-hint" id="sum-proteins-note"></td></tr>
+        <tr><th>Co-folded partners</th><td id="sum-partners">0</td>
+            <td class="md-hint">Chains folded alongside every protein.</td></tr>
+        <tr><th>Ligands</th><td id="sum-ligands">0</td>
+            <td class="md-hint">Each is run against every protein.</td></tr>
+        <tr><th>Pocket references</th><td id="sum-pockets">0</td>
+            <td class="md-hint" id="sum-pockets-note">No pocket constraint; ligands fold freely.</td></tr>
+        <tr><th>Ligand-free companions</th><td id="sum-apo">0</td>
+            <td class="md-hint">Predicted apo structures, for the apo-vs-holo comparison.</td></tr>
+        <tr class="md-run-summary-total">
+            <th>Predictions</th><td id="sum-total">0</td>
+            <td class="md-hint" id="sum-total-note"></td></tr>
+      </tbody>
+    </table>
+  </div>
+
   <div class="md-card">
     <h2>Build the bundle</h2>
     <p style="font-size:13px;color:var(--md-text-muted);margin-top:0">

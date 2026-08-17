@@ -254,3 +254,13 @@ def test_a_pocket_row_is_tied_to_its_protein_by_ordinal(client, monkeypatch):  #
     lines = [l for l in md.splitlines() if l.startswith("Pocket contact:")]
     assert lines, md
     assert all(l.startswith("Pocket contact: BBB ") for l in lines), lines[:3]
+
+
+def test_the_prepare_page_carries_a_run_summary(client):                  # noqa: F811
+    """The panel is filled in by JS, so the test guards the contract it reads:
+    the ids have to exist, and it has to sit above the build step."""
+    body = client.get("/auto/prepare").data.decode()
+    for anchor in ("md-run-summary", "sum-proteins", "sum-partners", "sum-ligands",
+                   "sum-pockets", "sum-apo", "sum-total"):
+        assert anchor in body, anchor
+    assert body.index("Run summary") < body.index("Build the bundle")

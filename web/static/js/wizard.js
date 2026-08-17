@@ -385,3 +385,82 @@ var BoltzWizard = (function () {
   sync();
   setTimeout(sync, 0);   /* after any restore that replaces rows */
 })();
+
+/* Run summary: what this form will actually cost, recomputed as it is edited.
+
+   The fan-out rule is BoltzMaker's own: each protein runs every ligand once
+   unconstrained, plus once per pocket reference on that protein, and each
+   ligand-free companion is a target in its own right. Predictions is the number
+   worth watching -- it is what the run costs, and adding a second pocket to two
+   proteins doubles it rather than adding two.  */
+(function () {
+  var table = document.querySelector(".md-run-summary");
+  if (!table) return;
+
+  function filled(nodes) {
+    var n = 0;
+    for (var i = 0; i < nodes.length; i++) if (nodes[i].value.trim()) n++;
+    return n;
+  }
+  function set(id, value) {
+    var el = document.getElementById(id);
+    if (el) el.textContent = value;
+  }
+
+  function recount() {
+    var proteinRows = document.querySelectorAll("#protein-rows .md-repeat-block");
+    var ligands = filled(document.querySelectorAll('input[name="ligand_value[]"]'));
+    var partners = filled(document.querySelectorAll('input[name="partner_sequence[]"]'));
+
+    var proteins = 0, apo = 0, pockets = 0, predictions = 0;
+    for (var i = 0; i < proteinRows.length; i++) {
+      var row = proteinRows[i];
+      var seq = row.querySelector('textarea[name="protein_sequence[]"], input[name="protein_sequence[]"]');
+      if (!seq || !seq.value.trim()) continue;         // a blank row is not a protein
+      proteins++;
+      var mine = 0;
+      var pdbs = row.querySelectorAll('input[name="pocket_pdb[]"]');
+      var codes = row.querySelectorAll('select[name="pocket_ligand[]"]');
+      for (var j = 0; j < pdbs.length; j++) {
+        if (pdbs[j].value.trim() && codes[j] && codes[j].value) mine++;
+      }
+      pockets += mine;
+      // one unconstrained baseline per ligand, plus one per pocket
+      predictions += ligands * (1 + mine);
+      var predictApo = row.querySelector('input[name="protein_apo_predict[]"]');
+      if (predictApo && predictApo.checked) { apo++; predictions++; }
+    }
+
+    set("sum-proteins", proteins);
+    set("sum-partners", partners);
+    set("sum-ligands", ligands);
+    set("sum-pockets", pockets);
+    set("sum-apo", apo);
+    set("sum-total", predictions);
+
+    var note = document.getElementById("sum-proteins-note");
+    if (note) note.textContent = partners
+      ? "Each is folded with the " + partners + " partner chain" + (partners === 1 ? "" : "s") + "."
+      : "Folded on their own.";
+    var pnote = document.getElementById("sum-pockets-note");
+    if (pnote) pnote.textContent = pockets
+      ? "Each ligand also runs once unconstrained, so a protein with " +
+        "N pockets gives N+1 runs per ligand."
+      : "No pocket constraint; ligands fold freely and may land anywhere.";
+    var tnote = document.getElementById("sum-total-note");
+    if (tnote) {
+      tnote.textContent = predictions
+        ? "Roughly " + Math.round(predictions * 50 / 60 * 10) / 10 + " h at ~50 min each on one GPU."
+        : "Add a protein and a ligand to see the count.";
+    }
+  }
+
+  document.addEventListener("input", recount);
+  document.addEventListener("change", recount);
+  document.addEventListener("click", function () { setTimeout(recount, 0); });
+  document.addEventListener("DOMContentLoaded", recount);
+  document.addEventListener("boltz:wizard-ready", recount);
+  document.addEventListener("boltz:form-changed", recount);
+  recount();
+  setTimeout(recount, 0);
+})();
