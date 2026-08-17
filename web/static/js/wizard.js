@@ -394,8 +394,11 @@ var BoltzWizard = (function () {
    worth watching -- it is what the run costs, and adding a second pocket to two
    proteins doubles it rather than adding two.  */
 (function () {
-  var table = document.querySelector(".md-run-summary");
-  if (!table) return;
+  /* No early return on a missing table. This file is loaded from the end of
+     _wizard_fields.html, which is included ABOVE the Run summary card, so at
+     script-execution time the panel has not been parsed yet -- bailing out here
+     meant no listeners were ever attached and the numbers never moved. Resolve it
+     lazily instead, and no-op until it exists. */
 
   function filled(nodes) {
     var n = 0;
@@ -408,6 +411,7 @@ var BoltzWizard = (function () {
   }
 
   function recount() {
+    if (!document.querySelector(".md-run-summary")) return;
     var proteinRows = document.querySelectorAll("#protein-rows .md-repeat-block");
     var ligands = filled(document.querySelectorAll('input[name="ligand_value[]"]'));
     var partners = filled(document.querySelectorAll('input[name="partner_sequence[]"]'));
