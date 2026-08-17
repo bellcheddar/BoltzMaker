@@ -573,6 +573,7 @@ _bootstrap_or_relaunch(sys.argv)
 import argparse
 import ast
 import base64
+import contextlib
 import html
 import io
 import json
@@ -619,6 +620,10 @@ import plotly.io as pio
 class Settings:
     output_dir: str = "./boltz_yamls"
     predict_affinity: bool = False
+    # How far a ligand may sit from the named pocket contacts. Boltz's own default
+    # is 6.0; only emitted when a family actually has pocket contacts, so a campaign
+    # without them is unaffected.
+    pocket_distance: float = 6.0
 
 
 @dataclass
@@ -637,6 +642,10 @@ class ProteinFamily:
     sequence: str
     partners: list = field(default_factory=list)
     pocket_contacts: object = None
+    # {code: [contact tokens]}. A protein may define several pockets; every ligand is
+    # then run against each, plus once unconstrained. Distinct from pocket_contacts,
+    # which is the older unnamed form and still means exactly one constrained target.
+    pockets: object = None
     ligands: object = None
     modifications: object = None
     cyclic: bool = False
@@ -660,6 +669,12 @@ class Ligand:
     ccd: object = None
     role: object = None  # optional "agonist" / "antagonist" -- purely for reporting
                            # (dashboard charts, compare-sse), never affects generate/run
+    # Pocket contacts scoped to THIS ligand, overriding the protein's. A pocket is
+    # not purely a property of the receptor: measured on GLP1R/GIPR, the site where
+    # orforglipron binds GLP1R (7E14) and the site where LSN1 binds GIPR (7RBT) share
+    # 3 residues out of ~60 once projected onto each other. One pocket per protein
+    # would force one of those chemotypes into the wrong site.
+    pocket_contacts: object = None
 
 
 @dataclass
@@ -702,7 +717,7 @@ _RECORD_START_RE = re.compile(r"^(Settings|Protein|Partner|Ligand)\s*:\s*(.*)$",
 _FIELD_RE = re.compile(r"^([A-Za-z][A-Za-z ]*?)\s*:\s*(.*)$")
 
 _RECORD_ALLOWED_FIELDS = {
-    "settings": {"output folder", "predict affinity"},
+    "settings": {"output folder", "predict affinity", "pocket distance"},
     "protein": {"sequence", "partners", "ligands", "modifications", "cyclic", "msa", "templates",
                 "apo structure", "apo chain", "family type", "group"},
     "partner": {"sequence", "type", "copies", "modifications", "cyclic", "msa"},
@@ -716,7 +731,18 @@ _ENDPOINT = r"(\w+)\s+residue\s+(\d+)(?:\s+atom\s+(\w+))?"
 _COVALENT_RE = re.compile(
     rf"^covalent bond:\s*(\w+)\s+residue\s+(\d+)\s+atom\s+(\w+)\s+to\s+(\w+)\s+residue\s+(\d+)\s+atom\s+(\w+)\s*$",
     re.IGNORECASE)
-_POCKET_RE = re.compile(rf"^pocket contact:\s*{_ENDPOINT}\s*$", re.IGNORECASE)
+# The optional "for <ligand>" scopes a pocket to one ligand instead of to every
+# ligand of the protein. Needed because a pocket is not purely a property of the
+# receptor: measured on GLP1R/GIPR, orforglipron's site on GLP1R and LSN1's site
+# on GIPR share 3 residues out of ~60 once projected onto each other.
+# "as CODE" names the pocket, so one protein can carry several and every ligand is
+# run against each of them plus an unconstrained baseline -- the matrix that answers
+# "where does this compound actually want to sit". "for LIGAND" instead scopes a
+# single pocket to one ligand.
+_POCKET_RE = re.compile(
+    rf"^pocket contact:\s*{_ENDPOINT}"
+    rf"(?:\s+for\s+(?P<lig>\S+))?(?:\s+as\s+(?P<code>[A-Za-z0-9_-]+))?\s*$",
+    re.IGNORECASE)
 _DISTANCE_RE = re.compile(
     rf"^distance constraint:\s*{_ENDPOINT}\s+to\s+{_ENDPOINT}(?:\s+within\s+([\d.]+)(?:\s+\w+)?)?\s*$",
     re.IGNORECASE)
@@ -770,9 +796,10 @@ def _match_statement(stripped: str, lineno: int):
         return {"type": "bond", "owner": c1, "atom1": [c1, int(r1), a1], "atom2": [c2, int(r2), a2], "line": lineno}
     m = _POCKET_RE.match(stripped)
     if m:
-        chain, res, atom = m.groups()
+        chain, res, atom = m.group(1), m.group(2), m.group(3)
         token = [chain, int(res), atom] if atom else [chain, int(res)]
-        return {"type": "pocket", "owner": chain, "token": token, "line": lineno}
+        return {"type": "pocket", "owner": chain, "token": token,
+                "ligand": m.group("lig"), "code": m.group("code"), "line": lineno}
     m = _DISTANCE_RE.match(stripped)
     if m:
         c1, r1, a1, c2, r2, a2, dist = m.groups()
@@ -855,7 +882,12 @@ def _build_family_record(name: str, fields: dict, partners: dict, statements: li
         if pid not in partners:
             raise MDParseError(f"protein '{name}' references unknown partner '{pid}' (line {lineno})")
     modifications = [_parse_modification_token(t) for t in _parse_csv(fields["modifications"])] if "modifications" in fields else None
-    pocket_contacts = [s["token"] for s in statements if s["type"] == "pocket"] or None
+    pocket_contacts = [s["token"] for s in statements
+                       if s["type"] == "pocket" and not s.get("code")] or None
+    pockets: dict = {}
+    for stmt in statements:
+        if stmt["type"] == "pocket" and stmt.get("code"):
+            pockets.setdefault(stmt["code"], []).append(stmt["token"])
     bond_constraints = [(s["atom1"], s["atom2"]) for s in statements if s["type"] == "bond"] or None
     contact_constraints = [s["entry"] for s in statements if s["type"] == "distance"] or None
     family_type = fields.get("family type", "auto").lower()
@@ -874,7 +906,7 @@ def _build_family_record(name: str, fields: dict, partners: dict, statements: li
         ligands = None
     return ProteinFamily(
         id=name, sequence=fields["sequence"], partners=partner_ids,
-        pocket_contacts=pocket_contacts, ligands=ligands,
+        pocket_contacts=pocket_contacts, pockets=(pockets or None), ligands=ligands,
         modifications=modifications, cyclic=_parse_yesno(fields.get("cyclic", ""), False), msa=fields.get("msa"),
         bond_constraints=bond_constraints, contact_constraints=contact_constraints,
         templates=_parse_csv(fields["templates"]) if "templates" in fields else None,
@@ -906,7 +938,7 @@ def _smiles_to_inchikey(smiles: str):
         return None
 
 
-def _build_ligand_record(name: str, fields: dict, lineno: int) -> Ligand:
+def _build_ligand_record(name: str, fields: dict, statements: list, lineno: int) -> Ligand:
     has_smiles, has_ccd = "smiles" in fields, "ccd" in fields
     if has_smiles == has_ccd:  # both True (ambiguous) or both False (missing)
         raise MDParseError(f"ligand '{name}' must specify exactly one of SMILES/CCD (line {lineno})")
@@ -915,7 +947,9 @@ def _build_ligand_record(name: str, fields: dict, lineno: int) -> Ligand:
     if role and role not in ("agonist", "antagonist"):
         raise MDParseError(f"ligand '{name}' has invalid Role '{role}' "
                             f"(expected agonist/antagonist, line {lineno})")
-    return Ligand(id=name, smiles=smiles, ccd=fields.get("ccd"), role=role)
+    pocket_contacts = [s["token"] for s in statements if s["type"] == "pocket"] or None
+    return Ligand(id=name, smiles=smiles, ccd=fields.get("ccd"), role=role,
+                  pocket_contacts=pocket_contacts)
 
 
 # ==========================================================================
@@ -1261,6 +1295,16 @@ def parse_md(path: Path) -> Campaign:
     for record_type, name, fields, lineno in records:
         if record_type == "settings":
             settings.output_dir = fields.get("output folder", settings.output_dir)
+            raw_distance = fields.get("pocket distance", "").strip()
+            if raw_distance:
+                try:
+                    settings.pocket_distance = float(raw_distance)
+                except ValueError:
+                    raise CampaignError(
+                        f"Settings: 'Pocket distance: {raw_distance}' is not a number.")
+                if not 1.0 <= settings.pocket_distance <= 50.0:
+                    raise CampaignError(
+                        f"Settings: 'Pocket distance: {raw_distance}' is outside 1-50 A.")
             settings.predict_affinity = _parse_yesno(fields.get("predict affinity", ""), settings.predict_affinity)
         elif record_type == "partner":
             partners[name] = _build_partner_record(name, fields, lineno)
@@ -1269,9 +1313,17 @@ def parse_md(path: Path) -> Campaign:
         elif record_type == "ligand":
             ligand_records.append((name, fields, lineno))
 
+    # A pocket written "... for LIG" belongs to that ligand, not to every ligand of
+    # the protein it names. Routed here rather than by which block it appeared in,
+    # because statements are extracted from the whole file before it is split into
+    # blocks, so there is no block to attribute them to.
     statements_by_owner: dict = {}
+    statements_by_ligand: dict = {}
     for stmt in statements:
-        statements_by_owner.setdefault(stmt["owner"], []).append(stmt)
+        if stmt.get("ligand"):
+            statements_by_ligand.setdefault(stmt["ligand"], []).append(stmt)
+        else:
+            statements_by_owner.setdefault(stmt["owner"], []).append(stmt)
 
     families, seen_fam = [], set()
     for name, fields, lineno in protein_records:
@@ -1290,8 +1342,12 @@ def parse_md(path: Path) -> Campaign:
         if name in seen_lig:
             raise MDParseError(f"duplicate ligand '{name}' (line {lineno})")
         seen_lig.add(name)
-        ligands.append(_build_ligand_record(name, fields, lineno))
+        ligands.append(_build_ligand_record(name, fields, statements_by_ligand.pop(name, []), lineno))
 
+    if statements_by_ligand:
+        lig, stmts = next(iter(statements_by_ligand.items()))
+        raise MDParseError(f"a pocket contact (line {stmts[0]['line']}) is written "
+                            f"'for {lig}', but no 'Ligand: {lig}' block exists")
     if not families:
         raise MDParseError("no 'Protein:' blocks found")
     if not ligands:
@@ -1308,14 +1364,30 @@ def _expand_targets(campaign: Campaign):
     targets = []
     for fam in campaign.families:
         if fam.ligands == []:  # explicit "Ligands: none" -- one ligand-free (apo) target
-            targets.append((fam, None))
+            targets.append((fam, None, None))
             continue
         ligand_ids = fam.ligands if fam.ligands else [l.id for l in campaign.ligands]
         for lig_id in ligand_ids:
             if lig_id not in ligand_by_id:
                 raise MDParseError(f"protein '{fam.id}' references unknown ligand '{lig_id}'")
-            targets.append((fam, ligand_by_id[lig_id]))
+            lig = ligand_by_id[lig_id]
+            if not fam.pockets:
+                # No named pockets: one target, exactly as before this existed.
+                targets.append((fam, lig, None))
+                continue
+            # Named pockets fan out: one target per pocket, plus an unconstrained
+            # baseline, so what the constraint changed is visible inside one campaign
+            # rather than by cross-referencing an older run with different settings.
+            targets.append((fam, lig, None))
+            for code in sorted(fam.pockets):
+                targets.append((fam, lig, code))
     return targets
+
+
+def _target_stem(fam, lig, code) -> str:
+    """protein_ligand, plus the pocket's ligand code when one is in use."""
+    stem = fam.id if lig is None else f"{fam.id}_{lig.id}"
+    return f"{stem}_{code}" if code else stem
 
 
 # Homo-oligomer copies: `id: [A, B]` on a *partner* shares one sequence across
@@ -1342,7 +1414,25 @@ def _ligand_entry(lig: Ligand) -> dict:
     return {"ligand": {key: value, "id": lig.id}}
 
 
-def _build_yaml_doc(fam: ProteinFamily, lig: object, campaign: Campaign) -> dict:
+def _pocket_for(fam, lig, code):
+    """Which contacts this target actually uses.
+
+    A named pocket wins (it is the thing being varied across the matrix), then a
+    ligand's own pocket, then the protein's unnamed one. None means unconstrained,
+    which is a real choice here rather than an absence: every ligand also gets a
+    baseline target so the effect of a constraint is visible within one campaign.
+    """
+    if code:
+        return (fam.pockets or {}).get(code)
+    if lig is not None and lig.pocket_contacts:
+        return lig.pocket_contacts
+    if fam.pockets:
+        return None          # the baseline target of a matrix campaign
+    return fam.pocket_contacts
+
+
+def _build_yaml_doc(fam: ProteinFamily, lig: object, campaign: Campaign,
+                     pocket_code: object = None) -> dict:
     # lig is None for a ligand-free (apo) target ("Ligands: none") -- no ligand entity,
     # no pocket/affinity binder (both are meaningless without a ligand to bind).
     sequences = [_chain_entry(fam.id, fam.sequence, "protein", fam.modifications, fam.cyclic, fam.msa)]
@@ -1354,12 +1444,21 @@ def _build_yaml_doc(fam: ProteinFamily, lig: object, campaign: Campaign) -> dict
     doc = {"sequences": sequences}
 
     constraints = []
-    if fam.pocket_contacts and lig is not None:
+    # A ligand's own pocket wins over the protein's: the ligand is what has an
+    # experimentally observed site, and two chemotypes on the same receptor can
+    # occupy different ones.
+    pocket_contacts = _pocket_for(fam, lig, pocket_code)
+    if pocket_contacts and lig is not None:
         # Boltz's pocket constraint requires every contact entry to be an explicit
         # [chain, residue_or_atom] pair (verified against the installed boltz 2.2.1
         # schema parser) -- there is no whole-chain-only shorthand, so a family with
         # no pocket_contacts gets no pocket constraint at all (unconstrained folding).
-        constraints.append({"pocket": {"binder": lig.id, "contacts": fam.pocket_contacts}})
+        pocket = {"binder": lig.id, "contacts": pocket_contacts}
+        # Only written when it differs from Boltz's own default, so an existing
+        # campaign's YAML is byte-identical to what it was before this setting existed.
+        if campaign.settings.pocket_distance != 6.0:
+            pocket["max_distance"] = campaign.settings.pocket_distance
+        constraints.append({"pocket": pocket})
     for atom1, atom2 in (fam.bond_constraints or []):
         constraints.append({"bond": {"atom1": atom1, "atom2": atom2}})
     for entry in (fam.contact_constraints or []):
@@ -1384,17 +1483,21 @@ def _build_yaml_doc(fam: ProteinFamily, lig: object, campaign: Campaign) -> dict
 def generate_yamls(campaign: Campaign, output_dir: Path) -> list:
     output_dir.mkdir(parents=True, exist_ok=True)
     manifest, seen = [], set()
-    for fam, lig in _expand_targets(campaign):
-        stem = f"{fam.id}_{lig.id}" if lig is not None else fam.id
+    for fam, lig, pocket_code in _expand_targets(campaign):
+        stem = _target_stem(fam, lig, pocket_code)
         if stem in seen:
             raise MDParseError(f"duplicate target filename '{stem}.yaml' -- check for duplicate family/ligand ids")
         seen.add(stem)
-        doc = _build_yaml_doc(fam, lig, campaign)
+        doc = _build_yaml_doc(fam, lig, campaign, pocket_code)
         with (output_dir / f"{stem}.yaml").open("w") as f:
             yaml.safe_dump(doc, f, sort_keys=False, default_flow_style=False)
         needs_affinity = campaign.settings.predict_affinity and lig is not None
         manifest.append(Target(stem=stem, family_id=fam.id, ligand_id=(lig.id if lig is not None else None),
-                                pocket_contacts_used=(fam.pocket_contacts if lig is not None else None),
+                                # same precedence as _build_yaml_doc: the ligand's own
+                                # pocket wins over the protein's.
+                                pocket_contacts_used=(
+                                    _pocket_for(fam, lig, pocket_code)
+                                    if lig is not None else None),
                                 needs_affinity=needs_affinity))
     with (output_dir / MANIFEST_FILENAME).open("w") as f:
         json.dump([asdict(t) for t in manifest], f, indent=2)
@@ -1807,6 +1910,31 @@ def check_plip_env() -> CheckResult:
                         f"skipped (optional; {fix} to enable)")
 
 
+def check_boltz_patches() -> CheckResult:
+    """Verify patches/apply_boltz_patches.py is applied to the installed boltz.
+
+    WARN rather than FAIL: an unpatched boltz still runs, it just loses the
+    containment that stops one target's numerical failure aborting every target
+    queued behind it. A `pip install -U boltz` silently reverts all three, and the
+    symptom -- a run that looks alive for hours while producing nothing -- is
+    expensive to diagnose from scratch, so it is worth a line in every preflight.
+    """
+    script = SCRIPT_DIR / "patches" / "apply_boltz_patches.py"
+    if not script.is_file():
+        return CheckResult("boltz_patches", "WARN", f"patch script not found at {script}")
+    try:
+        proc = subprocess.run([sys.executable, str(script), "--check"],
+                              capture_output=True, text=True, timeout=60)
+    except (OSError, subprocess.SubprocessError) as e:
+        return CheckResult("boltz_patches", "WARN", f"could not check boltz patches: {e}")
+    if proc.returncode == 0:
+        return CheckResult("boltz_patches", "PASS", "boltz numerical-failure patches applied")
+    outstanding = [l.strip() for l in proc.stdout.splitlines() if "NOT APPLIED" in l or "CANNOT" in l]
+    return CheckResult("boltz_patches", "WARN",
+                       f"{len(outstanding)} boltz patch(es) not applied -- one target's numerical "
+                       f"failure can abort the whole batch; run `python3 {script}`")
+
+
 def run_preflight(manifest: list, output_dir: Path, campaign: Campaign, md_path: Path, strict: bool = False,
                    memory_warn_tokens: int = 1000, json_output: bool = False) -> bool:
     results = [
@@ -1825,6 +1953,7 @@ def run_preflight(manifest: list, output_dir: Path, campaign: Campaign, md_path:
         check_hidden_files(output_dir),
         check_duplicate_targets(manifest),
         check_plip_env(),
+        check_boltz_patches(),
     ]
     worst = "PASS"
     for r in results:
@@ -1885,6 +2014,82 @@ def _stage_targets(yaml_dir: Path, targets: list, stage_dir: Path) -> None:
     for t in targets:
         src = (yaml_dir / f"{t.stem}.yaml").resolve()
         (stage_dir / f"{t.stem}.yaml").symlink_to(src)
+
+
+def _unpark_boltz_records(results_dir: Path) -> int:
+    """Restore any records parked by an earlier run that was killed mid-batch.
+
+    `results_dir` is Boltz's *internal* output root -- <out_dir>/boltz_results_<stage>,
+    the parent of `predictions` -- not the --out_dir we hand the CLI. Pointing this at
+    --out_dir finds no records/ directory and silently parks nothing, which looks
+    exactly like success.
+    """
+    records_dir = results_dir / "processed" / "records"
+    parked_dir = results_dir / "processed" / "records_parked"
+    if not parked_dir.is_dir():
+        return 0
+    records_dir.mkdir(parents=True, exist_ok=True)
+    restored = 0
+    for rec in parked_dir.glob("*.json"):
+        dest = records_dir / rec.name
+        if dest.exists():
+            rec.unlink()          # the live copy wins; the parked one is a stale duplicate
+        else:
+            rec.rename(dest)
+        restored += 1
+    with contextlib.suppress(OSError):
+        parked_dir.rmdir()
+    return restored
+
+
+@contextlib.contextmanager
+def _boltz_records_restricted_to(results_dir: Path, pending: list):
+    """Make Boltz's manifest match exactly the targets we staged.
+
+    Staging one YAML is not enough to make Boltz run one target. `boltz predict`
+    ignores the input dir once a target has been processed before: check_inputs()
+    filters the staged input out as "All inputs are already processed", then
+    rebuilds the manifest from *every* record in <out_dir>/processed/records/, and
+    predict iterates that manifest. So a supposedly isolated single-target retry
+    silently re-runs the whole campaign in one process -- which is how a run here
+    spent 14.5 hours and 20 invocations producing nothing: the first target in
+    manifest order raised, and the nine queued behind it were never attempted.
+    It is also what turns one missing pre_affinity_*.npz into a crash of the shared
+    affinity phase, because that phase iterates the same over-broad manifest.
+
+    Parking the other records for the duration makes the rebuilt manifest contain
+    only `pending`, so isolation is real and the affinity phase only ever asks for
+    files that this batch produced. Records are small JSON pointers -- the MSAs,
+    processed structures and predictions they refer to are untouched, so parking
+    costs nothing and is fully reversible.
+    """
+    records_dir = results_dir / "processed" / "records"
+    parked_dir = results_dir / "processed" / "records_parked"
+    _unpark_boltz_records(results_dir)  # recover from an earlier hard kill before parking again
+    if not records_dir.is_dir():
+        # Genuine on a first run (Boltz has processed nothing yet). If it happens on a
+        # resume, the path is wrong and scoping is silently inert -- hence the _info.
+        _info(f"no processed records yet at {records_dir} -- Boltz batch scoping not needed")
+        yield
+        return
+    keep = {t.stem for t in pending}
+    moved = []
+    try:
+        for rec in sorted(records_dir.glob("*.json")):
+            if rec.stem not in keep:
+                parked_dir.mkdir(parents=True, exist_ok=True)
+                dest = parked_dir / rec.name
+                rec.rename(dest)
+                moved.append((dest, rec))
+        _info(f"Boltz batch scoped to {len(keep)} target(s); {len(moved)} other record(s) "
+              f"parked for the duration.")
+        yield
+    finally:
+        for dest, orig in moved:
+            if dest.exists():
+                dest.rename(orig)
+        with contextlib.suppress(OSError):
+            parked_dir.rmdir()
 
 
 def resolve_accelerator(choice: str) -> str:
@@ -2016,6 +2221,29 @@ def _memory_gauge(rss_gb: float, total_gb: float, width: int = 8) -> tuple:
     else:
         colour = _RICH_GREEN
     return ("\u2593" * filled) + ("\u2591" * (width - filled)), colour
+
+
+TARGET_MEMORY_FILE = ".boltzmaker_target_memory.jsonl"
+
+
+def _record_target_memory(campaign_dir: Path, stem: str, peak_gb: float, tokens: int = 0) -> None:
+    """Append one measured peak-RSS observation for a completed target.
+
+    Preflight's size check is a hand-set token threshold, and on a real campaign it
+    could not separate success from failure at all: every target sat between 1307 and
+    1333 tokens, and both the ones that completed and the ones that OOM'd were inside
+    that 26-token band. A measured peak, on this machine, for a target of this size is
+    the thing that would actually have predicted trouble -- so record it as we go and
+    let the check be derived from it rather than guessed.
+    """
+    try:
+        record = {"target": stem, "peak_rss_gb": round(peak_gb, 2), "tokens": tokens,
+                  "recorded": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                  "total_ram_gb": round(psutil.virtual_memory().total / 1e9, 1)}
+        with (campaign_dir / TARGET_MEMORY_FILE).open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(record) + "\n")
+    except OSError:
+        pass          # a measurement is never worth failing a run over
 
 
 MEMORY_THRASH_FRACTION = 0.90  # fraction of total system RAM considered "at risk of thrashing"
@@ -2196,7 +2424,8 @@ def run_boltz(yaml_dir: Path, out_dir: Path, manifest: list, workers: int, accel
               mps_watermark: float = 1.0, max_parallel_samples: int = 1,
               recycling_steps: int = None, sampling_steps: int = None, diffusion_samples: int = 1,
               diffusion_samples_affinity: int = None, sampling_steps_affinity: int = None,
-              max_msa_seqs: int = None, max_retries: int = 2) -> None:
+              max_msa_seqs: int = None, max_retries: int = 2,
+              use_potentials: bool = True) -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
     stage_dir = yaml_dir / "_stage_run"
     pred_dir = _predictions_dir_for(out_dir, stage_dir.name)
@@ -2225,7 +2454,8 @@ def run_boltz(yaml_dir: Path, out_dir: Path, manifest: list, workers: int, accel
         _run_boltz_batch_with_retry(batch, len(pending), len(manifest), len(complete), yaml_dir, stage_dir,
                           pred_dir, out_dir, workers, accelerator, campaign_dir, mps_watermark,
                           max_parallel_samples, recycling_steps, sampling_steps, diffusion_samples,
-                          diffusion_samples_affinity, sampling_steps_affinity, max_msa_seqs, max_retries)
+                          diffusion_samples_affinity, sampling_steps_affinity, max_msa_seqs, max_retries,
+                          use_potentials)
 
 
 _RETRY_SETTLE_SECONDS = 15  # pause between attempts so the OS fully reclaims a crashed subprocess's memory
@@ -2236,7 +2466,8 @@ def _run_boltz_batch_with_retry(batch: list, total_pending: int, manifest_len: i
                                  accelerator: str, campaign_dir: Path, mps_watermark: float,
                                  max_parallel_samples: int, recycling_steps: int, sampling_steps: int,
                                  diffusion_samples: int, diffusion_samples_affinity: int,
-                                 sampling_steps_affinity: int, max_msa_seqs: int, max_retries: int) -> None:
+                                 sampling_steps_affinity: int, max_msa_seqs: int, max_retries: int,
+                                 use_potentials: bool = True) -> None:
     """Runs a batch, then automatically retries any target that didn't complete.
 
     A real 4-target cascade on `5ht2_gq_panel` showed why this matters: an OOM during
@@ -2257,7 +2488,8 @@ def _run_boltz_batch_with_retry(batch: list, total_pending: int, manifest_len: i
             _run_boltz_batch(remaining, total_pending, manifest_len, complete_len, yaml_dir, stage_dir,
                               pred_dir, out_dir, workers, accelerator, campaign_dir, mps_watermark,
                               max_parallel_samples, recycling_steps, sampling_steps, diffusion_samples,
-                              diffusion_samples_affinity, sampling_steps_affinity, max_msa_seqs)
+                              diffusion_samples_affinity, sampling_steps_affinity, max_msa_seqs,
+                              use_potentials)
         else:
             _step(f"retrying {len(remaining)} incomplete target(s) in isolation "
                   f"(attempt {attempt}/{max_retries}, one at a time, {_RETRY_SETTLE_SECONDS}s pause "
@@ -2267,10 +2499,22 @@ def _run_boltz_batch_with_retry(batch: list, total_pending: int, manifest_len: i
                 _run_boltz_batch([t], total_pending, manifest_len, complete_len, yaml_dir, stage_dir,
                                   pred_dir, out_dir, workers, accelerator, campaign_dir, mps_watermark,
                                   max_parallel_samples, recycling_steps, sampling_steps, diffusion_samples,
-                                  diffusion_samples_affinity, sampling_steps_affinity, max_msa_seqs)
+                                  diffusion_samples_affinity, sampling_steps_affinity, max_msa_seqs,
+                                  use_potentials)
 
+        before = len(remaining)
         remaining = [t for t in remaining if not _target_complete(pred_dir, t.stem, t.needs_affinity)]
         if not remaining:
+            return
+        # A retry pass that completes nothing has proved the failure is deterministic, so
+        # running the identical pass again just burns hours: 20 invocations over 14.5h once
+        # died on the same linalg.svd error in the same target and produced not one model.
+        # Stop and say so, rather than spending the remaining budget re-proving it.
+        if attempt >= 1 and len(remaining) == before:
+            _err(f"attempt {attempt} completed no targets at all -- all {len(remaining)} failed "
+                 f"again in isolation: {[t.stem for t in remaining]}. The failure is reproducible, "
+                 f"so further identical retries are not attempted. Read the newest per-target log "
+                 f"under {campaign_dir} for the real error before re-running.")
             return
         attempt += 1
         if attempt > max_retries:
@@ -2286,17 +2530,38 @@ def _run_boltz_batch(pending: list, total_pending: int, manifest_len: int, compl
                       accelerator: str, campaign_dir: Path, mps_watermark: float, max_parallel_samples: int,
                       recycling_steps: int, sampling_steps: int, diffusion_samples: int,
                       diffusion_samples_affinity: int, sampling_steps_affinity: int,
-                      max_msa_seqs: int) -> None:
+                      max_msa_seqs: int, use_potentials: bool = True) -> None:
+    # Staging alone does not scope the run -- see _boltz_records_restricted_to. The
+    # records live under Boltz's internal results root (pred_dir's parent), not --out_dir.
+    with _boltz_records_restricted_to(pred_dir.parent, pending):
+        _run_boltz_batch_body(pending, total_pending, manifest_len, complete_len, yaml_dir, stage_dir,
+                               pred_dir, out_dir, workers, accelerator, campaign_dir, mps_watermark,
+                               max_parallel_samples, recycling_steps, sampling_steps, diffusion_samples,
+                               diffusion_samples_affinity, sampling_steps_affinity, max_msa_seqs,
+                               use_potentials)
+
+
+def _run_boltz_batch_body(pending: list, total_pending: int, manifest_len: int, complete_len: int,
+                      yaml_dir: Path, stage_dir: Path, pred_dir: Path, out_dir: Path, workers: int,
+                      accelerator: str, campaign_dir: Path, mps_watermark: float, max_parallel_samples: int,
+                      recycling_steps: int, sampling_steps: int, diffusion_samples: int,
+                      diffusion_samples_affinity: int, sampling_steps_affinity: int,
+                      max_msa_seqs: int, use_potentials: bool = True) -> None:
     _stage_targets(yaml_dir, pending, stage_dir)
     check_hidden_files(stage_dir)
 
     boltz_bin = _boltz_bin()
     cmd = [
         str(boltz_bin), "predict", str(stage_dir),
-        "--use_potentials", "--diffusion_samples", str(diffusion_samples), "--use_msa_server",
+        "--diffusion_samples", str(diffusion_samples), "--use_msa_server",
         "--num_workers", str(workers), "--accelerator", accelerator,
         "--out_dir", str(out_dir),
     ]
+    if use_potentials:
+        # FK steering plus the physical-guidance coordinate update. Boltz recommends it and
+        # it is on by default, but it is also a plausible source of a diffusion trajectory
+        # diverging to NaN, so it has to be switchable per campaign.
+        cmd.append("--use_potentials")
     optional_flags = {
         "--max_parallel_samples": max_parallel_samples,
         "--recycling_steps": recycling_steps,
@@ -2391,7 +2656,13 @@ def _run_boltz_batch(pending: list, total_pending: int, manifest_len: int, compl
     # forks matter here) so the progress bar can show real usage, and so a repeat of the
     # thrashing incident gets a loud warning instead of Marc staring at a silent hang.
     total_ram_gb = psutil.virtual_memory().total / 1e9
-    mem_state = {"rss_gb": 0.0, "high_since": None}
+    # `segment_peak` is the running peak since the last target completed, so a grouped
+    # batch still yields one figure per target rather than a single number for the whole
+    # invocation. `seen` starts from what already exists so a resumed campaign does not
+    # re-attribute old targets to this run's memory profile.
+    mem_state = {"rss_gb": 0.0, "high_since": None, "peak_gb": 0.0, "segment_peak": 0.0}
+    seen_complete = {t.stem for t in pending
+                     if (pred_dir / t.stem / f"{t.stem}_model_0.cif").is_file()}
     stop_monitor = threading.Event()
 
     def _memory_monitor():
@@ -2405,6 +2676,15 @@ def _run_boltz_batch(pending: list, total_pending: int, manifest_len: int, compl
                     except psutil.NoSuchProcess:
                         pass
                 mem_state["rss_gb"] = rss / 1e9
+                mem_state["peak_gb"] = max(mem_state["peak_gb"], mem_state["rss_gb"])
+                mem_state["segment_peak"] = max(mem_state["segment_peak"], mem_state["rss_gb"])
+                for t in pending:
+                    if t.stem in seen_complete:
+                        continue
+                    if (pred_dir / t.stem / f"{t.stem}_model_0.cif").is_file():
+                        seen_complete.add(t.stem)
+                        _record_target_memory(campaign_dir, t.stem, mem_state["segment_peak"])
+                        mem_state["segment_peak"] = mem_state["rss_gb"]
                 if rss > MEMORY_THRASH_FRACTION * psutil.virtual_memory().total:
                     if mem_state["high_since"] is None:
                         mem_state["high_since"] = time.time()
@@ -3948,7 +4228,7 @@ def _build_campaign_summary(campaign: Campaign, campaign_dir: Path) -> list:
     lig_details = "; ".join(f"{l.id} ({'SMILES' if l.smiles else f'CCD {l.ccd}'})" for l in campaign.ligands)
     rows.append(("Ligands", str(len(campaign.ligands)), lig_details))
 
-    target_stems = ", ".join(_target_display_name(fam, lig.id if lig is not None else None) for fam, lig in targets)
+    target_stems = ", ".join(_target_stem(fam, lig, code) for fam, lig, code in targets)
     rows.append(("Targets (protein x ligand)", str(len(targets)), target_stems))
 
     aff_detail = ("pIC50 predicted for every target" if campaign.settings.predict_affinity
@@ -4594,8 +4874,10 @@ def _build_argparser() -> argparse.ArgumentParser:
         sp.add_argument("md_path", type=Path, help="path to boltz_input.md")
         sp.add_argument("--output-dir", type=Path, default=None, help="override settings.output_dir")
         sp.add_argument("--out-dir", type=Path, default=None, help="boltz predict --out_dir (default ./boltz_output beside the md)")
-        sp.add_argument("--workers", type=int, default=2, help="dataloader workers (Boltz's own default; "
-                        "each worker can duplicate large in-memory structures for big complexes)")
+        sp.add_argument("--workers", type=int, default=0, help="dataloader workers. Boltz's own default "
+                        "is 2, but each worker duplicates large in-memory structures, and on unified-memory "
+                        "hardware that is paid for out of the same pool the model is using -- 0 is what a "
+                        "26-target GPCR campaign (~1300 tokens/target) actually needed on a 64GB M1 Max")
         sp.add_argument("--accelerator", choices=["auto", "gpu", "cpu"], default="auto")
         sp.add_argument("--limit", type=int, default=None, help="cap how many pending targets `run` submits")
         sp.add_argument("--max-retries", type=int, default=2, help="if a target doesn't complete (e.g. an "
@@ -4607,7 +4889,9 @@ def _build_argparser() -> argparse.ArgumentParser:
         sp.add_argument("--mps-watermark", type=float, default=1.0, help="PYTORCH_MPS_HIGH_WATERMARK_RATIO -- "
                         "caps MPS memory at this x the device's recommended max, so an oversized complex fails "
                         "fast with a clear OOM instead of swap-thrashing (default 1.0; set higher to allow more "
-                        "overcommit, 0 to disable the cap entirely)")
+                        "overcommit, 0 to disable the cap entirely). This is a HARD allocation ceiling, not a "
+                        "swap-avoidance dial: 0.7 on a 64GB M1 Max caps allocation at 36GB against a ~34GB "
+                        "requirement and every batch OOMs immediately. Lower it only above a measured peak")
         sp.add_argument("--max-parallel-samples", type=int, default=1, help="boltz --max_parallel_samples "
                         "(default 1 here for Mac memory safety; Boltz's own default is unbounded)")
         sp.add_argument("--recycling-steps", type=int, default=None, help="boltz --recycling_steps passthrough "
@@ -4623,9 +4907,15 @@ def _build_argparser() -> argparse.ArgumentParser:
                         "--diffusion_samples_affinity passthrough (default: Boltz's own default of 5)")
         sp.add_argument("--sampling-steps-affinity", type=int, default=None, help="boltz "
                         "--sampling_steps_affinity passthrough (default: Boltz's own default of 200)")
-        sp.add_argument("--max-msa-seqs", type=int, default=None, help="boltz --max_msa_seqs passthrough "
-                        "(default: Boltz's own default of 8192)")
-        sp.add_argument("--memory-warn-tokens", type=int, default=1000, help="preflight WARNs if a target's "
+        sp.add_argument("--max-msa-seqs", type=int, default=4096, help="boltz --max_msa_seqs passthrough. "
+                        "Boltz's own default is 8192; 4096 halves the co-evolution feature block, which is one "
+                        "of the few levers that measurably cuts peak memory on large complexes. Pass 8192 to "
+                        "restore Boltz's default if you have the headroom")
+        sp.add_argument("--no-potentials", dest="use_potentials", action="store_false", default=True,
+                        help="disable boltz --use_potentials (FK steering and the physical-guidance "
+                             "coordinate update). On by default, matching Boltz's recommended setting; "
+                             "turning it off is worth trying when a target's diffusion diverges to NaN.")
+        sp.add_argument("--memory-warn-tokens", type=int, default=1500, help="preflight WARNs if a target's "
                         "total residue/atom count exceeds this (empirical heuristic, see preflight check)")
         sp.add_argument("--skip-interactions", action="store_true", help="skip cif2plip protein-ligand "
                         "interaction analysis during `analyze`, even if `setup-plip` has been run")
@@ -4698,7 +4988,7 @@ def main() -> None:
                   diffusion_samples=args.diffusion_samples,
                   diffusion_samples_affinity=args.diffusion_samples_affinity,
                   sampling_steps_affinity=args.sampling_steps_affinity, max_msa_seqs=args.max_msa_seqs,
-                  max_retries=args.max_retries)
+                  max_retries=args.max_retries, use_potentials=args.use_potentials)
 
     if args.command in ("analyze", "all"):
         df = analyze(output_dir, out_dir, campaign_dir, campaign,

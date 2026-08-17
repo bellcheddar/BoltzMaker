@@ -290,3 +290,173 @@ def test_long_phase_names_are_shortened_rather_than_truncated(bm):
     for full, short in bm._PHASE_SHORT.items():
         assert len(short) <= bm._LABEL_WIDTH, f"{short} does not fit the label column"
     assert bm._PHASE_SHORT["structure prediction"] != bm._PHASE_SHORT["affinity prediction"]
+
+
+# ---------------------------------------------------------------------------
+#  Measured per-target memory
+# ---------------------------------------------------------------------------
+#  Preflight's size check is a hand-set token threshold, and on a real campaign
+#  it separated nothing: every target sat between 1307 and 1333 tokens, and both
+#  the ones that completed and the ones that OOM'd were inside that band. These
+#  records are what a size check should eventually be derived from.
+
+def test_target_memory_is_recorded_one_json_line_per_target(bm, tmp_path):
+    bm._record_target_memory(tmp_path, "GLP1R_LIG1", 41.372, tokens=1307)
+    bm._record_target_memory(tmp_path, "GIPR_LIG4", 58.9, tokens=1310)
+
+    lines = (tmp_path / bm.TARGET_MEMORY_FILE).read_text().splitlines()
+    assert len(lines) == 2
+    first, second = (json.loads(l) for l in lines)
+    assert first["target"] == "GLP1R_LIG1"
+    assert first["peak_rss_gb"] == 41.37          # rounded, not truncated
+    assert first["tokens"] == 1307
+    assert first["total_ram_gb"] > 0              # so a record is comparable across machines
+    assert second["target"] == "GIPR_LIG4"
+
+
+def test_recording_memory_never_fails_a_run(bm, tmp_path):
+    """A measurement is diagnostics, not the product. An unwritable path must not
+    take down a campaign that is otherwise succeeding."""
+    unwritable = tmp_path / "does" / "not" / "exist"
+    bm._record_target_memory(unwritable, "GLP1R_LIG1", 41.0)   # must not raise
+
+
+# ---------------------------------------------------------------------------
+#  Per-ligand pocket override
+# ---------------------------------------------------------------------------
+#  A pocket is not purely a property of the receptor. Measured on GLP1R/GIPR: the
+#  site where orforglipron binds GLP1R (7E14) and the site where LSN1 binds GIPR
+#  (7RBT) share 3 residues out of ~60 once projected onto each other, so one
+#  pocket per protein would force one of those chemotypes into the wrong site.
+
+MD_WITH_OVERRIDE = """Settings:
+Output folder: ./boltz_yamls
+Predict affinity: yes
+Pocket distance: 8
+
+Protein: REC
+Sequence: MKTAYIAKQRQISFVKSHFSRQLEERLGLIEVQAPILSRVGDGTQDNLSGAEKAVQVKVKALPDAQFEVVHSLAKWKR
+Pocket contact: REC residue 10
+Pocket contact: REC residue 11
+
+Ligand: DEFAULTS
+SMILES: c1ccccc1
+
+Ligand: OVERRIDE
+SMILES: CCO
+Pocket contact: REC residue 40 for OVERRIDE
+Pocket contact: REC residue 41 for OVERRIDE
+"""
+
+
+def test_a_ligand_pocket_overrides_the_proteins(bm, tmp_path):
+    md = tmp_path / "campaign.md"
+    md.write_text(MD_WITH_OVERRIDE)
+    campaign = bm.parse_md(md)
+    out = tmp_path / "yamls"; out.mkdir()
+    bm.generate_yamls(campaign, out)
+
+    import yaml as _yaml
+    defaults = _yaml.safe_load((out / "REC_DEFAULTS.yaml").read_text())
+    override = _yaml.safe_load((out / "REC_OVERRIDE.yaml").read_text())
+
+    def pocket_of(doc):
+        return next(c["pocket"] for c in doc["constraints"] if "pocket" in c)
+
+    assert pocket_of(defaults)["contacts"] == [["REC", 10], ["REC", 11]]
+    assert pocket_of(override)["contacts"] == [["REC", 40], ["REC", 41]]
+    # and the campaign-level distance reaches both
+    assert pocket_of(defaults)["max_distance"] == 8
+    assert pocket_of(override)["max_distance"] == 8
+
+
+def test_the_distance_is_omitted_when_it_matches_boltzs_own_default(bm, tmp_path):
+    """So an existing campaign's YAML is byte-identical to what it was before this
+    setting existed."""
+    md = tmp_path / "c.md"
+    md.write_text(MD_WITH_OVERRIDE.replace("Pocket distance: 8\n", ""))
+    campaign = bm.parse_md(md)
+    out = tmp_path / "y"; out.mkdir()
+    bm.generate_yamls(campaign, out)
+    import yaml as _yaml
+    doc = _yaml.safe_load((out / "REC_DEFAULTS.yaml").read_text())
+    pocket = next(c["pocket"] for c in doc["constraints"] if "pocket" in c)
+    assert "max_distance" not in pocket
+
+
+def test_a_pocket_for_an_unknown_ligand_is_an_error_not_a_silent_no_op(bm, tmp_path):
+    md = tmp_path / "c.md"
+    md.write_text(MD_WITH_OVERRIDE.replace("for OVERRIDE", "for TYPO"))
+    with pytest.raises(bm.MDParseError, match="no 'Ligand: TYPO' block exists"):
+        bm.parse_md(md)
+
+
+# ---------------------------------------------------------------------------
+#  The pocket matrix
+# ---------------------------------------------------------------------------
+#  A protein may define several pockets, and every ligand is run against each of
+#  them plus once unconstrained. That is what answers "where does this compound
+#  actually want to sit" -- 7E14's site and 7RBT's site share 3 residues out of
+#  ~60, so running a ligand against both is a real experiment, not a duplicate.
+
+MD_MATRIX = """Settings:
+Output folder: ./boltz_yamls
+Predict affinity: yes
+Pocket distance: 8
+
+Protein: RECA
+Sequence: MKTAYIAKQRQISFVKSHFSRQLEERLGLIEVQAPILSRVGDGTQDNLSGAEKAVQVKVKALPDAQFEVVHSLAKWKR
+Pocket contact: RECA residue 10 as V6G
+Pocket contact: RECA residue 11 as V6G
+Pocket contact: RECA residue 40 as 41Y
+
+Protein: RECB
+Sequence: MKTAYIAKQRQISFVKSHFSRQLEERLGLIEVQAPILSRVGDGTQDNLSGAEKAVQVKVKALPDAQFEVVHSLAKWKR
+Pocket contact: RECB residue 12 as V6G
+Pocket contact: RECB residue 42 as 41Y
+
+Ligand: orfo
+SMILES: c1ccccc1
+"""
+
+
+def test_every_ligand_runs_against_every_pocket_plus_a_baseline(bm, tmp_path):
+    md = tmp_path / "m.md"; md.write_text(MD_MATRIX)
+    campaign = bm.parse_md(md)
+    out = tmp_path / "y"; out.mkdir()
+    manifest = bm.generate_yamls(campaign, out)
+    stems = sorted(t.stem for t in manifest)
+    assert stems == [
+        "RECA_orfo", "RECA_orfo_41Y", "RECA_orfo_V6G",
+        "RECB_orfo", "RECB_orfo_41Y", "RECB_orfo_V6G",
+    ], stems
+
+
+def test_each_matrix_target_carries_its_own_pocket(bm, tmp_path):
+    import yaml as _yaml
+    md = tmp_path / "m.md"; md.write_text(MD_MATRIX)
+    campaign = bm.parse_md(md)
+    out = tmp_path / "y"; out.mkdir()
+    bm.generate_yamls(campaign, out)
+
+    def pocket_of(stem):
+        doc = _yaml.safe_load((out / f"{stem}.yaml").read_text())
+        found = [c["pocket"] for c in doc.get("constraints", []) if "pocket" in c]
+        return found[0] if found else None
+
+    assert pocket_of("RECA_orfo_V6G")["contacts"] == [["RECA", 10], ["RECA", 11]]
+    assert pocket_of("RECA_orfo_41Y")["contacts"] == [["RECA", 40]]
+    assert pocket_of("RECB_orfo_V6G")["contacts"] == [["RECB", 12]]
+    # the baseline is genuinely unconstrained
+    assert pocket_of("RECA_orfo") is None
+    assert pocket_of("RECB_orfo") is None
+
+
+def test_a_campaign_without_named_pockets_is_unchanged(bm, tmp_path):
+    """No baseline is invented for campaigns that predate the matrix: an unnamed
+    pocket still means exactly one constrained target."""
+    md = tmp_path / "c.md"; md.write_text(MD_WITH_OVERRIDE)
+    campaign = bm.parse_md(md)
+    out = tmp_path / "y"; out.mkdir()
+    manifest = bm.generate_yamls(campaign, out)
+    assert sorted(t.stem for t in manifest) == ["REC_DEFAULTS", "REC_OVERRIDE"]
