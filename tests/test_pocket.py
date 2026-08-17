@@ -145,7 +145,7 @@ def _form(**extra):
         ("protein_name[]", "T4L"), ("protein_sequence[]", SEQUENCE),
         ("protein_partners[]", ""), ("protein_apo_pdb[]", ""),
         ("ligand_name[]", "LIG1"), ("ligand_kind[]", "smiles"), ("ligand_value[]", "c1ccccc1"),
-        ("ligand_pocket_pdb[]", ""), ("ligand_pocket_ligand[]", ""),
+        ("protein_pocket_pdb[]", ""), ("protein_pocket_ligand[]", ""),
     ])
     for k, v in extra.items():
         key = k.replace("__", "[]")
@@ -161,23 +161,39 @@ def _md_from(response):
     return members["boltz_input.md"].decode()
 
 
-def test_a_ligands_pocket_reaches_the_campaign_scoped_to_that_ligand(client, monkeypatch):  # noqa: F811
-    from boltzmaker_web import apo, pocket as pk
+def test_a_pocket_reaches_the_campaign_as_a_named_site(client, monkeypatch):  # noqa: F811
+    """Named so every ligand can be run against it, alongside a baseline."""
+    from boltzmaker_web import apo
     monkeypatch.setattr(apo, "fetch", lambda pdb_id, **kw: (_text("6ln2").encode(), "cif"))
-    # pretend the campaign's protein IS 6ln2's receptor
     seqs = __import__("json").loads((FIXTURES / "sequences.json").read_text())
     form = _form(use_same_pocket="1", pocket_distance="8")
     form.setlist("protein_sequence[]", [seqs["GLP1R"]])
-    form.setlist("ligand_pocket_pdb[]", ["6ln2"])
-    form.setlist("ligand_pocket_ligand[]", ["97Y|A|503"])
+    form.setlist("protein_pocket_pdb[]", ["6ln2"])
+    form.setlist("protein_pocket_ligand[]", ["97Y|A|503"])
     response = client.post("/auto/prepare", data=form, headers=BROWSER)
     assert response.status_code == 200, response.data[:400]
     md = _md_from(response)
     assert "Pocket distance: 8" in md
     lines = [l for l in md.splitlines() if l.startswith("Pocket contact:")]
     assert lines, md
-    assert all(l.endswith(" for LIG1") for l in lines), lines[:3]
-    assert "# pocket from 6LN2 ligand 97Y" in md
+    assert all(l.endswith(" as 97Y") for l in lines), lines[:3]
+
+
+def test_two_references_sharing_a_ligand_code_are_refused(client, monkeypatch):  # noqa: F811
+    """Target stems are keyed by the code, so a collision would silently overwrite
+    one site's targets with another's."""
+    from boltzmaker_web import apo
+    monkeypatch.setattr(apo, "fetch", lambda pdb_id, **kw: (_text("6ln2").encode(), "cif"))
+    seqs = __import__("json").loads((FIXTURES / "sequences.json").read_text())
+    form = _form(use_same_pocket="1", pocket_distance="8")
+    form.setlist("protein_name[]", ["T4L", "T4LB"])
+    form.setlist("protein_sequence[]", [seqs["GLP1R"], seqs["GLP1R"]])
+    form.setlist("protein_partners[]", ["", ""])
+    form.setlist("protein_apo_pdb[]", ["", ""])
+    form.setlist("protein_pocket_pdb[]", ["6ln2", "7XXX"])
+    form.setlist("protein_pocket_ligand[]", ["97Y|A|503", "97Y|A|503"])
+    response = client.post("/auto/prepare", data=form, headers=BROWSER)
+    assert b"would collide" in response.data or b"both use ligand" in response.data
 
 
 def test_an_apo_reference_with_a_ligand_in_it_is_refused(client, monkeypatch):   # noqa: F811
@@ -197,7 +213,7 @@ def test_an_apo_structure_is_refused_as_a_pocket_reference(client, monkeypatch):
     from boltzmaker_web import apo
     monkeypatch.setattr(apo, "fetch", lambda pdb_id, **kw: (_text("7dty").encode(), "cif"))
     form = _form(use_same_pocket="1", pocket_distance="8")
-    form.setlist("ligand_pocket_pdb[]", ["7dty"])
-    form.setlist("ligand_pocket_ligand[]", ["CLR|R|601"])
+    form.setlist("protein_pocket_pdb[]", ["7dty"])
+    form.setlist("protein_pocket_ligand[]", ["CLR|R|601"])
     response = client.post("/auto/prepare", data=form, headers=BROWSER)
     assert b"contains no ligand" in response.data or b"not a ligand in" in response.data

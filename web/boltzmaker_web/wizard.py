@@ -115,11 +115,13 @@ class ProteinInput:
     # in the pipeline reads it, so it travels in config.json rather than in
     # boltz_input.md, and BoltzMaker.py never has to learn a key it does not use.
     uniprot: str = ""
-    # Residue positions, in THIS protein's own sequence numbering, that the ligand
-    # must stay near. Derived from the ligand in the reference structure by
-    # pocket.py and written out as `Pocket contact:` statements. Empty means
-    # unconstrained folding, which is what every campaign did before this existed.
-    pocket_contacts: list = field(default_factory=list)
+    # The holo structure this protein contributes to the campaign's set of sites.
+    pocket_pdb: str = ""
+    pocket_ligand: str = ""
+    # {site code: [residue positions]} in THIS protein's numbering -- one entry per
+    # site named anywhere in the campaign, including sites taken from another
+    # protein's structure and projected here through a sequence alignment.
+    pockets: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -136,16 +138,6 @@ class LigandInput:
     name: str
     kind: str  # "smiles" | "ccd"
     value: str
-    # {protein name: [residue positions]} in each protein's own numbering, derived
-    # from the ligand's holo reference. Per ligand rather than per protein because a
-    # pocket is a property of the ligand-receptor pair: measured on GLP1R/GIPR,
-    # orforglipron's site on GLP1R and LSN1's site on GIPR share 3 residues out of
-    # ~60 once projected onto each other.
-    pocket_contacts: dict = field(default_factory=dict)
-    # The holo PDB the pocket came from, recorded so the campaign says where its
-    # constraint came from rather than presenting bare residue numbers.
-    pocket_pdb: str = ""
-    pocket_ligand: str = ""
 
 
 def assemble_boltz_input_md(
@@ -176,7 +168,7 @@ def assemble_boltz_input_md(
            f"Predict affinity: {'yes' if predict_affinity else 'no'}"]
     # Only written when a pocket is actually in use, so a campaign without one
     # produces the same file it always did.
-    if pocket_distance and any(lg.pocket_contacts for lg in ligands):
+    if pocket_distance and any(p.pockets for p in proteins):
         out.append(f"Pocket distance: {pocket_distance:g}")
 
     protein_blocks: list[list[str]] = []
@@ -229,6 +221,9 @@ def assemble_boltz_input_md(
             block.append(f"Partners: {', '.join(p.partner_names)}")
         if apo_reference.get(p.name):
             block.append(f"Apo structure: {apo_reference[p.name]}")
+        for code, positions in sorted(p.pockets.items()):
+            for position in positions:
+                block.append(f"Pocket contact: {p.name} residue {position} as {code}")
 
         protein_blocks.append(block)
         for c in p.constraints:
@@ -249,13 +244,6 @@ def assemble_boltz_input_md(
             ligand_blocks.append([f"Ligand: {lg.name}", f"CCD: {lg.value.strip()}"])
         else:
             ligand_blocks.append([f"Ligand: {lg.name}", f"SMILES: {lg.value.strip()}"])
-        if lg.pocket_contacts:
-            block = ligand_blocks[-1]
-            block.append(f"# pocket from {lg.pocket_pdb.upper()} ligand {lg.pocket_ligand}")
-            for protein_name, positions in sorted(lg.pocket_contacts.items()):
-                for position in positions:
-                    block.append(
-                        f"Pocket contact: {protein_name} residue {position} for {lg.name}")
 
     for block in protein_blocks + partner_blocks + ligand_blocks:
         out.append("")

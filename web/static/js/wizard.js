@@ -247,14 +247,13 @@ var BoltzWizard = (function () {
   });
 })();
 
-/* "Use same pocket": list the ligands in each LIGAND row's holo reference and let
-   the user pick which one defines that ligand's pocket.
+/* "Use same pocket": list the ligands in each PROTEIN row's holo reference and let
+   the user pick which one names a site to test.
 
-   Per ligand rather than per protein because a pocket belongs to the pair: measured
-   on GLP1R/GIPR, orforglipron's site on GLP1R and LSN1's site on GIPR share 3
-   residues out of ~60. Waters, ions, buffers, sugars and lipids are filtered
-   server-side in pocket.py, so this file never has to know that cholesterol is not a
-   ligand -- and an empty list is a real answer that gets said out loud.  */
+   Every site named across all proteins is run against every protein, so two proteins
+   each naming one gives the full matrix. Waters, ions, buffers, sugars and lipids are
+   filtered server-side in pocket.py, so this file never has to know that cholesterol
+   is not a ligand -- and an empty list is a real answer that gets said out loud.  */
 (function () {
   var LOOKUP = "/auto/pocket-ligands/";
   var toggle = document.getElementById("use-same-pocket");
@@ -274,7 +273,7 @@ var BoltzWizard = (function () {
         notes[k].textContent = "Enter a holo PDB id above to list its ligands.";
     }
     if (on) {
-      var ids = document.querySelectorAll('input[name="ligand_pocket_pdb[]"]');
+      var ids = document.querySelectorAll('input[name="protein_pocket_pdb[]"]');
       for (var j = 0; j < ids.length; j++) if (ids[j].value.trim()) load(ids[j]);
     }
   }
@@ -282,7 +281,7 @@ var BoltzWizard = (function () {
   function partsFor(input) {
     var row = input.closest(".md-row") || input.parentNode.parentNode;
     return {
-      select: row ? row.querySelector('select[name="ligand_pocket_ligand[]"]') : null,
+      select: row ? row.querySelector('select[name="protein_pocket_ligand[]"]') : null,
       status: row ? row.querySelector(".md-pocket-status") : null
     };
   }
@@ -323,10 +322,10 @@ var BoltzWizard = (function () {
   document.addEventListener("change", function (event) {
     var el = event.target;
     if (!toggle.checked || !el || !el.matches) return;
-    if (el.matches('input[name="ligand_pocket_pdb[]"]')) load(el);
+    if (el.matches('input[name="protein_pocket_pdb[]"]')) load(el);
   });
   document.addEventListener("click", function (event) {
-    if (event.target && event.target.id === "add-ligand") setTimeout(showHide, 0);
+    if (event.target && event.target.id === "add-protein") setTimeout(showHide, 0);
   });
   showHide();
 })();

@@ -101,10 +101,27 @@
       <label>Apo structure PDB id (optional)</label>
       <input type="text" name="protein_apo_pdb[]" maxlength="4" placeholder="e.g. 2RH1">
       <p class="md-hint">An experimental <b>ligand-free</b> structure of this protein, used
-        only for the apo-vs-holo comparison &mdash; not for the pocket, which comes from a
-        holo structure on each ligand below. A structure with a bound ligand is not an apo
-        reference and will be flagged. mmCIF is used where the PDB has no legacy file, which
-        is the case for most recent cryo-EM entries.</p>
+        only for the apo-vs-holo comparison &mdash; not for the pocket, which is set just
+        below. A structure with a bound ligand is not an apo reference and will be flagged.
+        mmCIF is used where the PDB has no legacy file, which is the case for most recent
+        cryo-EM entries.</p>
+    </div>
+    {#  A HOLO structure: one with a ligand actually bound. Every pocket named across
+        all proteins is run against every protein, so two proteins each naming one site
+        gives the full matrix -- 7E14/V6G on GLP1R and 7RBT/41Y on GIPR yields four
+        combinations per ligand, plus an unconstrained baseline each. Applying a site to
+        a protein it was not solved on is a projection through a sequence alignment, and
+        a hypothesis rather than a reproduction.  #}
+    <div class="md-field md-pocket-field">
+      <label>Pocket reference PDB id (holo &mdash; optional)</label>
+      <input type="text" name="protein_pocket_pdb[]" maxlength="4" placeholder="e.g. 7E14" disabled>
+    </div>
+    <div class="md-field md-pocket-field">
+      <label>Pocket ligand</label>
+      <select name="protein_pocket_ligand[]" disabled>
+        <option value="">None &mdash; no pocket from this protein</option>
+      </select>
+      <p class="md-hint md-pocket-status">Tick <b>Use same pocket</b> in Settings to enable.</p>
     </div>
 
     {#  Website metadata, not a pipeline input: it names the entry whose AlphaFold
@@ -172,25 +189,6 @@
       </select>
     </div>
     <div class="md-field"><label>Value</label><input type="text" name="ligand_value[]" placeholder="SMILES string or CCD code"></div>
-    {#  Per ligand, not per protein: a pocket is a property of the ligand-receptor
-        pair. Measured on GLP1R/GIPR, orforglipron's site on GLP1R and LSN1's site on
-        GIPR share 3 residues out of ~60 once projected onto each other, so one pocket
-        per receptor would force one chemotype into the wrong site.
-
-        This must be a HOLO structure -- one with this ligand, or a close analogue,
-        actually bound. The apo field on each protein is a different thing and is used
-        only for the apo-vs-holo comparison.  #}
-    <div class="md-field md-pocket-field">
-      <label>Pocket reference PDB id (holo &mdash; optional)</label>
-      <input type="text" name="ligand_pocket_pdb[]" maxlength="4" placeholder="e.g. 7E14" disabled>
-    </div>
-    <div class="md-field md-pocket-field">
-      <label>Pocket ligand</label>
-      <select name="ligand_pocket_ligand[]" disabled>
-        <option value="">None &mdash; fold this ligand without a pocket constraint</option>
-      </select>
-      <p class="md-hint md-pocket-status">Tick <b>Use same pocket</b> in Settings to enable.</p>
-    </div>
   </div>
 </template>
 
