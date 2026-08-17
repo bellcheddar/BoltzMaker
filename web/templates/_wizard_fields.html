@@ -26,7 +26,7 @@
     <div class="md-field md-pocket-distance">
       <label for="pocket_distance">Pocket distance (&Aring;)</label>
       <input type="text" inputmode="decimal" id="pocket_distance" name="pocket_distance"
-             value="8" placeholder="8" disabled>
+             value="8" placeholder="8">
       <p class="md-hint">How far the ligand may sit from the pocket residues taken from the
         reference. Boltz's own default is 6&nbsp;&Aring;; 8&nbsp;&Aring; is a little looser, so the
         pose is guided rather than forced. <b>Set the holo reference on each ligand row in the
@@ -119,7 +119,7 @@
         pocket's ligand, so 7E14/V6G and 7RBT/41Y give <code>&hellip;_V6G</code> and
         <code>&hellip;_41Y</code> alongside the unconstrained one.</p>
       <div class="md-pocket-rows"></div>
-      <button type="button" class="md-add-row-btn add-pocket" disabled>+ Add pocket reference</button>
+      <button type="button" class="md-add-row-btn add-pocket">+ Add pocket reference</button>
     </div>
 
     {#  Website metadata, not a pipeline input: it names the entry whose AlphaFold

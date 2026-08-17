@@ -278,13 +278,13 @@ var BoltzWizard = (function () {
     }
   }
 
+  /* Nothing is disabled. Gating the controls on the checkbox meant they depended on
+     an event that a restored form never fires, which left the Add button dead for
+     anyone with a saved page. Adding a pocket reference is a clear enough statement
+     of intent to tick the box itself. */
   function setEnabled() {
-    var on = toggle.checked;
     var dist = document.querySelector(".md-pocket-distance");
     if (dist) dist.hidden = false;
-    var controls = document.querySelectorAll(
-      '.md-pocket-distance input, .add-pocket, .md-pocket-row input, .md-pocket-row select');
-    for (var i = 0; i < controls.length; i++) controls[i].disabled = !on;
   }
 
   function statusOf(row) { return row.querySelector(".md-pocket-status"); }
@@ -328,6 +328,7 @@ var BoltzWizard = (function () {
     var el = event.target;
     if (!el || !el.matches) return;
     if (el.matches(".add-pocket")) {
+      if (!toggle.checked) { toggle.checked = true; }
       var host = el.closest(".md-repeat-block");
       var container = host ? host.querySelector(".md-pocket-rows") : null;
       var tpl = document.getElementById("tpl-pocket");
@@ -355,5 +356,16 @@ var BoltzWizard = (function () {
   var form = document.querySelector("form");
   if (form) form.addEventListener("submit", restamp);
 
-  restamp(); setEnabled();
+  /* Rows are seeded inside DOMContentLoaded, and this file runs before it, so a
+     bare call here finds no rows and leaves the seeded row's button disabled
+     forever. Worse, a restored form sets the checkbox without firing `change`, so
+     the toggle handler never runs either -- which is exactly how the button ended
+     up dead for someone with a saved page. Re-sync on every event that can change
+     either the rows or the checkbox. */
+  function sync() { restamp(); setEnabled(); }
+  document.addEventListener("DOMContentLoaded", sync);
+  document.addEventListener("boltz:wizard-ready", sync);
+  document.addEventListener("boltz:form-changed", sync);
+  document.addEventListener("boltz:form-restored", sync);
+  sync();
 })();
