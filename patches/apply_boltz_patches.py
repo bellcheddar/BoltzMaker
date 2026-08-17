@@ -147,6 +147,27 @@ PATCHES = [
         manifest = Manifest([r for r in manifest.records if r.id not in missing_pre])""",
     ),
     dict(
+        name="report peak MPS memory per target",
+        relpath="boltz/model/models/boltz2.py",
+        marker="# BOLTZMAKER-PATCH: mps-peak",
+        old="""            pred_dict["coords"] = out["sample_atom_coords"]""",
+        new="""            # BOLTZMAKER-PATCH: mps-peak -- the only way to size a run on Apple
+            # silicon. RSS does not include MPS memory at all (measured: a 4GB MPS
+            # allocation moved RSS by 0.01GB), so every psutil-based figure this
+            # project has ever printed excludes the thing that actually causes the
+            # OOMs. driver_allocated_memory is the real number and can only be read
+            # from inside the process.
+            try:
+                if torch.backends.mps.is_available():
+                    print(f"| MPS_PEAK driver={torch.mps.driver_allocated_memory()/1e9:.2f}GB "
+                          f"current={torch.mps.current_allocated_memory()/1e9:.2f}GB "
+                          f"recommended_max={torch.mps.recommended_max_memory()/1e9:.2f}GB",
+                          flush=True)
+            except Exception:
+                pass
+            pred_dict["coords"] = out["sample_atom_coords"]""",
+    ),
+    dict(
         name="OOM skip frees MPS memory, not just CUDA",
         relpath="boltz/model/models/boltz2.py",
         marker="# BOLTZMAKER-PATCH: mps-flush-loop",
