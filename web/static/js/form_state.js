@@ -27,8 +27,16 @@ var BoltzFormState = (function () {
     );
   }
 
+  /* A protein row contains nested pocket rows. Their inputs share names across
+     rows, so folding them into the protein's flat dict keeps only the last and
+     loses the rest -- they are saved separately, as an array, below. */
   function rowFields(rowEl) {
-    return rowEl.querySelectorAll("input[name], select[name], textarea[name]");
+    var all = rowEl.querySelectorAll("input[name], select[name], textarea[name]");
+    var out = [];
+    for (var i = 0; i < all.length; i++) {
+      if (!all[i].closest(".md-pocket-row")) out.push(all[i]);
+    }
+    return out;
   }
 
   // ---- collect -------------------------------------------------------------
@@ -49,6 +57,9 @@ var BoltzFormState = (function () {
         Array.prototype.forEach.call(rowFields(rowEl), function (el) {
           row[el.name] = (el.type === "checkbox") ? !!el.checked : el.value;
         });
+        if (group.key === "protein" && window.BoltzPockets) {
+          row.pockets = window.BoltzPockets.rowsOf(rowEl);
+        }
         rows.push(row);
       });
       state.groups[group.key] = rows;
@@ -99,6 +110,16 @@ var BoltzFormState = (function () {
         Array.prototype.forEach.call(rowFields(rowEl), function (el) {
           if (Object.prototype.hasOwnProperty.call(row, el.name)) setValue(el, row[el.name]);
         });
+        if (group.key === "protein" && window.BoltzPockets) {
+          // The row was created with one empty pocket row seeded; replace it with
+          // exactly what was saved, or leave the empty one if none were.
+          if (Array.isArray(row.pockets) && row.pockets.length) {
+            window.BoltzPockets.clear(rowEl);
+            row.pockets.forEach(function (saved) {
+              window.BoltzPockets.restoreRow(rowEl, saved);
+            });
+          }
+        }
       });
     });
 

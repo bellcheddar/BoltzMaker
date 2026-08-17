@@ -392,6 +392,38 @@ var BoltzWizard = (function () {
   document.addEventListener("boltz:form-restored", sync);
   sync();
   setTimeout(sync, 0);   /* after any restore that replaces rows */
+
+  /* Used by form_state.js: pocket rows are nested inside protein rows, so the
+     generic per-group save/restore cannot see them at all. */
+  window.BoltzPockets = {
+    clear: function (host) {
+      var c = host ? host.querySelector(".md-pocket-rows") : null;
+      if (c) c.innerHTML = "";
+    },
+    restoreRow: function (host, saved) {
+      var row = addPocketRow(host);
+      if (!row) return;
+      var pdb = row.querySelector('input[name="pocket_pdb[]"]');
+      var sel = row.querySelector('select[name="pocket_ligand[]"]');
+      if (pdb && saved && saved.pdb) {
+        pdb.value = saved.pdb;
+        if (sel && saved.ligand) sel.setAttribute("data-restore", saved.ligand);
+        load(pdb);            /* repopulates, then applies data-restore */
+      }
+    },
+    rowsOf: function (host) {
+      var out = [];
+      var rows = host ? host.querySelectorAll(".md-pocket-row") : [];
+      for (var i = 0; i < rows.length; i++) {
+        var pdb = rows[i].querySelector('input[name="pocket_pdb[]"]');
+        var sel = rows[i].querySelector('select[name="pocket_ligand[]"]');
+        if (pdb && pdb.value.trim()) {
+          out.push({ pdb: pdb.value.trim(), ligand: sel ? sel.value : "" });
+        }
+      }
+      return out;
+    }
+  };
 })();
 
 /* Run summary: what this form will actually cost, recomputed as it is edited.
