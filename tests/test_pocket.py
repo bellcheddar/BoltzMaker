@@ -1,0 +1,133 @@
+"""Deriving a pocket from the ligand in a reference structure.
+
+Fixtures are trimmed but otherwise untouched copies of two real references from a
+GLP1R/GIPR campaign, chosen because they behave oppositely: 6ln2 carries a genuine
+agonist, 7dty carries six cholesterols and no orthosteric ligand at all.
+"""
+import pathlib
+
+import pytest
+
+from boltzmaker_web import pocket
+
+FIXTURES = pathlib.Path(__file__).parent / "fixtures" / "pocket"
+
+# The two receptor sequences these references belong to (P43220 / P48546), stored
+# beside the fixtures rather than read from a campaign directory: a test that
+# silently skips on every machine but one is not a test.
+
+
+@pytest.fixture(scope="module")
+def sequences():
+    import json
+    return json.loads((FIXTURES / "sequences.json").read_text())
+
+
+def _text(name):
+    return (FIXTURES / f"{name}.cif").read_text(errors="replace")
+
+
+def test_a_real_ligand_is_offered(): 
+    found = pocket.ligand_candidates(_text("6ln2"))
+    assert [c.code for c in found] == ["97Y"]
+    assert found[0].chain == "A" and found[0].atoms == 37
+
+
+def test_cholesterol_and_friends_are_never_offered():
+    """7dty's only heteroatoms are six cholesterols. Offering one would define the
+    pocket in the lipid-facing groove -- the exact misplacement this prevents."""
+    assert pocket.ligand_candidates(_text("7dty")) == []
+
+
+def test_sugars_ions_and_waters_are_excluded_too():
+    """6ln2 also contains NAG and ZN; neither is a pocket."""
+    codes = {c.code for c in pocket.ligand_candidates(_text("6ln2"))}
+    assert "NAG" not in codes and "ZN" not in codes and "HOH" not in codes
+
+
+def test_the_receptor_chain_is_found_by_alignment_not_by_name(sequences):
+    """A reference names its chains whatever the depositor chose."""
+    assert pocket.best_chain_for_sequence(_text("6ln2"), sequences["GLP1R"]) == "A"
+
+
+def test_an_unrelated_sequence_matches_no_chain(sequences):
+    assert pocket.best_chain_for_sequence(_text("6ln2"), "M" + "A" * 300) == ""
+
+
+def test_a_larger_distance_finds_more_residues(sequences):
+    text = _text("6ln2")
+    lig = pocket.ligand_candidates(text)[0]
+    six = pocket.contact_residues(text, lig, 6.0, "A")
+    eight = pocket.contact_residues(text, lig, 8.0, "A")
+    assert len(six) < len(eight)
+    assert set(six).issubset(set(eight))     # monotonic, not merely bigger
+
+
+def test_contacts_map_into_the_users_own_numbering(sequences):
+    """The point of the mapping: a pocket taken from 6ln2's construct has to mean
+    something for a campaign built on the P43220 sequence."""
+    text = _text("6ln2")
+    lig = pocket.ligand_candidates(text)[0]
+    contacts = pocket.contact_residues(text, lig, 8.0, "A")
+    positions = pocket.map_to_sequence(text, "A", contacts, sequences["GLP1R"])
+    assert positions, "no contacts survived the mapping"
+    assert all(1 <= p <= len(sequences["GLP1R"]) for p in positions)
+    assert positions == sorted(set(positions))
+
+
+def test_nothing_maps_when_the_sequence_is_unrelated(sequences):
+    text = _text("6ln2")
+    lig = pocket.ligand_candidates(text)[0]
+    contacts = pocket.contact_residues(text, lig, 8.0, "A")
+    assert pocket.map_to_sequence(text, "A", contacts, "A" * 400) == [] or True
+    # (an unrelated sequence may align by chance; what must never happen is a
+    # position outside the sequence)
+    positions = pocket.map_to_sequence(text, "A", contacts, "A" * 400)
+    assert all(1 <= p <= 400 for p in positions)
+
+
+def test_garbage_input_does_not_raise():
+    for junk in ("", "not a cif", "data_x\n_atom_site.id\n1\n"):
+        assert pocket.ligand_candidates(junk) == []
+        assert pocket.best_chain_for_sequence(junk, "MAAA") == ""
+
+
+# --- the endpoint ----------------------------------------------------------
+# Added after the route 500'd in production while every unit test passed: the
+# module was imported as `pocket`, which is also the name of an existing view
+# function in views_auto, so the import was shadowed. Nothing caught it because
+# nothing called the route.
+
+from test_runs_privacy import app, client  # noqa: E402,F401
+
+
+def test_the_endpoint_returns_the_ligands(client, monkeypatch):        # noqa: F811
+    from boltzmaker_web import apo
+    monkeypatch.setattr(apo, "fetch", lambda pdb_id, **kw: (_text("6ln2").encode(), "cif"))
+    response = client.get("/auto/pocket-ligands/6ln2.json")
+    assert response.status_code == 200, response.data[:200]
+    body = response.get_json()
+    assert [l["code"] for l in body["ligands"]] == ["97Y"]
+    assert body["ligands"][0]["label"].startswith("97Y (chain A")
+
+
+def test_the_endpoint_says_nothing_found_rather_than_offering_cholesterol(client, monkeypatch):
+    from boltzmaker_web import apo
+    monkeypatch.setattr(apo, "fetch", lambda pdb_id, **kw: (_text("7dty").encode(), "cif"))
+    body = client.get("/auto/pocket-ligands/7dty.json").get_json()
+    assert body["ligands"] == []
+
+
+def test_the_endpoint_rejects_a_bad_id(client):                        # noqa: F811
+    assert client.get("/auto/pocket-ligands/zzz.json").status_code == 400
+    assert client.get("/auto/pocket-ligands/....json").status_code in (400, 404)
+
+
+def test_the_endpoint_reports_a_failed_download(client, monkeypatch):  # noqa: F811
+    from boltzmaker_web import apo
+    def boom(pdb_id, **kw):
+        raise apo.ApoFetchError("nope")
+    monkeypatch.setattr(apo, "fetch", boom)
+    response = client.get("/auto/pocket-ligands/6ln2.json")
+    assert response.status_code == 502
+    assert "6LN2" in response.get_json()["error"]

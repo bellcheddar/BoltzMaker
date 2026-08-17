@@ -115,6 +115,11 @@ class ProteinInput:
     # in the pipeline reads it, so it travels in config.json rather than in
     # boltz_input.md, and BoltzMaker.py never has to learn a key it does not use.
     uniprot: str = ""
+    # Residue positions, in THIS protein's own sequence numbering, that the ligand
+    # must stay near. Derived from the ligand in the reference structure by
+    # pocket.py and written out as `Pocket contact:` statements. Empty means
+    # unconstrained folding, which is what every campaign did before this existed.
+    pocket_contacts: list = field(default_factory=list)
 
 
 @dataclass
@@ -140,6 +145,7 @@ def assemble_boltz_input_md(
     ligands: list[LigandInput],
     compare_sse: bool = True,
     apo_reference_paths: dict = None,
+    pocket_distance: float = 0.0,
 ) -> str:
     """Builds the exact same line-list structure cmd_new does, then
     "\\n".join(...) + "\\n" -- byte-for-byte the same assembly rule.
@@ -158,6 +164,10 @@ def assemble_boltz_input_md(
 
     out = ["Settings:", "Output folder: ./boltz_yamls",
            f"Predict affinity: {'yes' if predict_affinity else 'no'}"]
+    # Only written when a pocket is actually in use, so a campaign without one
+    # produces the same file it always did.
+    if pocket_distance and any(p.pocket_contacts for p in proteins):
+        out.append(f"Pocket distance: {pocket_distance:g}")
 
     protein_blocks: list[list[str]] = []
     statement_lines: list[str] = []
@@ -209,6 +219,8 @@ def assemble_boltz_input_md(
             block.append(f"Partners: {', '.join(p.partner_names)}")
         if apo_reference.get(p.name):
             block.append(f"Apo structure: {apo_reference[p.name]}")
+        for position in p.pocket_contacts:
+            block.append(f"Pocket contact: {p.name} residue {position}")
         protein_blocks.append(block)
         for c in p.constraints:
             statement_lines.append(c.to_sentence())

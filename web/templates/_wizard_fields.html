@@ -12,6 +12,25 @@
     <div class="md-field">
       <label><input type="checkbox" name="predict_affinity"> Predict binding affinity too (slower, adds Kd/pIC50 estimates)</label>
     </div>
+
+    {#  Co-folding puts a ligand wherever the model likes. Measured on a real
+        GLP1R/GIPR campaign: 6 of 27 ligands docked onto the G-protein subunits
+        rather than the receptor, and only 6 of 14 GIPR ligands shared a site --
+        which makes their predicted affinities meaningless as receptor
+        pharmacology. This keeps every ligand in the same pocket as the one in
+        each protein's reference structure.  #}
+    <div class="md-field">
+      <label><input type="checkbox" name="use_same_pocket" id="use-same-pocket"> Use same pocket
+        &mdash; keep each ligand near the ligand in that protein's reference structure</label>
+    </div>
+    <div class="md-field md-pocket-distance" hidden>
+      <label for="pocket_distance">Pocket distance (&Aring;)</label>
+      <input type="text" inputmode="decimal" id="pocket_distance" name="pocket_distance"
+             value="8" placeholder="8">
+      <p class="md-hint">How far the ligand may sit from the pocket residues taken from the
+        reference. Boltz's own default is 6&nbsp;&Aring;; 8&nbsp;&Aring; is a little looser, so the
+        pose is guided rather than forced. Pick the ligand to copy in each protein below.</p>
+    </div>
   </div>
 
   <div class="md-card">
@@ -82,6 +101,17 @@
       <p class="md-hint">An experimental ligand-free structure of this protein, for the
         apo-vs-holo comparison. mmCIF is used where the PDB has no legacy file, which is
         the case for most recent cryo-EM entries.</p>
+    </div>
+    {#  Populated by wizard.js from the PDB id above, via /auto/pocket-ligands. Waters,
+        ions, buffers, sugars and lipids are filtered out server-side, so a reference
+        whose only heteroatom is cholesterol offers nothing here rather than offering
+        the cholesterol -- which would pin every ligand into the lipid groove.  #}
+    <div class="md-field md-pocket-field" hidden>
+      <label>Pocket ligand (from the structure above)</label>
+      <select name="protein_pocket_ligand[]">
+        <option value="">None &mdash; fold without a pocket constraint</option>
+      </select>
+      <p class="md-hint md-pocket-status">Enter a PDB id above to list its ligands.</p>
     </div>
     {#  Website metadata, not a pipeline input: it names the entry whose AlphaFold
         model the explorer can overlay on this protein's prediction. It travels in

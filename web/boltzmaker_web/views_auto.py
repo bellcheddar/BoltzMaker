@@ -40,7 +40,7 @@ from flask import (
 
 from . import (alphafold, apo, bundle, options, package,
                reports as report_panels, results as bmz,
-               runs as runs_archive, sequences, shares)
+               pocket as pocket_finder, runs as runs_archive, sequences, shares)
 from .app import REPO_ROOT, WEB_ROOT, new_scratch_dir, runs_root, session_root
 from .runner import BoltzMakerTimeout, extract_error_message, run_boltzmaker
 from .views_new import _parse_form
@@ -215,6 +215,21 @@ def prepare():
 
     try:
         predict_affinity, proteins, partners, ligands = _parse_form()
+        use_same_pocket = request.form.get("use_same_pocket") in ("1", "on", "true", "yes")
+        raw_distance = (request.form.get("pocket_distance") or "8").strip()
+        try:
+            pocket_distance = float(raw_distance)
+        except ValueError:
+            raise WizardValidationError(
+                f"Pocket distance: '{raw_distance}' is not a number.", field="pocket_distance")
+        if use_same_pocket and not 1.0 <= pocket_distance <= 50.0:
+            raise WizardValidationError(
+                f"Pocket distance: {raw_distance} A is outside the sensible range of 1-50 A.",
+                field="pocket_distance")
+        # One entry per rendered protein row; a <select> always posts, so these line
+        # up with protein_name[] even when a row is blank.
+        pocket_choices = dict(zip(request.form.getlist("protein_name[]"),
+                                  request.form.getlist("protein_pocket_ligand[]")))
     except WizardValidationError as exc:
         return _render_prepare(defaults=cfg, error=str(exc), form=request.form,
                                error_field=getattr(exc, 'field', ''))
@@ -237,10 +252,42 @@ def prepare():
             extra_files[path] = data
             apo_paths[protein.name] = path
 
+            # Derive the pocket while the reference is already in hand. Keyed by
+            # protein NAME rather than row index: _parse_form drops blank rows, so
+            # zipping by position would silently attach one protein's pocket to
+            # another the moment a row is left empty.
+            chosen = pocket_choices.get(protein.name, "")
+            if use_same_pocket and chosen and extension == "cif":
+                text = data.decode("utf-8", errors="replace")
+                candidate = next((c for c in pocket_finder.ligand_candidates(text)
+                                  if c.key == chosen), None)
+                if candidate is None:
+                    return _render_prepare(
+                        defaults=cfg, form=request.form, error_field="protein_pocket_ligand[]",
+                        error=f"{protein.name}: '{chosen}' is not a ligand in "
+                              f"{protein.apo_pdb.upper()}. Re-pick it from the list.")
+                chain = pocket_finder.best_chain_for_sequence(text, protein.sequence)
+                if not chain:
+                    return _render_prepare(
+                        defaults=cfg, form=request.form, error_field="protein_apo_pdb[]",
+                        error=f"{protein.name}: no chain in {protein.apo_pdb.upper()} matches "
+                              "this protein's sequence, so a pocket taken from it would be "
+                              "meaningless. Use a reference of this protein, or untick "
+                              "'Use same pocket'.")
+                contacts = pocket_finder.contact_residues(text, candidate, pocket_distance, chain)
+                protein.pocket_contacts = pocket_finder.map_to_sequence(
+                    text, chain, contacts, protein.sequence)
+                if not protein.pocket_contacts:
+                    return _render_prepare(
+                        defaults=cfg, form=request.form, error_field="pocket_distance",
+                        error=f"{protein.name}: no residues of chain {chain} lie within "
+                              f"{pocket_distance:g} A of {candidate.code}. Try a larger distance.")
+
     try:
         md_text = assemble_boltz_input_md(predict_affinity, proteins, partners, ligands,
                                           compare_sse=compare_sse,
-                                          apo_reference_paths=apo_paths)
+                                          apo_reference_paths=apo_paths,
+                                          pocket_distance=pocket_distance if use_same_pocket else 0.0)
     except WizardValidationError as exc:
         return _render_prepare(defaults=cfg, error=str(exc), form=request.form,
                                error_field=getattr(exc, 'field', ''))
@@ -834,6 +881,38 @@ def destroy(token: str):
     shutil.rmtree(session, ignore_errors=True)
     removed.append("session")
     return Response(json.dumps({"status": "destroyed", "removed": removed}),
+                    mimetype="application/json")
+
+
+_PDB_ID_RE = re.compile(r"^[0-9][A-Za-z0-9]{3}$")
+
+
+@bp.route("/pocket-ligands/<pdb_id>.json")
+def pocket_ligands(pdb_id: str):
+    """The ligands in a reference structure that could define a pocket.
+
+    Proxied rather than fetched from the browser for the same reasons as the
+    UniProt route, and filtered here rather than in the page so the exclusion list
+    lives in one place. Waters, ions, buffers, sugars and lipids are dropped
+    entirely: a reference whose only heteroatom is cholesterol has no pocket to
+    offer, and saying so is more useful than offering the cholesterol.
+    """
+    pdb_id = (pdb_id or "").strip()
+    if not _PDB_ID_RE.match(pdb_id):
+        return Response(json.dumps({"error": "That is not a 4-character PDB id."}),
+                        mimetype="application/json", status=400)
+    try:
+        content, extension = apo.fetch(pdb_id)
+    except Exception:
+        return Response(json.dumps({"error": f"Could not download {pdb_id.upper()} from RCSB."}),
+                        mimetype="application/json", status=502)
+    if extension != "cif":
+        return Response(json.dumps({"error": f"{pdb_id.upper()} is only available in a format "
+                                             "this pocket finder cannot read."}),
+                        mimetype="application/json", status=415)
+    found = pocket_finder.ligand_candidates(content.decode("utf-8", errors="replace"))
+    return Response(json.dumps({"pdb_id": pdb_id.upper(),
+                                "ligands": [c.to_json() for c in found]}),
                     mimetype="application/json")
 
 

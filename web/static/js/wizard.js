@@ -246,3 +246,87 @@ var BoltzWizard = (function () {
     }, 250);
   });
 })();
+
+/* "Use same pocket": list the ligands in each protein's reference structure and
+   let the user pick which one defines the pocket.
+
+   The exclusion of waters, ions, buffers, sugars and lipids happens server-side in
+   pocket.py, so this file never has to know that cholesterol is not a ligand -- it
+   renders whatever the endpoint offers, and an empty list is a real answer that
+   gets said out loud rather than an empty dropdown.  */
+(function () {
+  var LOOKUP = "/auto/pocket-ligands/";
+  var toggle = document.getElementById("use-same-pocket");
+  if (!toggle) return;
+
+  function distanceField() { return document.querySelector(".md-pocket-distance"); }
+
+  function showHide() {
+    var on = toggle.checked;
+    var dist = distanceField();
+    if (dist) dist.hidden = !on;
+    var fields = document.querySelectorAll(".md-pocket-field");
+    for (var i = 0; i < fields.length; i++) fields[i].hidden = !on;
+    if (on) {
+      var ids = document.querySelectorAll('input[name="protein_apo_pdb[]"]');
+      for (var j = 0; j < ids.length; j++) if (ids[j].value.trim()) load(ids[j]);
+    }
+  }
+
+  function partsFor(input) {
+    var row = input.closest(".md-row") || input.parentNode.parentNode;
+    return {
+      field: row ? row.querySelector(".md-pocket-field") : null,
+      select: row ? row.querySelector('select[name="protein_pocket_ligand[]"]') : null,
+      status: row ? row.querySelector(".md-pocket-status") : null
+    };
+  }
+
+  function load(input) {
+    var p = partsFor(input);
+    if (!p.select || !p.status) return;
+    var id = input.value.trim();
+    if (!id) {
+      p.status.textContent = "Enter a PDB id above to list its ligands.";
+      return;
+    }
+    p.status.textContent = "Looking up ligands in " + id.toUpperCase() + "…";
+    fetch(LOOKUP + encodeURIComponent(id) + ".json")
+      .then(function (r) { return r.json().then(function (d) { return { ok: r.ok, d: d }; }); })
+      .then(function (res) {
+        while (p.select.options.length > 1) p.select.remove(1);
+        if (!res.ok) { p.status.textContent = res.d.error || "Lookup failed."; return; }
+        var ligands = res.d.ligands || [];
+        if (!ligands.length) {
+          p.status.textContent = res.d.pdb_id + " contains no ligand that could define a "
+            + "pocket — only waters, ions, sugars or lipids. Pick a different reference, "
+            + "or leave this protein unconstrained.";
+          return;
+        }
+        for (var i = 0; i < ligands.length; i++) {
+          var o = document.createElement("option");
+          o.value = ligands[i].key;
+          o.textContent = ligands[i].label;
+          p.select.appendChild(o);
+        }
+        p.select.selectedIndex = 1;      /* largest, which the endpoint sorts first */
+        p.status.textContent = ligands.length === 1
+          ? "One ligand found; its pocket will be used."
+          : ligands.length + " ligands found — the largest is selected.";
+      })
+      .catch(function () { p.status.textContent = "Could not reach the server."; });
+  }
+
+  toggle.addEventListener("change", showHide);
+  document.addEventListener("change", function (event) {
+    var el = event.target;
+    if (!toggle.checked || !el || !el.matches) return;
+    if (el.matches('input[name="protein_apo_pdb[]"]')) load(el);
+  });
+  /* Rows are added dynamically, so a newly added protein starts hidden unless the
+     box is already ticked. */
+  document.addEventListener("click", function (event) {
+    if (event.target && event.target.id === "add-protein") setTimeout(showHide, 0);
+  });
+  showHide();
+})();
