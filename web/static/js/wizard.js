@@ -287,6 +287,30 @@ var BoltzWizard = (function () {
     if (dist) dist.hidden = false;
   }
 
+  function addPocketRow(host) {
+    var container = host ? host.querySelector(".md-pocket-rows") : null;
+    var tpl = document.getElementById("tpl-pocket");
+    if (!container || !tpl) return null;
+    container.appendChild(tpl.content.cloneNode(true));
+    var added = container.lastElementChild;
+    var remove = added.querySelector(".md-remove-row");
+    if (remove) remove.addEventListener("click", function () {
+      added.parentNode.removeChild(added); restamp();
+    });
+    restamp();
+    return added;
+  }
+
+  /* Every protein starts with one empty pocket row, so the fields are on screen
+     rather than behind a button someone has to know to press. */
+  function seedRows() {
+    var rows = proteinRows();
+    for (var i = 0; i < rows.length; i++) {
+      var container = rows[i].querySelector(".md-pocket-rows");
+      if (container && !container.querySelector(".md-pocket-row")) addPocketRow(rows[i]);
+    }
+  }
+
   function statusOf(row) { return row.querySelector(".md-pocket-status"); }
 
   function load(input) {
@@ -328,19 +352,10 @@ var BoltzWizard = (function () {
     var el = event.target;
     if (!el || !el.matches) return;
     if (el.matches(".add-pocket")) {
+      /* An explicit click is a statement of intent; seeding a first row is not, so
+         only this path ticks the box. */
       if (!toggle.checked) { toggle.checked = true; }
-      var host = el.closest(".md-repeat-block");
-      var container = host ? host.querySelector(".md-pocket-rows") : null;
-      var tpl = document.getElementById("tpl-pocket");
-      if (container && tpl) {
-        container.appendChild(tpl.content.cloneNode(true));
-        var added = container.lastElementChild;
-        var remove = added.querySelector(".md-remove-row");
-        if (remove) remove.addEventListener("click", function () {
-          added.parentNode.removeChild(added); restamp();
-        });
-        restamp(); setEnabled();
-      }
+      addPocketRow(el.closest(".md-repeat-block"));
     }
     if (el.id === "add-protein") setTimeout(function () { restamp(); setEnabled(); }, 0);
   });
@@ -362,10 +377,11 @@ var BoltzWizard = (function () {
      the toggle handler never runs either -- which is exactly how the button ended
      up dead for someone with a saved page. Re-sync on every event that can change
      either the rows or the checkbox. */
-  function sync() { restamp(); setEnabled(); }
+  function sync() { seedRows(); restamp(); setEnabled(); }
   document.addEventListener("DOMContentLoaded", sync);
   document.addEventListener("boltz:wizard-ready", sync);
   document.addEventListener("boltz:form-changed", sync);
   document.addEventListener("boltz:form-restored", sync);
   sync();
+  setTimeout(sync, 0);   /* after any restore that replaces rows */
 })();
