@@ -642,6 +642,10 @@ class ProteinFamily:
     sequence: str
     partners: list = field(default_factory=list)
     pocket_contacts: object = None
+    # {code: [contact tokens]}. A protein may define several pockets; every ligand is
+    # then run against each, plus once unconstrained. Distinct from pocket_contacts,
+    # which is the older unnamed form and still means exactly one constrained target.
+    pockets: object = None
     ligands: object = None
     modifications: object = None
     cyclic: bool = False
@@ -731,8 +735,14 @@ _COVALENT_RE = re.compile(
 # ligand of the protein. Needed because a pocket is not purely a property of the
 # receptor: measured on GLP1R/GIPR, orforglipron's site on GLP1R and LSN1's site
 # on GIPR share 3 residues out of ~60 once projected onto each other.
-_POCKET_RE = re.compile(rf"^pocket contact:\s*{_ENDPOINT}(?:\s+for\s+(?P<lig>\S+))?\s*$",
-                         re.IGNORECASE)
+# "as CODE" names the pocket, so one protein can carry several and every ligand is
+# run against each of them plus an unconstrained baseline -- the matrix that answers
+# "where does this compound actually want to sit". "for LIGAND" instead scopes a
+# single pocket to one ligand.
+_POCKET_RE = re.compile(
+    rf"^pocket contact:\s*{_ENDPOINT}"
+    rf"(?:\s+for\s+(?P<lig>\S+))?(?:\s+as\s+(?P<code>[A-Za-z0-9_-]+))?\s*$",
+    re.IGNORECASE)
 _DISTANCE_RE = re.compile(
     rf"^distance constraint:\s*{_ENDPOINT}\s+to\s+{_ENDPOINT}(?:\s+within\s+([\d.]+)(?:\s+\w+)?)?\s*$",
     re.IGNORECASE)
@@ -789,7 +799,7 @@ def _match_statement(stripped: str, lineno: int):
         chain, res, atom = m.group(1), m.group(2), m.group(3)
         token = [chain, int(res), atom] if atom else [chain, int(res)]
         return {"type": "pocket", "owner": chain, "token": token,
-                "ligand": m.group("lig"), "line": lineno}
+                "ligand": m.group("lig"), "code": m.group("code"), "line": lineno}
     m = _DISTANCE_RE.match(stripped)
     if m:
         c1, r1, a1, c2, r2, a2, dist = m.groups()
@@ -872,7 +882,12 @@ def _build_family_record(name: str, fields: dict, partners: dict, statements: li
         if pid not in partners:
             raise MDParseError(f"protein '{name}' references unknown partner '{pid}' (line {lineno})")
     modifications = [_parse_modification_token(t) for t in _parse_csv(fields["modifications"])] if "modifications" in fields else None
-    pocket_contacts = [s["token"] for s in statements if s["type"] == "pocket"] or None
+    pocket_contacts = [s["token"] for s in statements
+                       if s["type"] == "pocket" and not s.get("code")] or None
+    pockets: dict = {}
+    for stmt in statements:
+        if stmt["type"] == "pocket" and stmt.get("code"):
+            pockets.setdefault(stmt["code"], []).append(stmt["token"])
     bond_constraints = [(s["atom1"], s["atom2"]) for s in statements if s["type"] == "bond"] or None
     contact_constraints = [s["entry"] for s in statements if s["type"] == "distance"] or None
     family_type = fields.get("family type", "auto").lower()
@@ -891,7 +906,7 @@ def _build_family_record(name: str, fields: dict, partners: dict, statements: li
         ligands = None
     return ProteinFamily(
         id=name, sequence=fields["sequence"], partners=partner_ids,
-        pocket_contacts=pocket_contacts, ligands=ligands,
+        pocket_contacts=pocket_contacts, pockets=(pockets or None), ligands=ligands,
         modifications=modifications, cyclic=_parse_yesno(fields.get("cyclic", ""), False), msa=fields.get("msa"),
         bond_constraints=bond_constraints, contact_constraints=contact_constraints,
         templates=_parse_csv(fields["templates"]) if "templates" in fields else None,
@@ -1349,14 +1364,30 @@ def _expand_targets(campaign: Campaign):
     targets = []
     for fam in campaign.families:
         if fam.ligands == []:  # explicit "Ligands: none" -- one ligand-free (apo) target
-            targets.append((fam, None))
+            targets.append((fam, None, None))
             continue
         ligand_ids = fam.ligands if fam.ligands else [l.id for l in campaign.ligands]
         for lig_id in ligand_ids:
             if lig_id not in ligand_by_id:
                 raise MDParseError(f"protein '{fam.id}' references unknown ligand '{lig_id}'")
-            targets.append((fam, ligand_by_id[lig_id]))
+            lig = ligand_by_id[lig_id]
+            if not fam.pockets:
+                # No named pockets: one target, exactly as before this existed.
+                targets.append((fam, lig, None))
+                continue
+            # Named pockets fan out: one target per pocket, plus an unconstrained
+            # baseline, so what the constraint changed is visible inside one campaign
+            # rather than by cross-referencing an older run with different settings.
+            targets.append((fam, lig, None))
+            for code in sorted(fam.pockets):
+                targets.append((fam, lig, code))
     return targets
+
+
+def _target_stem(fam, lig, code) -> str:
+    """protein_ligand, plus the pocket's ligand code when one is in use."""
+    stem = fam.id if lig is None else f"{fam.id}_{lig.id}"
+    return f"{stem}_{code}" if code else stem
 
 
 # Homo-oligomer copies: `id: [A, B]` on a *partner* shares one sequence across
@@ -1383,7 +1414,25 @@ def _ligand_entry(lig: Ligand) -> dict:
     return {"ligand": {key: value, "id": lig.id}}
 
 
-def _build_yaml_doc(fam: ProteinFamily, lig: object, campaign: Campaign) -> dict:
+def _pocket_for(fam, lig, code):
+    """Which contacts this target actually uses.
+
+    A named pocket wins (it is the thing being varied across the matrix), then a
+    ligand's own pocket, then the protein's unnamed one. None means unconstrained,
+    which is a real choice here rather than an absence: every ligand also gets a
+    baseline target so the effect of a constraint is visible within one campaign.
+    """
+    if code:
+        return (fam.pockets or {}).get(code)
+    if lig is not None and lig.pocket_contacts:
+        return lig.pocket_contacts
+    if fam.pockets:
+        return None          # the baseline target of a matrix campaign
+    return fam.pocket_contacts
+
+
+def _build_yaml_doc(fam: ProteinFamily, lig: object, campaign: Campaign,
+                     pocket_code: object = None) -> dict:
     # lig is None for a ligand-free (apo) target ("Ligands: none") -- no ligand entity,
     # no pocket/affinity binder (both are meaningless without a ligand to bind).
     sequences = [_chain_entry(fam.id, fam.sequence, "protein", fam.modifications, fam.cyclic, fam.msa)]
@@ -1398,8 +1447,7 @@ def _build_yaml_doc(fam: ProteinFamily, lig: object, campaign: Campaign) -> dict
     # A ligand's own pocket wins over the protein's: the ligand is what has an
     # experimentally observed site, and two chemotypes on the same receptor can
     # occupy different ones.
-    pocket_contacts = (lig.pocket_contacts if lig is not None and lig.pocket_contacts
-                       else fam.pocket_contacts)
+    pocket_contacts = _pocket_for(fam, lig, pocket_code)
     if pocket_contacts and lig is not None:
         # Boltz's pocket constraint requires every contact entry to be an explicit
         # [chain, residue_or_atom] pair (verified against the installed boltz 2.2.1
@@ -1435,12 +1483,12 @@ def _build_yaml_doc(fam: ProteinFamily, lig: object, campaign: Campaign) -> dict
 def generate_yamls(campaign: Campaign, output_dir: Path) -> list:
     output_dir.mkdir(parents=True, exist_ok=True)
     manifest, seen = [], set()
-    for fam, lig in _expand_targets(campaign):
-        stem = f"{fam.id}_{lig.id}" if lig is not None else fam.id
+    for fam, lig, pocket_code in _expand_targets(campaign):
+        stem = _target_stem(fam, lig, pocket_code)
         if stem in seen:
             raise MDParseError(f"duplicate target filename '{stem}.yaml' -- check for duplicate family/ligand ids")
         seen.add(stem)
-        doc = _build_yaml_doc(fam, lig, campaign)
+        doc = _build_yaml_doc(fam, lig, campaign, pocket_code)
         with (output_dir / f"{stem}.yaml").open("w") as f:
             yaml.safe_dump(doc, f, sort_keys=False, default_flow_style=False)
         needs_affinity = campaign.settings.predict_affinity and lig is not None
@@ -1448,7 +1496,7 @@ def generate_yamls(campaign: Campaign, output_dir: Path) -> list:
                                 # same precedence as _build_yaml_doc: the ligand's own
                                 # pocket wins over the protein's.
                                 pocket_contacts_used=(
-                                    (lig.pocket_contacts or fam.pocket_contacts)
+                                    _pocket_for(fam, lig, pocket_code)
                                     if lig is not None else None),
                                 needs_affinity=needs_affinity))
     with (output_dir / MANIFEST_FILENAME).open("w") as f:
@@ -4180,7 +4228,7 @@ def _build_campaign_summary(campaign: Campaign, campaign_dir: Path) -> list:
     lig_details = "; ".join(f"{l.id} ({'SMILES' if l.smiles else f'CCD {l.ccd}'})" for l in campaign.ligands)
     rows.append(("Ligands", str(len(campaign.ligands)), lig_details))
 
-    target_stems = ", ".join(_target_display_name(fam, lig.id if lig is not None else None) for fam, lig in targets)
+    target_stems = ", ".join(_target_stem(fam, lig, code) for fam, lig, code in targets)
     rows.append(("Targets (protein x ligand)", str(len(targets)), target_stems))
 
     aff_detail = ("pIC50 predicted for every target" if campaign.settings.predict_affinity

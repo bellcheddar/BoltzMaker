@@ -389,3 +389,74 @@ def test_a_pocket_for_an_unknown_ligand_is_an_error_not_a_silent_no_op(bm, tmp_p
     md.write_text(MD_WITH_OVERRIDE.replace("for OVERRIDE", "for TYPO"))
     with pytest.raises(bm.MDParseError, match="no 'Ligand: TYPO' block exists"):
         bm.parse_md(md)
+
+
+# ---------------------------------------------------------------------------
+#  The pocket matrix
+# ---------------------------------------------------------------------------
+#  A protein may define several pockets, and every ligand is run against each of
+#  them plus once unconstrained. That is what answers "where does this compound
+#  actually want to sit" -- 7E14's site and 7RBT's site share 3 residues out of
+#  ~60, so running a ligand against both is a real experiment, not a duplicate.
+
+MD_MATRIX = """Settings:
+Output folder: ./boltz_yamls
+Predict affinity: yes
+Pocket distance: 8
+
+Protein: RECA
+Sequence: MKTAYIAKQRQISFVKSHFSRQLEERLGLIEVQAPILSRVGDGTQDNLSGAEKAVQVKVKALPDAQFEVVHSLAKWKR
+Pocket contact: RECA residue 10 as V6G
+Pocket contact: RECA residue 11 as V6G
+Pocket contact: RECA residue 40 as 41Y
+
+Protein: RECB
+Sequence: MKTAYIAKQRQISFVKSHFSRQLEERLGLIEVQAPILSRVGDGTQDNLSGAEKAVQVKVKALPDAQFEVVHSLAKWKR
+Pocket contact: RECB residue 12 as V6G
+Pocket contact: RECB residue 42 as 41Y
+
+Ligand: orfo
+SMILES: c1ccccc1
+"""
+
+
+def test_every_ligand_runs_against_every_pocket_plus_a_baseline(bm, tmp_path):
+    md = tmp_path / "m.md"; md.write_text(MD_MATRIX)
+    campaign = bm.parse_md(md)
+    out = tmp_path / "y"; out.mkdir()
+    manifest = bm.generate_yamls(campaign, out)
+    stems = sorted(t.stem for t in manifest)
+    assert stems == [
+        "RECA_orfo", "RECA_orfo_41Y", "RECA_orfo_V6G",
+        "RECB_orfo", "RECB_orfo_41Y", "RECB_orfo_V6G",
+    ], stems
+
+
+def test_each_matrix_target_carries_its_own_pocket(bm, tmp_path):
+    import yaml as _yaml
+    md = tmp_path / "m.md"; md.write_text(MD_MATRIX)
+    campaign = bm.parse_md(md)
+    out = tmp_path / "y"; out.mkdir()
+    bm.generate_yamls(campaign, out)
+
+    def pocket_of(stem):
+        doc = _yaml.safe_load((out / f"{stem}.yaml").read_text())
+        found = [c["pocket"] for c in doc.get("constraints", []) if "pocket" in c]
+        return found[0] if found else None
+
+    assert pocket_of("RECA_orfo_V6G")["contacts"] == [["RECA", 10], ["RECA", 11]]
+    assert pocket_of("RECA_orfo_41Y")["contacts"] == [["RECA", 40]]
+    assert pocket_of("RECB_orfo_V6G")["contacts"] == [["RECB", 12]]
+    # the baseline is genuinely unconstrained
+    assert pocket_of("RECA_orfo") is None
+    assert pocket_of("RECB_orfo") is None
+
+
+def test_a_campaign_without_named_pockets_is_unchanged(bm, tmp_path):
+    """No baseline is invented for campaigns that predate the matrix: an unnamed
+    pocket still means exactly one constrained target."""
+    md = tmp_path / "c.md"; md.write_text(MD_WITH_OVERRIDE)
+    campaign = bm.parse_md(md)
+    out = tmp_path / "y"; out.mkdir()
+    manifest = bm.generate_yamls(campaign, out)
+    assert sorted(t.stem for t in manifest) == ["REC_DEFAULTS", "REC_OVERRIDE"]
