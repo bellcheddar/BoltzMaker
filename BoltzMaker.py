@@ -665,6 +665,12 @@ class Ligand:
     ccd: object = None
     role: object = None  # optional "agonist" / "antagonist" -- purely for reporting
                            # (dashboard charts, compare-sse), never affects generate/run
+    # Pocket contacts scoped to THIS ligand, overriding the protein's. A pocket is
+    # not purely a property of the receptor: measured on GLP1R/GIPR, the site where
+    # orforglipron binds GLP1R (7E14) and the site where LSN1 binds GIPR (7RBT) share
+    # 3 residues out of ~60 once projected onto each other. One pocket per protein
+    # would force one of those chemotypes into the wrong site.
+    pocket_contacts: object = None
 
 
 @dataclass
@@ -707,7 +713,7 @@ _RECORD_START_RE = re.compile(r"^(Settings|Protein|Partner|Ligand)\s*:\s*(.*)$",
 _FIELD_RE = re.compile(r"^([A-Za-z][A-Za-z ]*?)\s*:\s*(.*)$")
 
 _RECORD_ALLOWED_FIELDS = {
-    "settings": {"output folder", "predict affinity"},
+    "settings": {"output folder", "predict affinity", "pocket distance"},
     "protein": {"sequence", "partners", "ligands", "modifications", "cyclic", "msa", "templates",
                 "apo structure", "apo chain", "family type", "group"},
     "partner": {"sequence", "type", "copies", "modifications", "cyclic", "msa"},
@@ -721,7 +727,12 @@ _ENDPOINT = r"(\w+)\s+residue\s+(\d+)(?:\s+atom\s+(\w+))?"
 _COVALENT_RE = re.compile(
     rf"^covalent bond:\s*(\w+)\s+residue\s+(\d+)\s+atom\s+(\w+)\s+to\s+(\w+)\s+residue\s+(\d+)\s+atom\s+(\w+)\s*$",
     re.IGNORECASE)
-_POCKET_RE = re.compile(rf"^pocket contact:\s*{_ENDPOINT}\s*$", re.IGNORECASE)
+# The optional "for <ligand>" scopes a pocket to one ligand instead of to every
+# ligand of the protein. Needed because a pocket is not purely a property of the
+# receptor: measured on GLP1R/GIPR, orforglipron's site on GLP1R and LSN1's site
+# on GIPR share 3 residues out of ~60 once projected onto each other.
+_POCKET_RE = re.compile(rf"^pocket contact:\s*{_ENDPOINT}(?:\s+for\s+(?P<lig>\S+))?\s*$",
+                         re.IGNORECASE)
 _DISTANCE_RE = re.compile(
     rf"^distance constraint:\s*{_ENDPOINT}\s+to\s+{_ENDPOINT}(?:\s+within\s+([\d.]+)(?:\s+\w+)?)?\s*$",
     re.IGNORECASE)
@@ -775,9 +786,10 @@ def _match_statement(stripped: str, lineno: int):
         return {"type": "bond", "owner": c1, "atom1": [c1, int(r1), a1], "atom2": [c2, int(r2), a2], "line": lineno}
     m = _POCKET_RE.match(stripped)
     if m:
-        chain, res, atom = m.groups()
+        chain, res, atom = m.group(1), m.group(2), m.group(3)
         token = [chain, int(res), atom] if atom else [chain, int(res)]
-        return {"type": "pocket", "owner": chain, "token": token, "line": lineno}
+        return {"type": "pocket", "owner": chain, "token": token,
+                "ligand": m.group("lig"), "line": lineno}
     m = _DISTANCE_RE.match(stripped)
     if m:
         c1, r1, a1, c2, r2, a2, dist = m.groups()
@@ -911,7 +923,7 @@ def _smiles_to_inchikey(smiles: str):
         return None
 
 
-def _build_ligand_record(name: str, fields: dict, lineno: int) -> Ligand:
+def _build_ligand_record(name: str, fields: dict, statements: list, lineno: int) -> Ligand:
     has_smiles, has_ccd = "smiles" in fields, "ccd" in fields
     if has_smiles == has_ccd:  # both True (ambiguous) or both False (missing)
         raise MDParseError(f"ligand '{name}' must specify exactly one of SMILES/CCD (line {lineno})")
@@ -920,7 +932,9 @@ def _build_ligand_record(name: str, fields: dict, lineno: int) -> Ligand:
     if role and role not in ("agonist", "antagonist"):
         raise MDParseError(f"ligand '{name}' has invalid Role '{role}' "
                             f"(expected agonist/antagonist, line {lineno})")
-    return Ligand(id=name, smiles=smiles, ccd=fields.get("ccd"), role=role)
+    pocket_contacts = [s["token"] for s in statements if s["type"] == "pocket"] or None
+    return Ligand(id=name, smiles=smiles, ccd=fields.get("ccd"), role=role,
+                  pocket_contacts=pocket_contacts)
 
 
 # ==========================================================================
@@ -1284,9 +1298,17 @@ def parse_md(path: Path) -> Campaign:
         elif record_type == "ligand":
             ligand_records.append((name, fields, lineno))
 
+    # A pocket written "... for LIG" belongs to that ligand, not to every ligand of
+    # the protein it names. Routed here rather than by which block it appeared in,
+    # because statements are extracted from the whole file before it is split into
+    # blocks, so there is no block to attribute them to.
     statements_by_owner: dict = {}
+    statements_by_ligand: dict = {}
     for stmt in statements:
-        statements_by_owner.setdefault(stmt["owner"], []).append(stmt)
+        if stmt.get("ligand"):
+            statements_by_ligand.setdefault(stmt["ligand"], []).append(stmt)
+        else:
+            statements_by_owner.setdefault(stmt["owner"], []).append(stmt)
 
     families, seen_fam = [], set()
     for name, fields, lineno in protein_records:
@@ -1305,8 +1327,12 @@ def parse_md(path: Path) -> Campaign:
         if name in seen_lig:
             raise MDParseError(f"duplicate ligand '{name}' (line {lineno})")
         seen_lig.add(name)
-        ligands.append(_build_ligand_record(name, fields, lineno))
+        ligands.append(_build_ligand_record(name, fields, statements_by_ligand.pop(name, []), lineno))
 
+    if statements_by_ligand:
+        lig, stmts = next(iter(statements_by_ligand.items()))
+        raise MDParseError(f"a pocket contact (line {stmts[0]['line']}) is written "
+                            f"'for {lig}', but no 'Ligand: {lig}' block exists")
     if not families:
         raise MDParseError("no 'Protein:' blocks found")
     if not ligands:
@@ -1369,12 +1395,17 @@ def _build_yaml_doc(fam: ProteinFamily, lig: object, campaign: Campaign) -> dict
     doc = {"sequences": sequences}
 
     constraints = []
-    if fam.pocket_contacts and lig is not None:
+    # A ligand's own pocket wins over the protein's: the ligand is what has an
+    # experimentally observed site, and two chemotypes on the same receptor can
+    # occupy different ones.
+    pocket_contacts = (lig.pocket_contacts if lig is not None and lig.pocket_contacts
+                       else fam.pocket_contacts)
+    if pocket_contacts and lig is not None:
         # Boltz's pocket constraint requires every contact entry to be an explicit
         # [chain, residue_or_atom] pair (verified against the installed boltz 2.2.1
         # schema parser) -- there is no whole-chain-only shorthand, so a family with
         # no pocket_contacts gets no pocket constraint at all (unconstrained folding).
-        pocket = {"binder": lig.id, "contacts": fam.pocket_contacts}
+        pocket = {"binder": lig.id, "contacts": pocket_contacts}
         # Only written when it differs from Boltz's own default, so an existing
         # campaign's YAML is byte-identical to what it was before this setting existed.
         if campaign.settings.pocket_distance != 6.0:
@@ -1414,7 +1445,11 @@ def generate_yamls(campaign: Campaign, output_dir: Path) -> list:
             yaml.safe_dump(doc, f, sort_keys=False, default_flow_style=False)
         needs_affinity = campaign.settings.predict_affinity and lig is not None
         manifest.append(Target(stem=stem, family_id=fam.id, ligand_id=(lig.id if lig is not None else None),
-                                pocket_contacts_used=(fam.pocket_contacts if lig is not None else None),
+                                # same precedence as _build_yaml_doc: the ligand's own
+                                # pocket wins over the protein's.
+                                pocket_contacts_used=(
+                                    (lig.pocket_contacts or fam.pocket_contacts)
+                                    if lig is not None else None),
                                 needs_affinity=needs_affinity))
     with (output_dir / MANIFEST_FILENAME).open("w") as f:
         json.dump([asdict(t) for t in manifest], f, indent=2)

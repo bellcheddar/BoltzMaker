@@ -319,3 +319,73 @@ def test_recording_memory_never_fails_a_run(bm, tmp_path):
     take down a campaign that is otherwise succeeding."""
     unwritable = tmp_path / "does" / "not" / "exist"
     bm._record_target_memory(unwritable, "GLP1R_LIG1", 41.0)   # must not raise
+
+
+# ---------------------------------------------------------------------------
+#  Per-ligand pocket override
+# ---------------------------------------------------------------------------
+#  A pocket is not purely a property of the receptor. Measured on GLP1R/GIPR: the
+#  site where orforglipron binds GLP1R (7E14) and the site where LSN1 binds GIPR
+#  (7RBT) share 3 residues out of ~60 once projected onto each other, so one
+#  pocket per protein would force one of those chemotypes into the wrong site.
+
+MD_WITH_OVERRIDE = """Settings:
+Output folder: ./boltz_yamls
+Predict affinity: yes
+Pocket distance: 8
+
+Protein: REC
+Sequence: MKTAYIAKQRQISFVKSHFSRQLEERLGLIEVQAPILSRVGDGTQDNLSGAEKAVQVKVKALPDAQFEVVHSLAKWKR
+Pocket contact: REC residue 10
+Pocket contact: REC residue 11
+
+Ligand: DEFAULTS
+SMILES: c1ccccc1
+
+Ligand: OVERRIDE
+SMILES: CCO
+Pocket contact: REC residue 40 for OVERRIDE
+Pocket contact: REC residue 41 for OVERRIDE
+"""
+
+
+def test_a_ligand_pocket_overrides_the_proteins(bm, tmp_path):
+    md = tmp_path / "campaign.md"
+    md.write_text(MD_WITH_OVERRIDE)
+    campaign = bm.parse_md(md)
+    out = tmp_path / "yamls"; out.mkdir()
+    bm.generate_yamls(campaign, out)
+
+    import yaml as _yaml
+    defaults = _yaml.safe_load((out / "REC_DEFAULTS.yaml").read_text())
+    override = _yaml.safe_load((out / "REC_OVERRIDE.yaml").read_text())
+
+    def pocket_of(doc):
+        return next(c["pocket"] for c in doc["constraints"] if "pocket" in c)
+
+    assert pocket_of(defaults)["contacts"] == [["REC", 10], ["REC", 11]]
+    assert pocket_of(override)["contacts"] == [["REC", 40], ["REC", 41]]
+    # and the campaign-level distance reaches both
+    assert pocket_of(defaults)["max_distance"] == 8
+    assert pocket_of(override)["max_distance"] == 8
+
+
+def test_the_distance_is_omitted_when_it_matches_boltzs_own_default(bm, tmp_path):
+    """So an existing campaign's YAML is byte-identical to what it was before this
+    setting existed."""
+    md = tmp_path / "c.md"
+    md.write_text(MD_WITH_OVERRIDE.replace("Pocket distance: 8\n", ""))
+    campaign = bm.parse_md(md)
+    out = tmp_path / "y"; out.mkdir()
+    bm.generate_yamls(campaign, out)
+    import yaml as _yaml
+    doc = _yaml.safe_load((out / "REC_DEFAULTS.yaml").read_text())
+    pocket = next(c["pocket"] for c in doc["constraints"] if "pocket" in c)
+    assert "max_distance" not in pocket
+
+
+def test_a_pocket_for_an_unknown_ligand_is_an_error_not_a_silent_no_op(bm, tmp_path):
+    md = tmp_path / "c.md"
+    md.write_text(MD_WITH_OVERRIDE.replace("for OVERRIDE", "for TYPO"))
+    with pytest.raises(bm.MDParseError, match="no 'Ligand: TYPO' block exists"):
+        bm.parse_md(md)
