@@ -23,10 +23,10 @@
       <label><input type="checkbox" name="use_same_pocket" id="use-same-pocket"> Use same pocket
         &mdash; keep each ligand near the ligand in that protein's reference structure</label>
     </div>
-    <div class="md-field md-pocket-distance" hidden>
+    <div class="md-field md-pocket-distance">
       <label for="pocket_distance">Pocket distance (&Aring;)</label>
       <input type="text" inputmode="decimal" id="pocket_distance" name="pocket_distance"
-             value="8" placeholder="8">
+             value="8" placeholder="8" disabled>
       <p class="md-hint">How far the ligand may sit from the pocket residues taken from the
         reference. Boltz's own default is 6&nbsp;&Aring;; 8&nbsp;&Aring; is a little looser, so the
         pose is guided rather than forced. Pick the ligand to copy in each protein below.</p>
@@ -178,16 +178,16 @@
         This must be a HOLO structure -- one with this ligand, or a close analogue,
         actually bound. The apo field on each protein is a different thing and is used
         only for the apo-vs-holo comparison.  #}
-    <div class="md-field md-pocket-field" hidden>
+    <div class="md-field md-pocket-field">
       <label>Pocket reference PDB id (holo &mdash; optional)</label>
-      <input type="text" name="ligand_pocket_pdb[]" maxlength="4" placeholder="e.g. 7E14">
+      <input type="text" name="ligand_pocket_pdb[]" maxlength="4" placeholder="e.g. 7E14" disabled>
     </div>
-    <div class="md-field md-pocket-field" hidden>
+    <div class="md-field md-pocket-field">
       <label>Pocket ligand</label>
-      <select name="ligand_pocket_ligand[]">
+      <select name="ligand_pocket_ligand[]" disabled>
         <option value="">None &mdash; fold this ligand without a pocket constraint</option>
       </select>
-      <p class="md-hint md-pocket-status">Enter a holo PDB id above to list its ligands.</p>
+      <p class="md-hint md-pocket-status">Tick <b>Use same pocket</b> in Settings to enable.</p>
     </div>
   </div>
 </template>

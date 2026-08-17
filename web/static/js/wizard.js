@@ -260,12 +260,19 @@ var BoltzWizard = (function () {
   var toggle = document.getElementById("use-same-pocket");
   if (!toggle) return;
 
+  /* Enabled rather than revealed: hiding these made the feature invisible to anyone
+     who had not already found the checkbox, which is most people looking for it. */
   function showHide() {
     var on = toggle.checked;
-    var dist = document.querySelector(".md-pocket-distance");
-    if (dist) dist.hidden = !on;
-    var fields = document.querySelectorAll(".md-pocket-field");
-    for (var i = 0; i < fields.length; i++) fields[i].hidden = !on;
+    var controls = document.querySelectorAll(
+      '.md-pocket-field input, .md-pocket-field select, .md-pocket-distance input');
+    for (var i = 0; i < controls.length; i++) controls[i].disabled = !on;
+    var notes = document.querySelectorAll(".md-pocket-status");
+    for (var k = 0; k < notes.length; k++) {
+      if (!on) notes[k].textContent = "Tick Use same pocket in Settings to enable.";
+      else if (/Tick /.test(notes[k].textContent))
+        notes[k].textContent = "Enter a holo PDB id above to list its ligands.";
+    }
     if (on) {
       var ids = document.querySelectorAll('input[name="ligand_pocket_pdb[]"]');
       for (var j = 0; j < ids.length; j++) if (ids[j].value.trim()) load(ids[j]);
