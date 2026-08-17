@@ -400,6 +400,13 @@ var BoltzWizard = (function () {
      meant no listeners were ever attached and the numbers never moved. Resolve it
      lazily instead, and no-op until it exists. */
 
+  /* Sequence fields are textareas and short fields are inputs, so every lookup asks
+     for both. Querying only `input` is what made Co-folded partners read 0 while
+     three were entered. */
+  function fields(name, root) {
+    return (root || document).querySelectorAll(
+      'input[name="' + name + '"], textarea[name="' + name + '"], select[name="' + name + '"]');
+  }
   function filled(nodes) {
     var n = 0;
     for (var i = 0; i < nodes.length; i++) if (nodes[i].value.trim()) n++;
@@ -413,25 +420,25 @@ var BoltzWizard = (function () {
   function recount() {
     if (!document.querySelector(".md-run-summary")) return;
     var proteinRows = document.querySelectorAll("#protein-rows .md-repeat-block");
-    var ligands = filled(document.querySelectorAll('input[name="ligand_value[]"]'));
-    var partners = filled(document.querySelectorAll('input[name="partner_sequence[]"]'));
+    var ligands = filled(fields("ligand_value[]"));
+    var partners = filled(fields("partner_sequence[]"));
 
     var proteins = 0, apo = 0, pockets = 0, predictions = 0;
     for (var i = 0; i < proteinRows.length; i++) {
       var row = proteinRows[i];
-      var seq = row.querySelector('textarea[name="protein_sequence[]"], input[name="protein_sequence[]"]');
+      var seq = fields("protein_sequence[]", row)[0];
       if (!seq || !seq.value.trim()) continue;         // a blank row is not a protein
       proteins++;
       var mine = 0;
-      var pdbs = row.querySelectorAll('input[name="pocket_pdb[]"]');
-      var codes = row.querySelectorAll('select[name="pocket_ligand[]"]');
+      var pdbs = fields("pocket_pdb[]", row);
+      var codes = fields("pocket_ligand[]", row);
       for (var j = 0; j < pdbs.length; j++) {
         if (pdbs[j].value.trim() && codes[j] && codes[j].value) mine++;
       }
       pockets += mine;
       // one unconstrained baseline per ligand, plus one per pocket
       predictions += ligands * (1 + mine);
-      var predictApo = row.querySelector('input[name="protein_apo_predict[]"]');
+      var predictApo = fields("protein_apo_predict[]", row)[0];
       if (predictApo && predictApo.checked) { apo++; predictions++; }
     }
 
