@@ -252,6 +252,37 @@ import boltz.model.layers.initialize as init""",
             pred_dict["coords"] = out["sample_atom_coords"]""",
     ),
     dict(
+        name="release the allocator cache between targets",
+        relpath="boltz/model/models/boltz2.py",
+        marker="# BOLTZMAKER-PATCH: mps-flush-between-targets",
+        old="""            except Exception:
+                pass
+            pred_dict["coords"] = out["sample_atom_coords"]""",
+        new="""            except Exception:
+                pass
+            # BOLTZMAKER-PATCH: mps-flush-between-targets -- empty_cache is otherwise
+            # only called from the out-of-memory handlers, so after a target finishes the
+            # allocator keeps every cached block and the next target starts against them.
+            # Measured on a live campaign: 47GB allocated from the driver with 5.5GB
+            # actually live, i.e. ~41GB of cache held while the ceiling is 55.7GB. That
+            # gap is most of the reason a slightly larger target has nowhere to go.
+            #
+            # Releasing it costs only the re-allocation the next target would have done
+            # anyway, which is nothing against ~44 minutes of sampling, and it changes no
+            # numbers -- this is memory management, not arithmetic. The reclaimed figure
+            # is printed so the effect is visible rather than assumed.
+            try:
+                if torch.backends.mps.is_available():
+                    _before = torch.mps.driver_allocated_memory()
+                    torch.mps.empty_cache()
+                    _after = torch.mps.driver_allocated_memory()
+                    print(f"| MPS_FLUSH released={(_before - _after)/1e9:.2f}GB "
+                          f"held_after={_after/1e9:.2f}GB", flush=True)
+            except Exception:
+                pass
+            pred_dict["coords"] = out["sample_atom_coords"]""",
+    ),
+    dict(
         name="OOM skip frees MPS memory, not just CUDA",
         relpath="boltz/model/models/boltz2.py",
         marker="# BOLTZMAKER-PATCH: mps-flush-loop",
