@@ -531,3 +531,27 @@ def test_zero_runs_them_all_in_one_invocation(bm, tmp_path, monkeypatch):
         [T(f"T{i}") for i in range(9)], 9, 9, 0, tmp_path, tmp_path, tmp_path, tmp_path,
         0, "gpu", tmp_path, 1.0, 1, None, None, 1, None, None, 4096, 2, True, 0)
     assert calls == [9]
+
+
+def test_run_boltz_reaches_the_batch_runner(bm, tmp_path, monkeypatch):
+    """Cover the real call path, not just the inner function.
+
+    The first version of process recycling read `campaign.settings` inside
+    run_boltz, where no `campaign` exists -- a NameError that every test above
+    missed, because they all called _run_boltz_batch_with_retry directly. It
+    surfaced on a live campaign instead. This test enters through run_boltz.
+    """
+    seen = {}
+
+    def fake_retry(batch, *a, **kw):
+        seen["invocation_size"] = a[-1]
+
+    monkeypatch.setattr(bm, "_run_boltz_batch_with_retry", fake_retry)
+
+    class T:
+        stem, needs_affinity = "T0", True
+    monkeypatch.setattr(bm, "_partition_targets", lambda manifest, pred_dir: ([], [T()]))
+
+    bm.run_boltz(tmp_path / "yaml", tmp_path / "out", [T()], 0, "gpu", tmp_path,
+                 targets_per_invocation=3)
+    assert seen["invocation_size"] == 3

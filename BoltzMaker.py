@@ -2445,7 +2445,7 @@ def run_boltz(yaml_dir: Path, out_dir: Path, manifest: list, workers: int, accel
               recycling_steps: int = None, sampling_steps: int = None, diffusion_samples: int = 1,
               diffusion_samples_affinity: int = None, sampling_steps_affinity: int = None,
               max_msa_seqs: int = None, max_retries: int = 2,
-              use_potentials: bool = True) -> None:
+              use_potentials: bool = True, targets_per_invocation: int = 4) -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
     stage_dir = yaml_dir / "_stage_run"
     pred_dir = _predictions_dir_for(out_dir, stage_dir.name)
@@ -2475,7 +2475,7 @@ def run_boltz(yaml_dir: Path, out_dir: Path, manifest: list, workers: int, accel
                           pred_dir, out_dir, workers, accelerator, campaign_dir, mps_watermark,
                           max_parallel_samples, recycling_steps, sampling_steps, diffusion_samples,
                           diffusion_samples_affinity, sampling_steps_affinity, max_msa_seqs, max_retries,
-                          use_potentials, campaign.settings.targets_per_invocation)
+                          use_potentials, targets_per_invocation)
 
 
 _RETRY_SETTLE_SECONDS = 15  # pause between attempts so the OS fully reclaims a crashed subprocess's memory
@@ -5025,7 +5025,8 @@ def main() -> None:
                   diffusion_samples=args.diffusion_samples,
                   diffusion_samples_affinity=args.diffusion_samples_affinity,
                   sampling_steps_affinity=args.sampling_steps_affinity, max_msa_seqs=args.max_msa_seqs,
-                  max_retries=args.max_retries, use_potentials=args.use_potentials)
+                  max_retries=args.max_retries, use_potentials=args.use_potentials,
+                  targets_per_invocation=campaign.settings.targets_per_invocation)
 
     if args.command in ("analyze", "all"):
         df = analyze(output_dir, out_dir, campaign_dir, campaign,
