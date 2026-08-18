@@ -2,7 +2,7 @@
 
 > **BoltzMaker: Boltz2 campaign-scale structure and affinity prediction, binding analysis, and run control, orchestrated end to end from a single spec file.**
 
-[![live](https://img.shields.io/badge/live-boltzmaker.mdeller.com-00d084?logo=icloud&logoColor=white)](https://boltzmaker.mdeller.com) ![python](https://img.shields.io/badge/python-3.12.3-3776AB?logo=python&logoColor=white) ![flask](https://img.shields.io/badge/flask-3.1.3-000000?logo=flask&logoColor=white) ![gunicorn](https://img.shields.io/badge/gunicorn-26.0.0-499848?logo=gunicorn&logoColor=white) ![nginx](https://img.shields.io/badge/nginx-1.24.0-009639?logo=nginx&logoColor=white) ![boltz](https://img.shields.io/badge/boltz-2-00897B) ![rdkit](https://img.shields.io/badge/RDKit-2026.03-00d084) ![gemmi](https://img.shields.io/badge/gemmi-0.6.5-8a3ffc) ![biopython](https://img.shields.io/badge/Biopython-1.84-1a6b8f) ![plip](https://img.shields.io/badge/PLIP-2025-9b51e0) ![pymol](https://img.shields.io/badge/PyMOL-3.1-ff6900) ![plotly](https://img.shields.io/badge/Plotly.js-2.35.2-3F4F75?logo=plotly&logoColor=white) ![3dmoljs](https://img.shields.io/badge/3Dmol.js-3D%20viewer-fcb900) ![molstar](https://img.shields.io/badge/Mol*-4.9.0-1a6b8f) ![pytest](https://img.shields.io/badge/pytest-356%20passing-0A9EDC?logo=pytest&logoColor=white) ![data](https://img.shields.io/badge/data-GPCRdb%20%C2%B7%20KLIFS%20%C2%B7%20PDBe-467FF7) ![licence](https://img.shields.io/badge/licence-MIT-467FF7) ![author](https://img.shields.io/badge/author-Marc%20C.%20Deller%2C%20D.Phil.-1C244B)
+[![live](https://img.shields.io/badge/live-boltzmaker.mdeller.com-00d084?logo=icloud&logoColor=white)](https://boltzmaker.mdeller.com) ![python](https://img.shields.io/badge/python-3.12.3-3776AB?logo=python&logoColor=white) ![flask](https://img.shields.io/badge/flask-3.1.3-000000?logo=flask&logoColor=white) ![gunicorn](https://img.shields.io/badge/gunicorn-26.0.0-499848?logo=gunicorn&logoColor=white) ![nginx](https://img.shields.io/badge/nginx-1.24.0-009639?logo=nginx&logoColor=white) ![boltz](https://img.shields.io/badge/boltz-2-00897B) ![rdkit](https://img.shields.io/badge/RDKit-2026.03-00d084) ![gemmi](https://img.shields.io/badge/gemmi-0.6.5-8a3ffc) ![biopython](https://img.shields.io/badge/Biopython-1.84-1a6b8f) ![plip](https://img.shields.io/badge/PLIP-2025-9b51e0) ![pymol](https://img.shields.io/badge/PyMOL-3.1-ff6900) ![plotly](https://img.shields.io/badge/Plotly.js-2.35.2-3F4F75?logo=plotly&logoColor=white) ![3dmoljs](https://img.shields.io/badge/3Dmol.js-3D%20viewer-fcb900) ![molstar](https://img.shields.io/badge/Mol*-4.9.0-1a6b8f) ![pytest](https://img.shields.io/badge/pytest-366%20passing-0A9EDC?logo=pytest&logoColor=white) ![data](https://img.shields.io/badge/data-GPCRdb%20%C2%B7%20KLIFS%20%C2%B7%20PDBe-467FF7) ![licence](https://img.shields.io/badge/licence-MIT-467FF7) ![author](https://img.shields.io/badge/author-Marc%20C.%20Deller%2C%20D.Phil.-1C244B)
 
 <table>
 <tr>
@@ -365,6 +365,9 @@ belongs to and can be written anywhere in the file.
 Settings:
 Output folder: ./boltz_yamls    # where generated per-target YAMLs are written
 Predict affinity: no            # off by default -- it's a heavier prediction pass
+Targets per invocation: 4       # restart Boltz every N targets so the GPU allocator
+                                # starts clean -- see "what we fixed", item 2b.
+                                # 0 runs the whole batch in one long-lived process
 
 Protein: RECP1                  # short name, MAX 5 CHARACTERS (Boltz stores chain names
                                 # in a fixed 5-char field internally and silently
@@ -638,6 +641,25 @@ was less carefully steered than its siblings and deserves a second look.
 Guards 4, 5 and 6 only ever act on values that are *already* broken, so any target
 that would have worked before produces byte-for-byte the same structure and the same
 affinity. They can only rescue targets that previously produced nothing.
+
+**7. Patches that were only applied one way in.** All of the above are edits to the
+installed Boltz, and they used to be applied only by `run_campaign.sh`. Start a
+campaign directly with `BoltzMaker.py all`, or rebuild the environment -- installing
+Boltz puts back its own untouched files -- and everything above quietly reverted, with
+nothing but a warning line in the preflight table that nobody is awake at 3am to read.
+BoltzMaker now applies them itself before running, every time. It is a no-op when they
+are already in place, and if a repair *was* needed the preflight row says so
+(`repaired 3 this run`) rather than passing silently.
+
+**8. A run that hangs forever instead of failing.** The worst failure was the one that
+did not look like a failure: Boltz goes quiet, its worker sits in a state the operating
+system will not interrupt, it keeps its GPU memory, and it never exits or errors. Seen
+on a live campaign: 24 minutes of silence holding 39.8GB with no work being done, which
+would have run to morning. BoltzMaker now watches how long it has been since Boltz last
+said anything, and after an hour treats it as wedged, stops it, and lets the retry
+ladder rerun the affected targets one at a time in fresh processes. Nothing already
+computed is lost. This used to require a separate watchdog program running alongside;
+it is now part of the run, so an unattended campaign needs nothing watching it.
 
 ## ⚙️ Progress, and how long a run will take
 
@@ -1151,7 +1173,7 @@ uncompressed-size and entry-count caps) before anything is extracted.
 .venv/bin/pytest tests/
 ```
 
-347 tests. The `compare-sse` annotators are covered against real fixture data (a real apo EGFR
+366 tests. The `compare-sse` annotators are covered against real fixture data (a real apo EGFR
 kinase-domain structure vs the `egfr_covalent` example's real holo prediction; a real
 apo beta2-adrenergic-receptor structure vs `adrb2_gs_panel`'s real holo predictions),
 with GPCRdb/KLIFS/PDBe network calls swapped for an injectable fake client seeded with
@@ -1224,6 +1246,15 @@ example campaigns.
   record each completed target's peak RSS to `.boltzmaker_target_memory.jsonl`.
 - [x] Stop one unusable Pfam mapping discarding every domain for a structure. PDBe returns `author_residue_number: null` when a domain boundary is not observed in the deposited model -- 3 of 6 mappings for `7dty`, including the receptor's own PF02793 -- and that null reached `range()`, raising `'NoneType' object cannot be interpreted as an integer` and losing the usable domains with it. A real GIPR campaign therefore had no motifs and `compare-sse produced no comparable targets`; it now writes 27 rows across both families.
 - [x] Make boltz's full-precision guards work off CUDA. It wraps its numerically fragile steps -- triangular attention, pairformer, attention, the distogram and confidence heads, the encoders and the diffusion sampler -- in `torch.autocast("cuda", enabled=False)`, because they overflow in reduced precision. The device type is hardcoded, so on Apple silicon (autocast device_type `mps`) all **19 sites across 12 files** are inert and those steps run in bfloat16 regardless. Measured on torch 2.10: inside an MPS bf16 autocast a matmul under boltz's own guard still returns bfloat16; with the fix it returns float32. Nesting a second guard keeps it a no-op on CUDA.
+- [x] Make an unattended run need nothing watching it. Recycle the Boltz process every
+  `Targets per invocation` targets (default 4), because Apple's allocator only returns
+  everything on process exit -- held memory floored at ~20GB after one target and grew
+  ~1.9GB per target against a 55.7GB ceiling, which is why a run had 0 out-of-memory
+  skips in its first four targets and 3 in its last four. Apply the boltz patches from
+  BoltzMaker itself rather than only from `run_campaign.sh`, so a direct `all` or a
+  rebuilt environment cannot run unpatched. Stop a Boltz that has said nothing for an
+  hour and hand its targets to the retry ladder, instead of waiting on a wedged worker
+  that will never exit. Together these retire the external watchdog.
 - [ ] Classify the failure before retrying, and escalate along the axis that addresses it:
   a memory ladder (isolation, then `--max-msa-seqs 2048`) and a NaN ladder
   (`--no-potentials`, then fp32). Retrying with identical parameters is already known to be

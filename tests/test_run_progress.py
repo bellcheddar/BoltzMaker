@@ -555,3 +555,60 @@ def test_run_boltz_reaches_the_batch_runner(bm, tmp_path, monkeypatch):
     bm.run_boltz(tmp_path / "yaml", tmp_path / "out", [T()], 0, "gpu", tmp_path,
                  targets_per_invocation=3)
     assert seen["invocation_size"] == 3
+
+
+# ---------------------------------------------------------------------------
+#  Unattended-run guards
+# ---------------------------------------------------------------------------
+
+def test_stall_timeout_is_between_a_slow_start_and_a_wasted_night(bm):
+    """Model load + MSA setup is a few minutes; a wedged run costs the whole night."""
+    assert 15 * 60 < bm._STALL_TIMEOUT_SECONDS <= 90 * 60
+
+
+def test_patch_check_applies_before_it_verifies(bm, monkeypatch, tmp_path):
+    """Patches used to be applied only by run_campaign.sh.
+
+    A campaign started directly with `BoltzMaker.py all`, or one whose environment
+    had been rebuilt (installing boltz reverts every patch), ran unpatched behind a
+    WARN nobody was awake to read.
+    """
+    bm._PATCH_STATE["result"] = None
+    calls = []
+
+    class Done:
+        returncode, stdout, stderr = 0, "  applied  nan-guard\n", ""
+
+    def fake_run(cmd, **kw):
+        calls.append("--check" if "--check" in cmd else "apply")
+        return Done()
+
+    monkeypatch.setattr(bm.subprocess, "run", fake_run)
+    monkeypatch.setattr(bm, "SCRIPT_DIR", tmp_path)
+    (tmp_path / "patches").mkdir()
+    (tmp_path / "patches" / "apply_boltz_patches.py").write_text("")
+
+    result = bm.check_boltz_patches()
+    assert calls == ["apply", "--check"], "must apply first, then verify"
+    assert result.status == "PASS"
+    assert "repaired 1" in result.message, "a silent repair is worth saying out loud"
+
+
+def test_patch_check_runs_once_per_process(bm, monkeypatch, tmp_path):
+    """`all` calls it from preflight and again from run_boltz."""
+    bm._PATCH_STATE["result"] = None
+    calls = []
+
+    class Done:
+        returncode, stdout, stderr = 0, "", ""
+
+    monkeypatch.setattr(bm.subprocess, "run", lambda cmd, **kw: (calls.append(1), Done())[1])
+    monkeypatch.setattr(bm, "SCRIPT_DIR", tmp_path)
+    (tmp_path / "patches").mkdir()
+    (tmp_path / "patches" / "apply_boltz_patches.py").write_text("")
+
+    bm.check_boltz_patches()
+    first = len(calls)
+    bm.check_boltz_patches()
+    assert len(calls) == first, "second call must be memoised, not re-scan every file"
+    bm._PATCH_STATE["result"] = None
