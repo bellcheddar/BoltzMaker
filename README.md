@@ -2,7 +2,7 @@
 
 > **BoltzMaker: Boltz2 campaign-scale structure and affinity prediction, binding analysis, and run control, orchestrated end to end from a single spec file.**
 
-[![live](https://img.shields.io/badge/live-boltzmaker.mdeller.com-00d084?logo=icloud&logoColor=white)](https://boltzmaker.mdeller.com) ![python](https://img.shields.io/badge/python-3.12.3-3776AB?logo=python&logoColor=white) ![flask](https://img.shields.io/badge/flask-3.1.3-000000?logo=flask&logoColor=white) ![gunicorn](https://img.shields.io/badge/gunicorn-26.0.0-499848?logo=gunicorn&logoColor=white) ![nginx](https://img.shields.io/badge/nginx-1.24.0-009639?logo=nginx&logoColor=white) ![boltz](https://img.shields.io/badge/boltz-2-00897B) ![rdkit](https://img.shields.io/badge/RDKit-2026.03-00d084) ![gemmi](https://img.shields.io/badge/gemmi-0.6.5-8a3ffc) ![biopython](https://img.shields.io/badge/Biopython-1.84-1a6b8f) ![plip](https://img.shields.io/badge/PLIP-2025-9b51e0) ![pymol](https://img.shields.io/badge/PyMOL-3.1-ff6900) ![plotly](https://img.shields.io/badge/Plotly.js-2.35.2-3F4F75?logo=plotly&logoColor=white) ![3dmoljs](https://img.shields.io/badge/3Dmol.js-3D%20viewer-fcb900) ![molstar](https://img.shields.io/badge/Mol*-4.9.0-1a6b8f) ![pytest](https://img.shields.io/badge/pytest-350%20passing-0A9EDC?logo=pytest&logoColor=white) ![data](https://img.shields.io/badge/data-GPCRdb%20%C2%B7%20KLIFS%20%C2%B7%20PDBe-467FF7) ![licence](https://img.shields.io/badge/licence-MIT-467FF7) ![author](https://img.shields.io/badge/author-Marc%20C.%20Deller%2C%20D.Phil.-1C244B)
+[![live](https://img.shields.io/badge/live-boltzmaker.mdeller.com-00d084?logo=icloud&logoColor=white)](https://boltzmaker.mdeller.com) ![python](https://img.shields.io/badge/python-3.12.3-3776AB?logo=python&logoColor=white) ![flask](https://img.shields.io/badge/flask-3.1.3-000000?logo=flask&logoColor=white) ![gunicorn](https://img.shields.io/badge/gunicorn-26.0.0-499848?logo=gunicorn&logoColor=white) ![nginx](https://img.shields.io/badge/nginx-1.24.0-009639?logo=nginx&logoColor=white) ![boltz](https://img.shields.io/badge/boltz-2-00897B) ![rdkit](https://img.shields.io/badge/RDKit-2026.03-00d084) ![gemmi](https://img.shields.io/badge/gemmi-0.6.5-8a3ffc) ![biopython](https://img.shields.io/badge/Biopython-1.84-1a6b8f) ![plip](https://img.shields.io/badge/PLIP-2025-9b51e0) ![pymol](https://img.shields.io/badge/PyMOL-3.1-ff6900) ![plotly](https://img.shields.io/badge/Plotly.js-2.35.2-3F4F75?logo=plotly&logoColor=white) ![3dmoljs](https://img.shields.io/badge/3Dmol.js-3D%20viewer-fcb900) ![molstar](https://img.shields.io/badge/Mol*-4.9.0-1a6b8f) ![pytest](https://img.shields.io/badge/pytest-356%20passing-0A9EDC?logo=pytest&logoColor=white) ![data](https://img.shields.io/badge/data-GPCRdb%20%C2%B7%20KLIFS%20%C2%B7%20PDBe-467FF7) ![licence](https://img.shields.io/badge/licence-MIT-467FF7) ![author](https://img.shields.io/badge/author-Marc%20C.%20Deller%2C%20D.Phil.-1C244B)
 
 <table>
 <tr>
@@ -574,6 +574,60 @@ being killed, worth knowing about before running anything large. Mitigations bui
 If a target still fails after every automatic retry, that's a real finding (this
 hardware may not be viable for a complex that size), not something to force through.
 
+## 🩺 What we fixed in Boltz, in plain English
+
+Boltz is excellent software, but a few of its assumptions do not hold on an Apple
+Silicon Mac, and two of them are the kind that waste days rather than minutes.
+`patches/apply_boltz_patches.py` repairs them. It runs automatically from
+`run_campaign.sh`, is safe to re-run, and keeps a `.orig` of every file it touches.
+`preflight` shows a `boltz_patches` row so you can see at a glance whether they are
+in place. **Every one of these was found by measuring a real campaign, not by
+reading the code.**
+
+**1. Memory that was never given back.** When a prediction ran out of memory, Boltz
+tried to release its GPU memory by asking the NVIDIA graphics system to let go.
+There is no NVIDIA hardware in a Mac, so that request did nothing at all and the
+memory stayed held. Each failure therefore made the next one likelier: one campaign
+skipped eleven targets in a row this way. Boltz now asks Apple's graphics system
+instead.
+
+**2. Memory held between targets.** Even when a target *succeeded*, its working
+memory was kept rather than returned, so the next target started with the tank
+half full. Measured on a live run: 47GB held with only 5.5GB actually in use,
+against a 55.7GB ceiling. Returning it after each target frees about **28GB**, which
+is the difference between the next target fitting and failing. This is bookkeeping
+only -- no prediction changes.
+
+**3. Half-precision where full precision was intended.** Boltz deliberately forces
+its most delicate calculations to run at full precision, because they overflow
+otherwise. It does this with an instruction that names NVIDIA hardware explicitly,
+so on a Mac all **19** of those protections were silently doing nothing and the
+delicate steps ran at half precision anyway.
+
+**4. One bad target killing all the others.** A numerical failure in a single target
+aborted the entire run, and every target queued behind it was never attempted --
+they simply never happened, with nothing in the output to say so. A failure is now
+contained to the target that caused it.
+
+**5. The affinity step tripping over a missing file.** After the structures are
+built, Boltz predicts binding affinity for all of them at once. If any target had
+been skipped, that step looked for a file which was never written and crashed --
+taking down the results of every target that had succeeded. It now skips the
+incomplete ones and carries on.
+
+**6. Steering that could destroy a structure.** Boltz nudges atoms with simulated
+physical forces to keep the geometry sensible. When two atoms end up very close, the
+repulsive force between them becomes enormous, and after twenty rounds of nudging it
+can overflow to infinity -- which is then added to *every* atom's position, turning
+the whole structure into nonsense. One target failed this way twenty times in a row.
+An unusable force is now ignored rather than applied, and the run reports how many
+times it had to do that: a handful is noise, hundreds means that structure's geometry
+was less carefully steered than its siblings and deserves a second look.
+
+Guards 4, 5 and 6 only ever act on values that are *already* broken, so any target
+that would have worked before produces byte-for-byte the same structure and the same
+affinity. They can only rescue targets that previously produced nothing.
+
 ## ⚙️ Progress, and how long a run will take
 
 Two rows during `run`, laid out as a metrics rail: a state mark, a label, the bar, then every
@@ -1129,6 +1183,20 @@ example campaigns.
 
 ## 📋 To do
 
+- [x] Let a private campaign be shown to someone without publishing it: **share links**.
+  The same self-contained HTML package the Download button produces is hosted at an
+  unguessable URL behind a generated password, shown once and stored only as a PBKDF2
+  hash. A share is still not a listed run -- it lives under `<runs_root>/shares/`, which
+  the Archive never reads, so it cannot appear on `/runs` or the landing page however many
+  exist. Two independent secrets per share (the viewing password cannot revoke), a
+  per-share cookie secret so revoking invalidates every session already issued, a
+  10-attempt lockout that survives a worker restart, and revocation both by a one-click
+  link and by the campaign's own Destroy button. Shares never expire by design, so the
+  storage cap refuses a new share rather than evicting an old one -- evicting would break
+  the promise that a link works until it is revoked.
+- [x] Add **Use same pocket** to Prepare, with a distance box defaulting to 8 A. Co-folding puts a ligand wherever it likes: measured on a real GLP1R/GIPR campaign, 6 of 27 ligands docked onto the G-protein subunits rather than the receptor, and only 6 of 14 GIPR ligands shared a site. The pocket reference is **per ligand**, not per protein, because a pocket belongs to the ligand-receptor pair -- orforglipron's site on GLP1R (7E14) and LSN1's site on GIPR (7RBT) share 3 residues out of ~60 once projected onto each other, so one pocket per receptor would force one chemotype into the wrong site. Each ligand names a **holo** reference and picks from the ligands found in it; waters, ions, buffers, sugars and lipids are excluded outright, so 7dty's six cholesterols are never offered. Holo is enforced for the pocket and apo is enforced for the comparison: a reference with a bound ligand is refused as apo (6ln2, a modulator+Fab complex, was used as one for weeks) and a ligand-free one is refused as a pocket. Residues are mapped into the user's own numbering by alignment and reach Boltz as a `pocket` constraint with `max_distance`.
+- [x] Close the archive's trust gap: "Keep private" put the guarantee in a checkbox the caller had to remember to tick, and automated form posts made against the live site published three bundles of a real private campaign on `/runs` and the front page. Archiving now needs positive evidence of a person submitting the form from this site (`Sec-Fetch-Site: same-origin`, or a same-origin `Referer`), fails closed otherwise, and honours an explicit `X-BoltzMaker-No-Archive` opt-out for test clients.
+- [x] Add **Use potentials** as the first Prediction setting, on by default: Boltz's FK steering and physical-guidance coordinate update were hardcoded on, with no way to turn them off from the web form or the CLI. `--no-potentials` now threads through to `boltz predict`, which matters because that guidance update is one of the places a diffusion trajectory can diverge to NaN.
 - [x] Make single-target retries actually isolated: staging one YAML did not scope the
   run, because `boltz predict` rebuilds its manifest from every processed record and
   iterates that, so a "one at a time" retry re-ran the whole campaign in one process and
