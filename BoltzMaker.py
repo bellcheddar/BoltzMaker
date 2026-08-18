@@ -624,6 +624,15 @@ class Settings:
     # is 6.0; only emitted when a family actually has pocket contacts, so a campaign
     # without them is unaffected.
     pocket_distance: float = 6.0
+    # How many targets one `boltz predict` process may run before BoltzMaker starts a
+    # fresh one. Apple's MPS allocator never returns everything: measured on a live
+    # campaign, driver-held memory floored at ~20GB after the first target and rose
+    # ~1.9GB per target after that, while a single target in a fresh process peaked at
+    # 47.6GB of a 55.7GB ceiling. Left to run, the two meet and every later target
+    # fails for memory -- 0 out-of-memory skips in the first four targets of one run,
+    # 3 in the last four. Only process exit frees it, so the process is recycled.
+    # 0 disables the recycling and restores the old single-invocation behaviour.
+    targets_per_invocation: int = 4
 
 
 @dataclass
@@ -717,7 +726,8 @@ _RECORD_START_RE = re.compile(r"^(Settings|Protein|Partner|Ligand)\s*:\s*(.*)$",
 _FIELD_RE = re.compile(r"^([A-Za-z][A-Za-z ]*?)\s*:\s*(.*)$")
 
 _RECORD_ALLOWED_FIELDS = {
-    "settings": {"output folder", "predict affinity", "pocket distance"},
+    "settings": {"output folder", "predict affinity", "pocket distance",
+                 "targets per invocation"},
     "protein": {"sequence", "partners", "ligands", "modifications", "cyclic", "msa", "templates",
                 "apo structure", "apo chain", "family type", "group"},
     "partner": {"sequence", "type", "copies", "modifications", "cyclic", "msa"},
@@ -1295,15 +1305,25 @@ def parse_md(path: Path) -> Campaign:
     for record_type, name, fields, lineno in records:
         if record_type == "settings":
             settings.output_dir = fields.get("output folder", settings.output_dir)
+            raw_chunk = fields.get("targets per invocation", "").strip()
+            if raw_chunk:
+                try:
+                    settings.targets_per_invocation = int(raw_chunk)
+                except ValueError:
+                    raise MDParseError(
+                        f"Settings: 'Targets per invocation: {raw_chunk}' is not a whole number.")
+                if settings.targets_per_invocation < 0:
+                    raise MDParseError(
+                        "Settings: 'Targets per invocation' cannot be negative (0 disables recycling).")
             raw_distance = fields.get("pocket distance", "").strip()
             if raw_distance:
                 try:
                     settings.pocket_distance = float(raw_distance)
                 except ValueError:
-                    raise CampaignError(
+                    raise MDParseError(
                         f"Settings: 'Pocket distance: {raw_distance}' is not a number.")
                 if not 1.0 <= settings.pocket_distance <= 50.0:
-                    raise CampaignError(
+                    raise MDParseError(
                         f"Settings: 'Pocket distance: {raw_distance}' is outside 1-50 A.")
             settings.predict_affinity = _parse_yesno(fields.get("predict affinity", ""), settings.predict_affinity)
         elif record_type == "partner":
@@ -1910,29 +1930,57 @@ def check_plip_env() -> CheckResult:
                         f"skipped (optional; {fix} to enable)")
 
 
-def check_boltz_patches() -> CheckResult:
-    """Verify patches/apply_boltz_patches.py is applied to the installed boltz.
+# check_boltz_patches() applies as well as checks, so it must not run twice in one
+# process: `all` calls it from preflight and again from run_boltz (for the entry points
+# that skip preflight), and the second call would re-scan every patched file for nothing.
+_PATCH_STATE: dict = {"result": None}
 
-    WARN rather than FAIL: an unpatched boltz still runs, it just loses the
-    containment that stops one target's numerical failure aborting every target
-    queued behind it. A `pip install -U boltz` silently reverts all three, and the
-    symptom -- a run that looks alive for hours while producing nothing -- is
-    expensive to diagnose from scratch, so it is worth a line in every preflight.
+
+def _remember_patch_state(result: "CheckResult") -> "CheckResult":
+    _PATCH_STATE["result"] = result
+    return result
+
+
+def check_boltz_patches() -> CheckResult:
+    """Apply patches/apply_boltz_patches.py to the installed boltz, then verify.
+
+    Applies rather than merely reporting, because the patches are what make an
+    unattended run survive: numerical-failure containment, the MPS flush between
+    targets, the NaN guards in steering, and the precision fixes. They used to be
+    applied only by run_campaign.sh, so a campaign started directly with
+    `BoltzMaker.py all` -- and any campaign whose environment had been rebuilt,
+    since installing boltz reverts every patch -- ran unpatched with nothing but a
+    WARN nobody was awake to read.
+
+    Applying is idempotent and a no-op when they are already in place, so the cost
+    on the normal path is one subprocess. Still WARN and never FAIL if it does not
+    take: an unpatched boltz predicts, it just loses the containment, and refusing
+    to start would turn a degraded overnight run into no run at all.
+
+    Self-healing here follows _plip_available()'s precedent rather than adding a
+    separate step, so there is one place that knows the environment must be fixed.
     """
+    if _PATCH_STATE.get("result") is not None:
+        return _PATCH_STATE["result"]
     script = SCRIPT_DIR / "patches" / "apply_boltz_patches.py"
     if not script.is_file():
-        return CheckResult("boltz_patches", "WARN", f"patch script not found at {script}")
+        return _remember_patch_state(CheckResult("boltz_patches", "WARN", f"patch script not found at {script}"))
     try:
+        applied = subprocess.run([sys.executable, str(script)],
+                                 capture_output=True, text=True, timeout=300)
+        healed = sum(1 for l in applied.stdout.splitlines() if l.strip().startswith("applied "))
         proc = subprocess.run([sys.executable, str(script), "--check"],
                               capture_output=True, text=True, timeout=60)
     except (OSError, subprocess.SubprocessError) as e:
-        return CheckResult("boltz_patches", "WARN", f"could not check boltz patches: {e}")
+        return _remember_patch_state(CheckResult("boltz_patches", "WARN", f"could not check boltz patches: {e}"))
     if proc.returncode == 0:
-        return CheckResult("boltz_patches", "PASS", "boltz numerical-failure patches applied")
+        return _remember_patch_state(CheckResult("boltz_patches", "PASS",
+                           f"boltz numerical-failure patches applied (repaired {healed} this run)"
+                           if healed else "boltz numerical-failure patches applied"))
     outstanding = [l.strip() for l in proc.stdout.splitlines() if "NOT APPLIED" in l or "CANNOT" in l]
-    return CheckResult("boltz_patches", "WARN",
+    return _remember_patch_state(CheckResult("boltz_patches", "WARN",
                        f"{len(outstanding)} boltz patch(es) not applied -- one target's numerical "
-                       f"failure can abort the whole batch; run `python3 {script}`")
+                       f"failure can abort the whole batch; run `python3 {script}`"))
 
 
 def run_preflight(manifest: list, output_dir: Path, campaign: Campaign, md_path: Path, strict: bool = False,
@@ -2425,8 +2473,14 @@ def run_boltz(yaml_dir: Path, out_dir: Path, manifest: list, workers: int, accel
               recycling_steps: int = None, sampling_steps: int = None, diffusion_samples: int = 1,
               diffusion_samples_affinity: int = None, sampling_steps_affinity: int = None,
               max_msa_seqs: int = None, max_retries: int = 2,
-              use_potentials: bool = True) -> None:
+              use_potentials: bool = True, targets_per_invocation: int = 4) -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
+    # Covers `run`, which skips preflight. Memoised, so `all` does not repeat the work
+    # it already did. An unpatched boltz is the difference between one target's NaN
+    # being contained and it aborting every target queued behind it.
+    patches = check_boltz_patches()
+    if patches.status != "PASS":
+        _warn(f"boltz patches: {patches.message}")
     stage_dir = yaml_dir / "_stage_run"
     pred_dir = _predictions_dir_for(out_dir, stage_dir.name)
 
@@ -2455,8 +2509,15 @@ def run_boltz(yaml_dir: Path, out_dir: Path, manifest: list, workers: int, accel
                           pred_dir, out_dir, workers, accelerator, campaign_dir, mps_watermark,
                           max_parallel_samples, recycling_steps, sampling_steps, diffusion_samples,
                           diffusion_samples_affinity, sampling_steps_affinity, max_msa_seqs, max_retries,
-                          use_potentials)
+                          use_potentials, targets_per_invocation)
 
+
+# How long boltz may say nothing before it is treated as wedged rather than busy. The
+# quietest legitimate stretch is model load plus MSA setup at the start of an invocation,
+# a few minutes; a target that is genuinely sampling refreshes its progress bar
+# continuously. 60 minutes is far above the former and far below a wasted night -- the
+# external watchdog this replaces used 75.
+_STALL_TIMEOUT_SECONDS = 3600
 
 _RETRY_SETTLE_SECONDS = 15  # pause between attempts so the OS fully reclaims a crashed subprocess's memory
 
@@ -2467,7 +2528,8 @@ def _run_boltz_batch_with_retry(batch: list, total_pending: int, manifest_len: i
                                  max_parallel_samples: int, recycling_steps: int, sampling_steps: int,
                                  diffusion_samples: int, diffusion_samples_affinity: int,
                                  sampling_steps_affinity: int, max_msa_seqs: int, max_retries: int,
-                                 use_potentials: bool = True) -> None:
+                                 use_potentials: bool = True,
+                                 targets_per_invocation: int = 4) -> None:
     """Runs a batch, then automatically retries any target that didn't complete.
 
     A real 4-target cascade on `5ht2_gq_panel` showed why this matters: an OOM during
@@ -2485,11 +2547,27 @@ def _run_boltz_batch_with_retry(batch: list, total_pending: int, manifest_len: i
     attempt = 0
     while remaining:
         if attempt == 0:
-            _run_boltz_batch(remaining, total_pending, manifest_len, complete_len, yaml_dir, stage_dir,
-                              pred_dir, out_dir, workers, accelerator, campaign_dir, mps_watermark,
-                              max_parallel_samples, recycling_steps, sampling_steps, diffusion_samples,
-                              diffusion_samples_affinity, sampling_steps_affinity, max_msa_seqs,
-                              use_potentials)
+            # Recycle the process every `targets_per_invocation` targets. Apple's MPS
+            # allocator only returns everything on process exit: measured on a live
+            # campaign, driver-held memory floored at ~20GB after one target and grew
+            # ~1.9GB per target thereafter, while a single target in a fresh process
+            # peaked at 47.6GB of a 55.7GB ceiling. Left in one process the two meet --
+            # that run had 0 out-of-memory skips in its first four targets and 3 in its
+            # last four. Each fresh process starts the allocator at zero, and Boltz
+            # skips targets that already have a structure, so a chunk boundary costs one
+            # model load (~4 min against ~45 min of sampling) and nothing is recomputed.
+            size = targets_per_invocation if targets_per_invocation > 0 else len(remaining)
+            chunks = [remaining[i:i + size] for i in range(0, len(remaining), size)]
+            if len(chunks) > 1:
+                _info(f"running {len(remaining)} target(s) in {len(chunks)} invocation(s) of up to "
+                      f"{size}, so MPS memory is released between them "
+                      f"(Settings: 'Targets per invocation: 0' to disable)")
+            for chunk in chunks:
+                _run_boltz_batch(chunk, total_pending, manifest_len, complete_len, yaml_dir, stage_dir,
+                                  pred_dir, out_dir, workers, accelerator, campaign_dir, mps_watermark,
+                                  max_parallel_samples, recycling_steps, sampling_steps, diffusion_samples,
+                                  diffusion_samples_affinity, sampling_steps_affinity, max_msa_seqs,
+                                  use_potentials)
         else:
             _step(f"retrying {len(remaining)} incomplete target(s) in isolation "
                   f"(attempt {attempt}/{max_retries}, one at a time, {_RETRY_SETTLE_SECONDS}s pause "
@@ -2633,13 +2711,14 @@ def _run_boltz_batch_body(pending: list, total_pending: int, manifest_len: int, 
     # reads as a hung program. These two let the display distinguish "no progress"
     # from "no news", and keep a clock that is genuinely ours ticking either way.
     phase = {"name": "starting", "done": 0, "total": 0, "rate": "",
-             "since": time.time(), "updated": 0.0}
+             "since": time.time(), "updated": 0.0, "heard": time.time()}
 
     def _reader():
         for line in proc.stdout:
             log_f.write(line)
             log_f.flush()
             latest_line["text"] = line.rstrip()
+            phase["heard"] = time.time()
             for pattern, name in _PHASE_PATTERNS:
                 if pattern.search(line):
                     phase.update(name=name, done=0, total=0, rate="",
@@ -2759,11 +2838,28 @@ def _run_boltz_batch_body(pending: list, total_pending: int, manifest_len: int, 
             inner = progress.add_task("starting", total=None, **blank)
             first_done_at = None
             done_prev = 0
+            stalled = {"fired": False}
             while proc.poll() is None:
                 now = time.time()
                 if controls.quit_requested:
                     # Same shutdown as Ctrl-C, deliberately: one path to get right.
                     raise KeyboardInterrupt
+
+                # A wedged boltz does not exit and does not error -- it goes quiet with
+                # its worker in an uninterruptible wait, holding its GPU memory, and
+                # waits forever. Observed on a live campaign: 24 minutes of silence at
+                # 39.8GB held with no GPU work, which would have run to morning. This
+                # was the external watchdog's job; doing it here means an unattended run
+                # needs nothing watching it. Killing the tree drops the targets back to
+                # the retry ladder, which reruns them one at a time in fresh processes,
+                # and boltz keeps whatever it had already written.
+                if not stalled["fired"] and now - phase["heard"] > _STALL_TIMEOUT_SECONDS:
+                    stalled["fired"] = True
+                    _warn(f"boltz has produced no output for "
+                          f"{_compact_duration(now - phase['heard'])} "
+                          f"(limit {_compact_duration(_STALL_TIMEOUT_SECONDS)}) -- treating it as "
+                          f"wedged and stopping it so the remaining target(s) can be retried")
+                    controls.terminate_tree()
                 done = sum(1 for t in pending if _target_complete(pred_dir, t.stem, t.needs_affinity))
                 if done > done_prev:
                     # Timestamp of the first completion, so the in-run rate below
@@ -4988,7 +5084,8 @@ def main() -> None:
                   diffusion_samples=args.diffusion_samples,
                   diffusion_samples_affinity=args.diffusion_samples_affinity,
                   sampling_steps_affinity=args.sampling_steps_affinity, max_msa_seqs=args.max_msa_seqs,
-                  max_retries=args.max_retries, use_potentials=args.use_potentials)
+                  max_retries=args.max_retries, use_potentials=args.use_potentials,
+                  targets_per_invocation=campaign.settings.targets_per_invocation)
 
     if args.command in ("analyze", "all"):
         df = analyze(output_dir, out_dir, campaign_dir, campaign,

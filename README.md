@@ -2,7 +2,7 @@
 
 > **BoltzMaker: Boltz2 campaign-scale structure and affinity prediction, binding analysis, and run control, orchestrated end to end from a single spec file.**
 
-[![live](https://img.shields.io/badge/live-boltzmaker.mdeller.com-00d084?logo=icloud&logoColor=white)](https://boltzmaker.mdeller.com) ![python](https://img.shields.io/badge/python-3.12.3-3776AB?logo=python&logoColor=white) ![flask](https://img.shields.io/badge/flask-3.1.3-000000?logo=flask&logoColor=white) ![gunicorn](https://img.shields.io/badge/gunicorn-26.0.0-499848?logo=gunicorn&logoColor=white) ![nginx](https://img.shields.io/badge/nginx-1.24.0-009639?logo=nginx&logoColor=white) ![boltz](https://img.shields.io/badge/boltz-2-00897B) ![rdkit](https://img.shields.io/badge/RDKit-2026.03-00d084) ![gemmi](https://img.shields.io/badge/gemmi-0.6.5-8a3ffc) ![biopython](https://img.shields.io/badge/Biopython-1.84-1a6b8f) ![plip](https://img.shields.io/badge/PLIP-2025-9b51e0) ![pymol](https://img.shields.io/badge/PyMOL-3.1-ff6900) ![plotly](https://img.shields.io/badge/Plotly.js-2.35.2-3F4F75?logo=plotly&logoColor=white) ![3dmoljs](https://img.shields.io/badge/3Dmol.js-3D%20viewer-fcb900) ![molstar](https://img.shields.io/badge/Mol*-4.9.0-1a6b8f) ![pytest](https://img.shields.io/badge/pytest-398%20passing-0A9EDC?logo=pytest&logoColor=white) ![data](https://img.shields.io/badge/data-GPCRdb%20%C2%B7%20KLIFS%20%C2%B7%20PDBe-467FF7) ![licence](https://img.shields.io/badge/licence-MIT-467FF7) ![author](https://img.shields.io/badge/author-Marc%20C.%20Deller%2C%20D.Phil.-1C244B)
+[![live](https://img.shields.io/badge/live-boltzmaker.mdeller.com-00d084?logo=icloud&logoColor=white)](https://boltzmaker.mdeller.com) ![python](https://img.shields.io/badge/python-3.12.3-3776AB?logo=python&logoColor=white) ![flask](https://img.shields.io/badge/flask-3.1.3-000000?logo=flask&logoColor=white) ![gunicorn](https://img.shields.io/badge/gunicorn-26.0.0-499848?logo=gunicorn&logoColor=white) ![nginx](https://img.shields.io/badge/nginx-1.24.0-009639?logo=nginx&logoColor=white) ![boltz](https://img.shields.io/badge/boltz-2-00897B) ![rdkit](https://img.shields.io/badge/RDKit-2026.03-00d084) ![gemmi](https://img.shields.io/badge/gemmi-0.6.5-8a3ffc) ![biopython](https://img.shields.io/badge/Biopython-1.84-1a6b8f) ![plip](https://img.shields.io/badge/PLIP-2025-9b51e0) ![pymol](https://img.shields.io/badge/PyMOL-3.1-ff6900) ![plotly](https://img.shields.io/badge/Plotly.js-2.35.2-3F4F75?logo=plotly&logoColor=white) ![3dmoljs](https://img.shields.io/badge/3Dmol.js-3D%20viewer-fcb900) ![molstar](https://img.shields.io/badge/Mol*-4.9.0-1a6b8f) ![pytest](https://img.shields.io/badge/pytest-366%20passing-0A9EDC?logo=pytest&logoColor=white) ![data](https://img.shields.io/badge/data-GPCRdb%20%C2%B7%20KLIFS%20%C2%B7%20PDBe-467FF7) ![licence](https://img.shields.io/badge/licence-MIT-467FF7) ![author](https://img.shields.io/badge/author-Marc%20C.%20Deller%2C%20D.Phil.-1C244B)
 
 <table>
 <tr>
@@ -289,6 +289,21 @@ pixi run all my_campaign.md
 self-extracting installer script per platform (`pixi-pack --create-executable`) that
 needs no `pixi`, no `conda`, and no network to run.
 
+**Patch the installed `boltz`.** Two defects in `boltz` 2.x cost one campaign 14.5 hours
+and 20 invocations for zero structures, so BoltzMaker ships fixes for them:
+
+```bash
+python3 patches/apply_boltz_patches.py          # idempotent; keeps a .orig of every file
+python3 patches/apply_boltz_patches.py --check  # what preflight runs
+```
+
+It contains a numerical failure to the one target that caused it rather than aborting the
+whole batch, makes the full-precision guard around the Kabsch alignment follow the tensors'
+device (hardcoded `"cuda"`, it is inert on MPS), reports *which tensor* carried a NaN
+instead of blaming matrix conditioning, and stops the shared affinity phase crashing on a
+target whose structure prediction never completed. `preflight` shows a `boltz_patches` row,
+because a `pip install -U boltz` silently reverts all four.
+
 ## 🧪 Examples
 
 Four entirely public-domain campaigns in `examples/`, run any of them with
@@ -350,6 +365,9 @@ belongs to and can be written anywhere in the file.
 Settings:
 Output folder: ./boltz_yamls    # where generated per-target YAMLs are written
 Predict affinity: no            # off by default -- it's a heavier prediction pass
+Targets per invocation: 4       # restart Boltz every N targets so the GPU allocator
+                                # starts clean -- see "what we fixed", item 2b.
+                                # 0 runs the whole batch in one long-lived process
 
 Protein: RECP1                  # short name, MAX 5 CHARACTERS (Boltz stores chain names
                                 # in a fixed 5-char field internally and silently
@@ -509,13 +527,34 @@ being killed, worth knowing about before running anything large. Mitigations bui
 - `--mps-watermark` sets `PYTORCH_MPS_HIGH_WATERMARK_RATIO`, which caps how much memory
   MPS will allocate relative to the device's recommended maximum. At the default `1.0`, an
   oversized complex now raises a clean MPS out-of-memory error in the log instead of
-  silently spilling into swap.
-- `--workers` defaults to 2 and `--max-parallel-samples` to 1: both trade a little
-  parallelism for a much smaller memory footprint, which matters more on unified memory
-  than on a dedicated-VRAM GPU.
+  silently spilling into swap. **It is a hard allocation ceiling, not a swap-avoidance
+  dial.** Lowering it "to be safe" is the wrong instinct: `0.7` on a 64GB M1 Max caps
+  allocation at 36GB against a ~34GB requirement, and every batch then OOMs immediately.
+  Lower it only above a peak you have actually measured.
+- `--workers` defaults to **0** and `--max-parallel-samples` to **1**. Boltz's own worker
+  default is 2, but each worker duplicates large in-memory structures, and on unified
+  memory that is paid for out of the same pool the model is using. Raising
+  `--max-parallel-samples` also buys no throughput on an M1 Max, where this stage is
+  compute-bound rather than memory-bound -- it only multiplies peak memory.
+- `--max-msa-seqs` defaults to **4096** rather than Boltz's 8192, which halves the
+  co-evolution feature block. It is one of the few levers that measurably cuts peak memory
+  on large complexes, and it is a quality/memory trade rather than a free win -- pass
+  `8192` to restore Boltz's default if you have the headroom.
 - `preflight`'s `memory_heuristic` check WARNs when a target's total residue+ligand-atom
-  count crosses `--memory-warn-tokens` (default 1000), citing the empirical data point
-  above. It's a rough heuristic, not a precise memory model.
+  count crosses `--memory-warn-tokens` (default **1500**), citing the empirical data point
+  above. It's a rough heuristic, not a precise memory model, and it only blocks a run under
+  `--strict`. The default was raised from 1000 because a GPCR + G-protein campaign runs at
+  1307-1333 tokens, so 1000 warned on all 26 targets and separated nothing -- a warning
+  that fires on everything carries no signal.
+- An out-of-memory skip actually frees memory. Boltz's three OOM handlers call
+  `torch.cuda.empty_cache()`, which is a **silent no-op** on a machine with no CUDA -- so
+  on Apple silicon a skip reclaimed nothing, the allocator kept its cached blocks, and the
+  next target inherited the same pressure. One campaign OOM-skipped 11 targets in a row
+  that way. `patches/apply_boltz_patches.py` adds `torch.mps.empty_cache()` alongside it.
+- Every completed target's peak RSS is recorded to `.boltzmaker_target_memory.jsonl`, so
+  the size check can eventually be derived from what this machine actually did rather than
+  a hand-set token threshold -- which on a real campaign separated nothing, every target
+  falling between 1307 and 1333 tokens whether it succeeded or OOM'd.
 - `run`'s progress bar shows live memory usage (RSS summed across the whole `boltz
   predict` process tree), and logs a warning if usage stays above 90% of system RAM for
   60+ seconds with no new completed target: a sign of thrashing, not genuine progress.
@@ -526,9 +565,101 @@ being killed, worth knowing about before running anything large. Mitigations bui
   affinity phase for 2 more that had already succeeded) recovered cleanly this way. This
   means a large campaign can be started and left unattended: a transient OOM no longer
   needs a human to notice, wait, and manually re-run just the affected targets.
+- That isolation is enforced against Boltz's *manifest*, not just the staging directory.
+  Staging one YAML is not enough: `boltz predict` filters an already-processed input out
+  as "All inputs are already processed", then rebuilds the manifest from every record in
+  `<out_dir>/boltz_results_*/processed/records/` and iterates that. A single-target retry
+  therefore re-ran the whole campaign in one process, and one target raising took every
+  target queued behind it down with it -- 20 invocations over 14.5 hours produced zero
+  structures before this was found. Each batch now parks the other records for its
+  duration, so the manifest matches what was staged.
 
 If a target still fails after every automatic retry, that's a real finding (this
 hardware may not be viable for a complex that size), not something to force through.
+
+## 🩺 What we fixed in Boltz, in plain English
+
+Boltz is excellent software, but a few of its assumptions do not hold on an Apple
+Silicon Mac, and two of them are the kind that waste days rather than minutes.
+`patches/apply_boltz_patches.py` repairs them. It runs automatically from
+`run_campaign.sh`, is safe to re-run, and keeps a `.orig` of every file it touches.
+`preflight` shows a `boltz_patches` row so you can see at a glance whether they are
+in place. **Every one of these was found by measuring a real campaign, not by
+reading the code.**
+
+**1. Memory that was never given back.** When a prediction ran out of memory, Boltz
+tried to release its GPU memory by asking the NVIDIA graphics system to let go.
+There is no NVIDIA hardware in a Mac, so that request did nothing at all and the
+memory stayed held. Each failure therefore made the next one likelier: one campaign
+skipped eleven targets in a row this way. Boltz now asks Apple's graphics system
+instead.
+
+**2. Memory held between targets.** Even when a target *succeeded*, its working
+memory was kept rather than returned, so the next target started with the tank
+half full. Measured on a live run: 47GB held with only 5.5GB actually in use,
+against a 55.7GB ceiling. Returning it after each target frees about **28GB**, which
+is the difference between the next target fitting and failing. This is bookkeeping
+only -- no prediction changes.
+
+**2b. And the part that cannot be returned.** Some memory never comes back while the
+process lives, however politely you ask: on a measured run the amount held floored at
+~20GB after the first target and climbed ~1.9GB with each one after, while a single
+target in a fresh process needed up to 47.6GB of the 55.7GB available. Left alone the
+two eventually meet, which is why one run had **no** memory failures in its first four
+targets and **three** in its last four. Only ending the process frees it, so BoltzMaker
+now starts a fresh one every few targets -- `Targets per invocation` in Settings,
+default 4. Boltz skips work that is already done, so a fresh process costs one model
+load (~4 minutes against ~45 minutes of prediction) and recomputes nothing. Set it to
+0 for the old behaviour of one long-lived process.
+
+**3. Half-precision where full precision was intended.** Boltz deliberately forces
+its most delicate calculations to run at full precision, because they overflow
+otherwise. It does this with an instruction that names NVIDIA hardware explicitly,
+so on a Mac all **19** of those protections were silently doing nothing and the
+delicate steps ran at half precision anyway.
+
+**4. One bad target killing all the others.** A numerical failure in a single target
+aborted the entire run, and every target queued behind it was never attempted --
+they simply never happened, with nothing in the output to say so. A failure is now
+contained to the target that caused it.
+
+**5. The affinity step tripping over a missing file.** After the structures are
+built, Boltz predicts binding affinity for all of them at once. If any target had
+been skipped, that step looked for a file which was never written and crashed --
+taking down the results of every target that had succeeded. It now skips the
+incomplete ones and carries on.
+
+**6. Steering that could destroy a structure.** Boltz nudges atoms with simulated
+physical forces to keep the geometry sensible. When two atoms end up very close, the
+repulsive force between them becomes enormous, and after twenty rounds of nudging it
+can overflow to infinity -- which is then added to *every* atom's position, turning
+the whole structure into nonsense. One target failed this way twenty times in a row.
+An unusable force is now ignored rather than applied, and the run reports how many
+times it had to do that: a handful is noise, hundreds means that structure's geometry
+was less carefully steered than its siblings and deserves a second look.
+
+Guards 4, 5 and 6 only ever act on values that are *already* broken, so any target
+that would have worked before produces byte-for-byte the same structure and the same
+affinity. They can only rescue targets that previously produced nothing.
+
+**7. Patches that were only applied one way in.** All of the above are edits to the
+installed Boltz, and they used to be applied only by `run_campaign.sh`. Start a
+campaign directly with `BoltzMaker.py all`, or rebuild the environment -- installing
+Boltz puts back its own untouched files -- and everything above quietly reverted, with
+nothing but a warning line in the preflight table that nobody is awake at 3am to read.
+BoltzMaker now applies them itself before running, every time. It is a no-op when they
+are already in place, and if a repair *was* needed the preflight row says so
+(`repaired 3 this run`) rather than passing silently.
+
+**8. A run that hangs forever instead of failing.** The worst failure was the one that
+did not look like a failure: Boltz goes quiet, its worker sits in a state the operating
+system will not interrupt, it keeps its GPU memory, and it never exits or errors. Seen
+on a live campaign: 24 minutes of silence holding 39.8GB with no work being done, which
+would have run to morning. BoltzMaker now watches how long it has been since Boltz last
+said anything, and after an hour treats it as wedged, stops it, and lets the retry
+ladder rerun the affected targets one at a time in fresh processes. Nothing already
+computed is lost. This used to require a separate watchdog program running alongside;
+it is now part of the run, so an unattended campaign needs nothing watching it.
 
 ## ⚙️ Progress, and how long a run will take
 
@@ -778,6 +909,8 @@ nothing, since that's a real mistake worth stopping for.
 | `run` seems to hang with no progress, or your Mac gets extremely slow | Check the memory-usage figure in the progress bar and see "Memory on Mac" earlier in this document -- this is very likely swap-thrashing, not a genuine stall. Re-run with a lower `--mps-watermark`, `--workers 1`, and `--max-parallel-samples 1`. |
 | A target's YAML/CIF exists on disk but BoltzMaker says it's missing, or `preflight` hangs | Check for iCloud "Optimize Mac Storage" dataless files -- `preflight`'s `icloud_materialize` check handles this automatically, but a very large campaign can take a while to force-download everything on first run. |
 | `boltz` fails during `setup` with a `numpy` build error | You're likely on Python 3.13+. `boltz` pins `numpy<2.0`, which has no prebuilt wheel past cp312 -- `_find_boltz_python()` already looks for a `python3.12` specifically; install one (`brew install python@3.12`) if it can't find one. |
+| A run dies with `torch._C._LinAlgError: linalg.svd ... failed to converge because the input matrix is ill-conditioned` | Not a conditioning problem, and not an OOM. Measured on this hardware: of every degenerate 3x3 (rank-1, zeros, repeated singular values, 1e-20, 1e20) plus 2000 random matrices, the only input that raises it is one containing **NaN** -- the diffusion coordinates have already diverged before the alignment runs. `linalg.svd` is not even an MPS op (it falls back to CPU), so forcing it to CPU changes nothing. Apply `patches/apply_boltz_patches.py` so the failure is contained to that one target, then try that target with `--no-potentials`, since the physical-guidance coordinate update is one of the places a trajectory can diverge. |
+| One target's failure kills the whole `boltz predict`, and targets behind it never run | `boltz`'s `predict_step` skips a batch on out-of-memory but re-raises everything else, and `LinAlgError` subclasses `RuntimeError`. Run `python3 patches/apply_boltz_patches.py` (idempotent, keeps `.orig` backups) -- `preflight`'s `boltz_patches` row reports whether it is applied. Re-run it after any `boltz` upgrade, which silently reverts it. |
 | A target fails preflight with a chain-id-length error | Boltz truncates chain IDs to 5 characters internally (a fixed-width field in its own schema) and silently corrupts longer ones rather than erroring at parse time -- shorten the protein/partner/ligand name in `boltz_input.md`. |
 | The dashboard's charts (or the binding-site 3D view) don't render, or look unstyled | plotly.js and 3Dmol.js are both vendored and inlined (not CDN-loaded), so this shouldn't happen from a missing network connection -- Google Fonts is still loaded from a CDN for styling, though, so the page needs internet access at least once for the fonts to look right (falls back to a generic sans-serif otherwise; charts, 3D views, and data are unaffected). If they genuinely don't render, check that `vendor/plotly-2.35.2.min.js` and `vendor/3Dmol-2.5.5-min.js` exist next to `BoltzMaker.py` -- `analyze` prints a warning and falls back to the relevant CDN (which is known not to work in some HTML-preview contexts) if either is missing. |
 
@@ -817,19 +950,18 @@ written literally into the generated script so you can read exactly what will ru
 
 | Setting | Flag | Default | What it does |
 |---|---|---|---|
-| Use potentials | `--no-potentials` (to disable) | on | Boltz's FK steering and physical-guidance coordinate update, which keep predicted geometry physically sensible. On by default, matching Boltz's own recommendation. Switch it off if a target's diffusion diverges (a NaN coordinate failure), since the guidance update is one of the places that can happen. |
 | Accelerator | `--accelerator` | auto | auto picks your GPU (CUDA or Apple MPS) when there is one. cpu works but is slow enough that it is really only for checking a campaign runs at all. |
-| Data-loading workers | `--workers` | 0 | Boltz's own default is 2, but each worker duplicates large in-memory structures, and on unified-memory hardware that comes out of the same pool the model is using. 0 is what a 26-target GPCR campaign (~1300 tokens per target) actually needed on a 64GB M1 Max. |
-| Parallel diffusion samples | `--max-parallel-samples` | 1 | How many diffusion samples Boltz holds in memory at once. 1 is the safe default on unified-memory hardware; raising it multiplies peak memory and buys no throughput on an M1 Max, where this stage is compute-bound rather than memory-bound. |
-| MPS high-watermark ratio | `--mps-watermark` | 1.0 | Apple Silicon only (PYTORCH_MPS_HIGH_WATERMARK_RATIO). Caps how much unified memory PyTorch will claim before it errors instead of swap-thrashing. It is a hard allocation ceiling, not a swap-avoidance dial: 0.7 on a 64GB M1 Max caps allocation at 36GB against a ~34GB requirement, and every batch then OOMs immediately. Lower it only above a measured peak. Ignored elsewhere. |
+| Data-loading workers | `--workers` | 2 | Matches Boltz's own default of 2. Lower it to 0 if you hit memory pressure on a Mac. |
+| Parallel diffusion samples | `--max-parallel-samples` | 1 | How many diffusion samples Boltz holds in memory at once. 1 is the safe default on unified-memory hardware; raising it multiplies peak memory. |
+| MPS high-watermark ratio | `--mps-watermark` | 1.0 | Apple Silicon only (PYTORCH_MPS_HIGH_WATERMARK_RATIO). Caps how much unified memory PyTorch will claim before it errors instead of swap-thrashing. Ignored elsewhere. |
 | Recycling steps | `--recycling-steps` | Boltz default | Leave blank for Boltz's own default. More steps is slower and usually only marginally better. |
 | Sampling steps | `--sampling-steps` | Boltz default | Leave blank for Boltz's own default. |
 | Structure samples per target | `--diffusion-samples` | Boltz default | Leave blank for one sample per target. Each extra sample costs roughly its own share of diffusion time, and analysis only ever reads the first one (model_0) -- so raise it to inspect pose variability yourself, not to improve the report. |
 | Affinity diffusion samples | `--diffusion-samples-affinity` | Boltz default | Leave blank for Boltz's own default. Only matters for targets with affinity prediction switched on. |
 | Affinity sampling steps | `--sampling-steps-affinity` | Boltz default | Leave blank for Boltz's own default. |
-| Max MSA sequences | `--max-msa-seqs` | 4096 | Boltz's own default is 8192. 4096 halves the co-evolution feature block and is one of the few levers that measurably cuts peak memory on large complexes. Raise it back to 8192 if you have the headroom -- it is a quality/memory trade, not a free win. |
+| Max MSA sequences | `--max-msa-seqs` | Boltz default | Leave blank for Boltz's own default. Lowering it is one of the few levers that meaningfully cuts memory on very large complexes. |
 | Auto-retries per target | `--max-retries` | 2 | A target that fails (typically an out-of-memory kill) is retried in isolation, one target at a time. 0 disables retrying. |
-| Preflight size-warning threshold | `--memory-warn-tokens` | 1500 | Preflight warns when a target's combined residue/atom count exceeds this. It is a warning, not a limit -- it only blocks a run if you also tick "Treat preflight warnings as failures". Raised from 1000 because a GPCR + G-protein campaign runs at 1307-1333 tokens, so 1000 warned on every target and separated nothing; 1500 still catches a genuinely oversized complex, which is what the heuristic is for. |
+| Preflight size-warning threshold | `--memory-warn-tokens` | 1000 | Preflight warns when a target's combined residue/atom count exceeds this. It is a warning, not a limit. |
 
 **Scope and safety**
 
@@ -1041,7 +1173,7 @@ uncompressed-size and entry-count caps) before anything is extracted.
 .venv/bin/pytest tests/
 ```
 
-347 tests. The `compare-sse` annotators are covered against real fixture data (a real apo EGFR
+366 tests. The `compare-sse` annotators are covered against real fixture data (a real apo EGFR
 kinase-domain structure vs the `egfr_covalent` example's real holo prediction; a real
 apo beta2-adrenergic-receptor structure vs `adrb2_gs_panel`'s real holo predictions),
 with GPCRdb/KLIFS/PDBe network calls swapped for an injectable fake client seeded with
@@ -1084,9 +1216,6 @@ example campaigns.
 
 ## 📋 To do
 
-- [x] Run a real GPU campaign end to end -- prepared on the site, run from the bundle, packed, uploaded and explored. Four bundle defects had reached a user before this (a preflight timeout too short for a cold torch import, `sse_comparison` and `vendor` missing from the bundle, pre-1980 zip timestamps, `sh` portability), because everything up to the campaign is verified automatically while the `pixi install` -> `boltz predict` -> `analyze` path is not. Worth repeating before each release
-- [x] Show everything the dashboard computes in the hosted Analysis step, not only the two panels the explorer draws itself. BoltzMaker's own generated reports now travel inside the `.bmz` and are framed beside the interactive panels, so the hosted view cannot drift from the offline one
-- [x] Give every protein an apo reference so compare-sse can actually run from the web form: a predicted ligand-free companion by default, an experimental PDB entry when one is named (mmCIF preferred, since most recent cryo-EM entries have no legacy file), or both. Previously the form emitted no `Apo structure:` at all, so the comparison never ran and its skip option had nothing to skip
 - [x] Let a private campaign be shown to someone without publishing it: **share links**.
   The same self-contained HTML package the Download button produces is hosted at an
   unguessable URL behind a generated password, shown once and stored only as a PBKDF2
@@ -1101,6 +1230,48 @@ example campaigns.
 - [x] Add **Use same pocket** to Prepare, with a distance box defaulting to 8 A. Co-folding puts a ligand wherever it likes: measured on a real GLP1R/GIPR campaign, 6 of 27 ligands docked onto the G-protein subunits rather than the receptor, and only 6 of 14 GIPR ligands shared a site. The pocket reference is **per ligand**, not per protein, because a pocket belongs to the ligand-receptor pair -- orforglipron's site on GLP1R (7E14) and LSN1's site on GIPR (7RBT) share 3 residues out of ~60 once projected onto each other, so one pocket per receptor would force one chemotype into the wrong site. Each ligand names a **holo** reference and picks from the ligands found in it; waters, ions, buffers, sugars and lipids are excluded outright, so 7dty's six cholesterols are never offered. Holo is enforced for the pocket and apo is enforced for the comparison: a reference with a bound ligand is refused as apo (6ln2, a modulator+Fab complex, was used as one for weeks) and a ligand-free one is refused as a pocket. Residues are mapped into the user's own numbering by alignment and reach Boltz as a `pocket` constraint with `max_distance`.
 - [x] Close the archive's trust gap: "Keep private" put the guarantee in a checkbox the caller had to remember to tick, and automated form posts made against the live site published three bundles of a real private campaign on `/runs` and the front page. Archiving now needs positive evidence of a person submitting the form from this site (`Sec-Fetch-Site: same-origin`, or a same-origin `Referer`), fails closed otherwise, and honours an explicit `X-BoltzMaker-No-Archive` opt-out for test clients.
 - [x] Add **Use potentials** as the first Prediction setting, on by default: Boltz's FK steering and physical-guidance coordinate update were hardcoded on, with no way to turn them off from the web form or the CLI. `--no-potentials` now threads through to `boltz predict`, which matters because that guidance update is one of the places a diffusion trajectory can diverge to NaN.
+- [x] Make single-target retries actually isolated: staging one YAML did not scope the
+  run, because `boltz predict` rebuilds its manifest from every processed record and
+  iterates that, so a "one at a time" retry re-ran the whole campaign in one process and
+  one raising target took the rest down with it. Each batch now parks the other records
+  for its duration, and a retry pass that completes nothing aborts instead of repeating.
+- [x] Ship `patches/apply_boltz_patches.py` for four `boltz` defects -- containment of
+  numerical failures, a device-correct fp32 alignment guard, a NaN diagnostic that names
+  the offending tensor, and an affinity phase that skips targets with no `pre_affinity`
+  file -- verified by a `boltz_patches` preflight row so a `boltz` upgrade cannot silently
+  revert them.
+- [x] Add `--no-potentials` and default the run settings to the values a real 26-target
+  GPCR campaign needed (`--workers 0`, `--max-msa-seqs 4096`, `--memory-warn-tokens 1500`).
+- [x] Make an OOM skip reclaim memory on Apple silicon (`torch.mps.empty_cache()`), and
+  record each completed target's peak RSS to `.boltzmaker_target_memory.jsonl`.
+- [x] Stop one unusable Pfam mapping discarding every domain for a structure. PDBe returns `author_residue_number: null` when a domain boundary is not observed in the deposited model -- 3 of 6 mappings for `7dty`, including the receptor's own PF02793 -- and that null reached `range()`, raising `'NoneType' object cannot be interpreted as an integer` and losing the usable domains with it. A real GIPR campaign therefore had no motifs and `compare-sse produced no comparable targets`; it now writes 27 rows across both families.
+- [x] Make boltz's full-precision guards work off CUDA. It wraps its numerically fragile steps -- triangular attention, pairformer, attention, the distogram and confidence heads, the encoders and the diffusion sampler -- in `torch.autocast("cuda", enabled=False)`, because they overflow in reduced precision. The device type is hardcoded, so on Apple silicon (autocast device_type `mps`) all **19 sites across 12 files** are inert and those steps run in bfloat16 regardless. Measured on torch 2.10: inside an MPS bf16 autocast a matmul under boltz's own guard still returns bfloat16; with the fix it returns float32. Nesting a second guard keeps it a no-op on CUDA.
+- [x] Make an unattended run need nothing watching it. Recycle the Boltz process every
+  `Targets per invocation` targets (default 4), because Apple's allocator only returns
+  everything on process exit -- held memory floored at ~20GB after one target and grew
+  ~1.9GB per target against a 55.7GB ceiling, which is why a run had 0 out-of-memory
+  skips in its first four targets and 3 in its last four. Apply the boltz patches from
+  BoltzMaker itself rather than only from `run_campaign.sh`, so a direct `all` or a
+  rebuilt environment cannot run unpatched. Stop a Boltz that has said nothing for an
+  hour and hand its targets to the retry ladder, instead of waiting on a wedged worker
+  that will never exit. Together these retire the external watchdog.
+- [ ] Classify the failure before retrying, and escalate along the axis that addresses it:
+  a memory ladder (isolation, then `--max-msa-seqs 2048`) and a NaN ladder
+  (`--no-potentials`, then fp32). Retrying with identical parameters is already known to be
+  worthless -- 20 invocations produced nothing. Any rung past the first changes the science,
+  so the rung used has to appear in the report. Do not vary `--mps-watermark` (a hard
+  ceiling, not a pressure valve), `--workers` (already at its floor of 0), or the seed (the
+  failing run was unseeded and still failed identically 20/20).
+- [ ] Re-derive `preflight`'s size check from the recorded peaks rather than
+  `--memory-warn-tokens`, so it reports "this is the size of a target that peaked at 61GB
+  here" instead of a threshold someone guessed.
+- [ ] Recover `GLP1R_orfo`, the one target whose diffusion diverges to all-NaN denoised
+  coordinates: try `--no-potentials` first, then fp32 for that single target.
+- [ ] Work out whether the NaN divergence is bf16-specific by exposing Boltz's hardcoded
+  `precision="bf16-mixed"` as an option, rather than patching it per incident.
+- [x] Run a real GPU campaign end to end -- prepared on the site, run from the bundle, packed, uploaded and explored. Four bundle defects had reached a user before this (a preflight timeout too short for a cold torch import, `sse_comparison` and `vendor` missing from the bundle, pre-1980 zip timestamps, `sh` portability), because everything up to the campaign is verified automatically while the `pixi install` -> `boltz predict` -> `analyze` path is not. Worth repeating before each release
+- [x] Show everything the dashboard computes in the hosted Analysis step, not only the two panels the explorer draws itself. BoltzMaker's own generated reports now travel inside the `.bmz` and are framed beside the interactive panels, so the hosted view cannot drift from the offline one
+- [x] Give every protein an apo reference so compare-sse can actually run from the web form: a predicted ligand-free companion by default, an experimental PDB entry when one is named (mmCIF preferred, since most recent cryo-EM entries have no legacy file), or both. Previously the form emitted no `Apo structure:` at all, so the comparison never ran and its skip option had nothing to skip
 - [x] Add **Keep private** and a **Runs** tab: the decision travels in the user's own files (the bundle records it, the packer copies it into the results manifest) so a private run leaves nothing on the server to list, while everything else is archived with its bundle and results under a capped, self-pruning archive
 - [x] Add single-keypress run controls: `p` pauses and resumes via a real SIGSTOP of the whole Boltz process tree, so an interrupted target is neither discarded nor recomputed, and `q` stops the run and all its workers cleanly. Fixed a leak found on the way: terminating only the parent left dataloader workers alive holding RAM and the GPU
 - [x] Replace the run's dead `-:--:--` with an ETA that says where it came from -- measured from this run once a target completes, otherwise the median seconds-per-target of past runs of the same campaign on the same accelerator -- and make the phase row honest about the fact that Boltz reports nothing between dataloader items
