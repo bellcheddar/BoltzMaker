@@ -624,6 +624,15 @@ class Settings:
     # is 6.0; only emitted when a family actually has pocket contacts, so a campaign
     # without them is unaffected.
     pocket_distance: float = 6.0
+    # How many targets one `boltz predict` process may run before BoltzMaker starts a
+    # fresh one. Apple's MPS allocator never returns everything: measured on a live
+    # campaign, driver-held memory floored at ~20GB after the first target and rose
+    # ~1.9GB per target after that, while a single target in a fresh process peaked at
+    # 47.6GB of a 55.7GB ceiling. Left to run, the two meet and every later target
+    # fails for memory -- 0 out-of-memory skips in the first four targets of one run,
+    # 3 in the last four. Only process exit frees it, so the process is recycled.
+    # 0 disables the recycling and restores the old single-invocation behaviour.
+    targets_per_invocation: int = 4
 
 
 @dataclass
@@ -717,7 +726,8 @@ _RECORD_START_RE = re.compile(r"^(Settings|Protein|Partner|Ligand)\s*:\s*(.*)$",
 _FIELD_RE = re.compile(r"^([A-Za-z][A-Za-z ]*?)\s*:\s*(.*)$")
 
 _RECORD_ALLOWED_FIELDS = {
-    "settings": {"output folder", "predict affinity", "pocket distance"},
+    "settings": {"output folder", "predict affinity", "pocket distance",
+                 "targets per invocation"},
     "protein": {"sequence", "partners", "ligands", "modifications", "cyclic", "msa", "templates",
                 "apo structure", "apo chain", "family type", "group"},
     "partner": {"sequence", "type", "copies", "modifications", "cyclic", "msa"},
@@ -1295,15 +1305,25 @@ def parse_md(path: Path) -> Campaign:
     for record_type, name, fields, lineno in records:
         if record_type == "settings":
             settings.output_dir = fields.get("output folder", settings.output_dir)
+            raw_chunk = fields.get("targets per invocation", "").strip()
+            if raw_chunk:
+                try:
+                    settings.targets_per_invocation = int(raw_chunk)
+                except ValueError:
+                    raise MDParseError(
+                        f"Settings: 'Targets per invocation: {raw_chunk}' is not a whole number.")
+                if settings.targets_per_invocation < 0:
+                    raise MDParseError(
+                        "Settings: 'Targets per invocation' cannot be negative (0 disables recycling).")
             raw_distance = fields.get("pocket distance", "").strip()
             if raw_distance:
                 try:
                     settings.pocket_distance = float(raw_distance)
                 except ValueError:
-                    raise CampaignError(
+                    raise MDParseError(
                         f"Settings: 'Pocket distance: {raw_distance}' is not a number.")
                 if not 1.0 <= settings.pocket_distance <= 50.0:
-                    raise CampaignError(
+                    raise MDParseError(
                         f"Settings: 'Pocket distance: {raw_distance}' is outside 1-50 A.")
             settings.predict_affinity = _parse_yesno(fields.get("predict affinity", ""), settings.predict_affinity)
         elif record_type == "partner":
@@ -2455,7 +2475,7 @@ def run_boltz(yaml_dir: Path, out_dir: Path, manifest: list, workers: int, accel
                           pred_dir, out_dir, workers, accelerator, campaign_dir, mps_watermark,
                           max_parallel_samples, recycling_steps, sampling_steps, diffusion_samples,
                           diffusion_samples_affinity, sampling_steps_affinity, max_msa_seqs, max_retries,
-                          use_potentials)
+                          use_potentials, campaign.settings.targets_per_invocation)
 
 
 _RETRY_SETTLE_SECONDS = 15  # pause between attempts so the OS fully reclaims a crashed subprocess's memory
@@ -2467,7 +2487,8 @@ def _run_boltz_batch_with_retry(batch: list, total_pending: int, manifest_len: i
                                  max_parallel_samples: int, recycling_steps: int, sampling_steps: int,
                                  diffusion_samples: int, diffusion_samples_affinity: int,
                                  sampling_steps_affinity: int, max_msa_seqs: int, max_retries: int,
-                                 use_potentials: bool = True) -> None:
+                                 use_potentials: bool = True,
+                                 targets_per_invocation: int = 4) -> None:
     """Runs a batch, then automatically retries any target that didn't complete.
 
     A real 4-target cascade on `5ht2_gq_panel` showed why this matters: an OOM during
@@ -2485,11 +2506,27 @@ def _run_boltz_batch_with_retry(batch: list, total_pending: int, manifest_len: i
     attempt = 0
     while remaining:
         if attempt == 0:
-            _run_boltz_batch(remaining, total_pending, manifest_len, complete_len, yaml_dir, stage_dir,
-                              pred_dir, out_dir, workers, accelerator, campaign_dir, mps_watermark,
-                              max_parallel_samples, recycling_steps, sampling_steps, diffusion_samples,
-                              diffusion_samples_affinity, sampling_steps_affinity, max_msa_seqs,
-                              use_potentials)
+            # Recycle the process every `targets_per_invocation` targets. Apple's MPS
+            # allocator only returns everything on process exit: measured on a live
+            # campaign, driver-held memory floored at ~20GB after one target and grew
+            # ~1.9GB per target thereafter, while a single target in a fresh process
+            # peaked at 47.6GB of a 55.7GB ceiling. Left in one process the two meet --
+            # that run had 0 out-of-memory skips in its first four targets and 3 in its
+            # last four. Each fresh process starts the allocator at zero, and Boltz
+            # skips targets that already have a structure, so a chunk boundary costs one
+            # model load (~4 min against ~45 min of sampling) and nothing is recomputed.
+            size = targets_per_invocation if targets_per_invocation > 0 else len(remaining)
+            chunks = [remaining[i:i + size] for i in range(0, len(remaining), size)]
+            if len(chunks) > 1:
+                _info(f"running {len(remaining)} target(s) in {len(chunks)} invocation(s) of up to "
+                      f"{size}, so MPS memory is released between them "
+                      f"(Settings: 'Targets per invocation: 0' to disable)")
+            for chunk in chunks:
+                _run_boltz_batch(chunk, total_pending, manifest_len, complete_len, yaml_dir, stage_dir,
+                                  pred_dir, out_dir, workers, accelerator, campaign_dir, mps_watermark,
+                                  max_parallel_samples, recycling_steps, sampling_steps, diffusion_samples,
+                                  diffusion_samples_affinity, sampling_steps_affinity, max_msa_seqs,
+                                  use_potentials)
         else:
             _step(f"retrying {len(remaining)} incomplete target(s) in isolation "
                   f"(attempt {attempt}/{max_retries}, one at a time, {_RETRY_SETTLE_SECONDS}s pause "

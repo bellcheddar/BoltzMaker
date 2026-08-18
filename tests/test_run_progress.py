@@ -460,3 +460,74 @@ def test_a_campaign_without_named_pockets_is_unchanged(bm, tmp_path):
     out = tmp_path / "y"; out.mkdir()
     manifest = bm.generate_yamls(campaign, out)
     assert sorted(t.stem for t in manifest) == ["REC_DEFAULTS", "REC_OVERRIDE"]
+
+
+# ---------------------------------------------------------------------------
+#  Process recycling for MPS memory
+# ---------------------------------------------------------------------------
+#  Apple's MPS allocator only returns everything on process exit. Measured on a
+#  live campaign: driver-held memory floored at ~20GB after one target and grew
+#  ~1.9GB per target after that, while a single target in a fresh process peaked
+#  at 47.6GB of a 55.7GB ceiling. That run had 0 out-of-memory skips in its first
+#  four targets and 3 in its last four.
+
+def test_targets_per_invocation_defaults_to_recycling(bm, tmp_path):
+    md = tmp_path / "c.md"; md.write_text(MD_MATRIX)
+    assert bm.parse_md(md).settings.targets_per_invocation == 4
+
+
+def test_targets_per_invocation_is_settable(bm, tmp_path):
+    md = tmp_path / "c.md"
+    md.write_text(MD_MATRIX.replace("Pocket distance: 8",
+                                    "Pocket distance: 8\nTargets per invocation: 2"))
+    assert bm.parse_md(md).settings.targets_per_invocation == 2
+
+
+def test_zero_disables_recycling(bm, tmp_path):
+    """0 restores the single-invocation behaviour campaigns had before this."""
+    md = tmp_path / "c.md"
+    md.write_text(MD_MATRIX.replace("Pocket distance: 8",
+                                    "Pocket distance: 8\nTargets per invocation: 0"))
+    assert bm.parse_md(md).settings.targets_per_invocation == 0
+
+
+def test_a_bad_value_is_refused_rather_than_ignored(bm, tmp_path):
+    md = tmp_path / "c.md"
+    md.write_text(MD_MATRIX.replace("Pocket distance: 8",
+                                    "Pocket distance: 8\nTargets per invocation: lots"))
+    with pytest.raises(bm.MDParseError, match="not a whole number"):
+        bm.parse_md(md)
+
+
+def test_the_batch_is_split_into_invocations_of_that_size(bm, tmp_path, monkeypatch):
+    """The whole point: several processes, each starting with a clean allocator."""
+    calls = []
+
+    def fake_batch(pending, *a, **kw):
+        calls.append([t.stem for t in pending])
+
+    monkeypatch.setattr(bm, "_run_boltz_batch", fake_batch)
+    monkeypatch.setattr(bm, "_target_complete", lambda *a, **kw: True)
+
+    class T:
+        def __init__(self, stem): self.stem, self.needs_affinity = stem, True
+    batch = [T(f"T{i}") for i in range(9)]
+    bm._run_boltz_batch_with_retry(
+        batch, 9, 9, 0, tmp_path, tmp_path, tmp_path, tmp_path, 0, "gpu", tmp_path,
+        1.0, 1, None, None, 1, None, None, 4096, 2, True, 4)
+
+    assert [len(c) for c in calls] == [4, 4, 1], calls
+    assert sum(len(c) for c in calls) == 9, "every target must still run exactly once"
+
+
+def test_zero_runs_them_all_in_one_invocation(bm, tmp_path, monkeypatch):
+    calls = []
+    monkeypatch.setattr(bm, "_run_boltz_batch", lambda pending, *a, **kw: calls.append(len(pending)))
+    monkeypatch.setattr(bm, "_target_complete", lambda *a, **kw: True)
+
+    class T:
+        def __init__(self, stem): self.stem, self.needs_affinity = stem, True
+    bm._run_boltz_batch_with_retry(
+        [T(f"T{i}") for i in range(9)], 9, 9, 0, tmp_path, tmp_path, tmp_path, tmp_path,
+        0, "gpu", tmp_path, 1.0, 1, None, None, 1, None, None, 4096, 2, True, 0)
+    assert calls == [9]

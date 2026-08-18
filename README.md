@@ -598,6 +598,17 @@ against a 55.7GB ceiling. Returning it after each target frees about **28GB**, w
 is the difference between the next target fitting and failing. This is bookkeeping
 only -- no prediction changes.
 
+**2b. And the part that cannot be returned.** Some memory never comes back while the
+process lives, however politely you ask: on a measured run the amount held floored at
+~20GB after the first target and climbed ~1.9GB with each one after, while a single
+target in a fresh process needed up to 47.6GB of the 55.7GB available. Left alone the
+two eventually meet, which is why one run had **no** memory failures in its first four
+targets and **three** in its last four. Only ending the process frees it, so BoltzMaker
+now starts a fresh one every few targets -- `Targets per invocation` in Settings,
+default 4. Boltz skips work that is already done, so a fresh process costs one model
+load (~4 minutes against ~45 minutes of prediction) and recomputes nothing. Set it to
+0 for the old behaviour of one long-lived process.
+
 **3. Half-precision where full precision was intended.** Boltz deliberately forces
 its most delicate calculations to run at full precision, because they overflow
 otherwise. It does this with an instruction that names NVIDIA hardware explicitly,
