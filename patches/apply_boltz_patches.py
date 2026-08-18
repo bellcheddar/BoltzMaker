@@ -173,6 +173,56 @@ def _bm_note(where, n, step_idx):
 import boltz.model.layers.initialize as init""",
     ),
     dict(
+        name="steering: keep an exploding guidance gradient out of the coordinates",
+        relpath="boltz/model/modules/diffusionv2.py",
+        marker="# BOLTZMAKER-PATCH: guidance-gradient-guard",
+        old="""                        guidance_update -= energy_gradient
+                    atom_coords_denoised += guidance_update""",
+        new="""                        # BOLTZMAKER-PATCH: guidance-gradient-guard -- this is where the
+                        # NaN actually comes from. compute_gradient of a repulsive
+                        # potential blows up as two atoms approach, and num_gd_steps (20)
+                        # descent iterations compound it, so guidance_update goes
+                        # non-finite and the line below writes it into EVERY atom. That
+                        # matches what was measured: pred_coords 91584/91584 non-finite,
+                        # deterministic across 20 unseeded attempts, cured only by
+                        # --no-potentials, and untouched by guards on log_G or the
+                        # resampling weights, which sit in a different block entirely.
+                        #
+                        # A non-finite gradient means "no usable direction here", so it
+                        # contributes nothing rather than infinity. Only ever fires on
+                        # values that are already broken, so a clean trajectory is
+                        # bit-identical.
+                        if not torch.isfinite(energy_gradient).all():
+                            _bm_note("energy_gradient",
+                                     int((~torch.isfinite(energy_gradient)).sum()), step_idx)
+                            energy_gradient = torch.nan_to_num(
+                                energy_gradient, nan=0.0, posinf=0.0, neginf=0.0)
+                        guidance_update -= energy_gradient
+                    if not torch.isfinite(guidance_update).all():
+                        _bm_note("guidance_update",
+                                 int((~torch.isfinite(guidance_update)).sum()), step_idx)
+                        guidance_update = torch.nan_to_num(
+                            guidance_update, nan=0.0, posinf=0.0, neginf=0.0)
+                    atom_coords_denoised += guidance_update""",
+    ),
+    dict(
+        name="steering: last line of defence on the denoised coordinates",
+        relpath="boltz/model/modules/diffusionv2.py",
+        marker="# BOLTZMAKER-PATCH: denoised-coords-guard",
+        old="""            if self.alignment_reverse_diff:""",
+        new="""            # BOLTZMAKER-PATCH: denoised-coords-guard -- whatever produced them, once
+            # the denoised coordinates are non-finite every downstream step is garbage
+            # and the target is lost. Reverting the affected atoms to the pre-guidance
+            # noisy coordinates keeps the trajectory alive with a real position rather
+            # than an undefined one, and says how many atoms it had to rescue.
+            if not torch.isfinite(atom_coords_denoised).all():
+                _bad = ~torch.isfinite(atom_coords_denoised)
+                _bm_note("atom_coords_denoised", int(_bad.sum()), step_idx)
+                atom_coords_denoised = torch.where(
+                    _bad, atom_coords_noisy, atom_coords_denoised)
+            if self.alignment_reverse_diff:""",
+    ),
+    dict(
         name="steering: sanitise non-finite energies and say so",
         relpath="boltz/model/modules/diffusionv2.py",
         marker="# BOLTZMAKER-PATCH: steering-nan-guard",
