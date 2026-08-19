@@ -84,6 +84,10 @@ PANEL_ORDER = (
     "Summary table",
     "@targets",                     # the sortable, filterable target table
     "@detail",                      # sits directly under the table it is driven by
+    # What each pocket constraint was, and which ligands were run against it. Above
+    # ligand preparation for the same reason it is there in the dashboard: it frames
+    # every pose below it, and a matrix campaign is unreadable without it.
+    "Pockets",
     "Ligand preparation",
     "Ligand structures",
     "Ranked predicted pIC50",
