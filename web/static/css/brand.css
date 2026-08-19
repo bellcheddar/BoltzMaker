@@ -593,6 +593,12 @@ tr.md-check-na .md-check-fail { color: var(--md-text-muted); }
 .md-pockets-pane .md-overlay-rmsd { font-variant-numeric: normal; font-size: 11px; }
 .md-pockets-pane .md-overlay-list { max-height: 240px; }
 
+/* A pose that landed on a co-folded partner rather than the receptor. Worth a
+   colour: the pane draws only the receptor, so these are the rows whose ligand
+   appears to float in space, and the reason is that it is bound to something not
+   on screen. */
+.md-pockets-pane .md-overlay-rmsd.md-off-receptor { color: var(--md-accent-red); }
+
 /* A row of the pockets table is a selection: click it to show only its structures.
    The affordance has to live on the row itself because the table is markup the
    report generated -- this page cannot add a button to it, only behaviour. */

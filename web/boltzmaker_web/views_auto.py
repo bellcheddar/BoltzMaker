@@ -848,6 +848,47 @@ def _centroid_of(cif_text: str) -> list:
     return None if not n else [round(xs / n, 2), round(ys / n, 2), round(zs / n, 2)]
 
 
+def _bound_to(cif_text: str, ligand_chains: set, receptor_id: str) -> dict:
+    """Which protein chains the ligand actually touches, and how much.
+
+    Boltz places a ligand wherever it likes unless a pocket says otherwise, and on a
+    receptor co-folded with a G protein that is sometimes the G protein. Measured on
+    the GIPR panel: unconstrained, LSN1 made 359 contacts with GNB1 and *none at all*
+    with GIPR; the same ligand constrained to the V6G site made 212, all of them with
+    the receptor.
+
+    The overlay draws only the receptor's shared core, so a ligand bound to a partner
+    chain looks like it is floating in space next to the protein -- which is what it
+    was asked about. Naming the chain turns "this pose is probably on a partner" into
+    a measurement of where it is.
+    """
+    lig, prot = [], []
+    for line in cif_text.splitlines():
+        if not line.startswith(("ATOM", "HETATM")):
+            continue
+        parts = line.split()
+        if len(parts) < 17:
+            continue
+        try:
+            xyz = (float(parts[10]), float(parts[11]), float(parts[12]))
+        except ValueError:
+            continue
+        chain = parts[15]
+        if line.startswith("HETATM") and chain in ligand_chains:
+            lig.append(xyz)
+        elif line.startswith("ATOM"):
+            prot.append((chain, xyz))
+    if not lig or not prot:
+        return {}
+    counts: dict = {}
+    limit = 5.0 ** 2
+    for ax, ay, az in lig:
+        for chain, (bx, by, bz) in prot:
+            if (ax - bx) ** 2 + (ay - by) ** 2 + (az - bz) ** 2 <= limit:
+                counts[chain] = counts.get(chain, 0) + 1
+    return dict(sorted(counts.items(), key=lambda kv: -kv[1]))
+
+
 def _overlay_payload(session: Path, loaded: bmz.Results) -> dict:
     """Every target superposed onto one reference, for the two overlay panes.
 
@@ -989,6 +1030,11 @@ def _overlay_payload(session: Path, loaded: bmz.Results) -> dict:
             # the ligands were sub-pixel. Reporting the spread turns a viewer that
             # looks empty into the campaign's actual result.
             "centroid": centroid,
+            # Where it actually sits, by chain. The pane draws only the receptor's
+            # shared core, so without this a ligand docked onto a co-folded partner
+            # reads as floating in empty space.
+            "bound_to": _bound_to(text, ligand_chains, receptor["id"]) if wrote_ligand else {},
+            "receptor_id": receptor["id"],
             # Said out loud rather than silently omitted: the row still appears in the
             # list, greyed by having no ligand, so the reader can see the target ran
             # and why its pose is not drawn.

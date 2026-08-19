@@ -323,3 +323,38 @@ def test_a_target_with_no_pose_is_explained_not_hidden():
     js = (pathlib.Path(__file__).resolve().parent.parent
           / "web" / "static" / "js" / "explorer.js").read_text()
     assert "the predicted ligand came apart" in js
+
+
+# ---------------------------------------------------------------------------
+#  Where a pose actually landed
+# ---------------------------------------------------------------------------
+
+def test_the_payload_records_the_chains_a_ligand_touches():
+    """Unconstrained, GIPR's LSN1 made 359 contacts with GNB1 and none at all with
+    the receptor. The pane draws only the receptor core, so without naming the chain
+    that pose reads as floating in space rather than as the result it is."""
+    import pathlib
+    src = (pathlib.Path(__file__).resolve().parent.parent
+           / "web" / "boltzmaker_web" / "views_auto.py").read_text()
+    assert "def _bound_to(" in src
+    assert '"bound_to": _bound_to(' in src
+    assert '"receptor_id": receptor["id"]' in src
+
+
+def test_the_note_counts_rather_than_guesses():
+    """It used to say such poses are 'usually' on a partner. It is measurable."""
+    import pathlib
+    js = (pathlib.Path(__file__).resolve().parent.parent
+          / "web" / "static" / "js" / "explorer.js").read_text()
+    assert "usually on a" not in js
+    assert "sit on a co-folded partner rather than the receptor" in js
+
+
+def test_a_pose_off_the_receptor_is_marked():
+    import pathlib
+    js = (pathlib.Path(__file__).resolve().parent.parent
+          / "web" / "static" / "js" / "explorer.js").read_text()
+    css = (pathlib.Path(__file__).resolve().parent.parent
+           / "web" / "static" / "css" / "brand.css").read_text()
+    assert "offReceptor" in js and "md-off-receptor" in js
+    assert "md-off-receptor" in css

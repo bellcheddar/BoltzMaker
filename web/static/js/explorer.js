@@ -722,7 +722,7 @@ var BoltzExplorer = (function () {
     var spread = which === "ligands" ? centroidSpread(rows) : null;
     note.textContent = which === "ligands"
       ? rows.length + " ligands, in the frame of " + reference + "."
-        + strayNote(spread, rows.length)
+        + strayNote(spread, rows.length, rows)
       : rows.length + " targets on " + reference + ", over the "
         + (payload.shared || 0) + " residues most of them agree on. "
         + "Every trace is that same region, so the RMSDs compare like with like.";
@@ -854,12 +854,49 @@ var BoltzExplorer = (function () {
     return { core: core, strays: strays, span: span };
   }
 
-  function strayNote(spread, total) {
+  function strayNote(spread, total, rows) {
     if (!spread.strays.length) return "";
-    return " " + spread.strays.length + " of " + total + " landed more than "
+    // Counted, not guessed. The pane draws only the receptor core, so a pose on a
+    // partner chain looks like it is in mid-air; saying which chain it is on is the
+    // difference between a rendering complaint and a result.
+    var off = (rows || []).filter(function (r) {
+      var b = boundLabel(r);
+      return b && b.offReceptor;
+    }).length;
+    var note = " " + spread.strays.length + " of " + total + " landed more than "
       + CLUSTER_RADIUS + "\u00c5 from the main cluster (spread "
-      + Math.round(spread.span) + "\u00c5) \u2014 a pose that far out is usually on a "
-      + "co-folded partner rather than the receptor.";
+      + Math.round(spread.span) + "\u00c5).";
+    if (off) {
+      note += " " + off + " of them sit on a co-folded partner rather than the receptor"
+        + " \u2014 each row says which chain. Only the receptor is drawn here, so those"
+        + " poses look unbound when they are not.";
+    }
+    return note;
+  }
+
+  /* Where a pose actually ended up, by chain.
+
+     The pane draws only the receptor's shared core, so a ligand docked onto a
+     co-folded partner looks like it is floating in space beside the protein. That
+     is a real result -- unconstrained, GIPR's LSN1 made 359 contacts with GNB1 and
+     none at all with the receptor -- but it reads as a rendering fault. Naming the
+     chain turns it back into a measurement. */
+  function boundLabel(row) {
+    var bound = row.bound_to;
+    if (!bound) return null;
+    var chains = Object.keys(bound);
+    if (!chains.length) return { text: "no contacts", detail: "This pose touches no protein chain within 5A.", offReceptor: true };
+    var receptor = row.receptor_id;
+    var onReceptor = bound[receptor] || 0;
+    var total = chains.reduce(function (sum, c) { return sum + bound[c]; }, 0);
+    var detail = chains.map(function (c) { return c + " " + bound[c]; }).join(", ") + " contacts within 5A";
+    if (!onReceptor) {
+      return { text: "on " + chains[0], detail: detail, offReceptor: true };
+    }
+    if (onReceptor < total / 2) {
+      return { text: "part on " + chains[0], detail: detail, offReceptor: true };
+    }
+    return { text: "on " + receptor, detail: detail, offReceptor: false };
   }
 
   function pocketColour(payload, group) {
@@ -973,7 +1010,7 @@ var BoltzExplorer = (function () {
       + ", every receptor superposed on " + payload.reference
       + " and drawn in grey. Colours match the table above, and clicking a row of it "
       + "shows only that row's structures -- click it again for all of them."
-      + strayNote(spread, rows.length)
+      + strayNote(spread, rows.length, rows)
       + (broken.length
          ? " " + broken.length + " target" + (broken.length === 1 ? " is" : "s are")
            + " not drawn: the predicted ligand came apart, so there is no pose to show."
@@ -1002,8 +1039,10 @@ var BoltzExplorer = (function () {
 
       var tag = document.createElement("span");
       tag.className = "md-overlay-rmsd";
-      tag.textContent = row.pocket;
-      tag.title = "The pocket this target was run against";
+      var landed = boundLabel(row);
+      tag.textContent = landed ? row.pocket + " \u00b7 " + landed.text : row.pocket;
+      tag.title = landed ? landed.detail : "The pocket this target was run against";
+      if (landed && landed.offReceptor) tag.classList.add("md-off-receptor");
       label.appendChild(tag);
 
       // One checkbox hides the ligand and its receptor together: they are one
