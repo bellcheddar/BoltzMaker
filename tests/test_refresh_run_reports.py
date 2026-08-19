@@ -44,11 +44,21 @@ Ligand: LIG1
 SMILES: CCO
 """
 
+SUMMARY_CARD = (
+    "<div class='md-card table-card'><h2>Campaign summary</h2><table>"
+    "<tr><td>Input file</td><td>boltz_input.md</td><td></td></tr>"
+    "<tr><td>Proteins</td><td>9</td><td>nine blocks</td></tr>"
+    "<tr><td>Partners</td><td>3</td><td>GNAQ; GNB1; GNG2</td></tr>"
+    "<tr><td>Ligands</td><td>1</td><td>LIG1</td></tr>"
+    "<tr><td>Targets (protein x ligand)</td><td>15</td><td>stems</td></tr>"
+    "<tr><td>Boltz predict runtime</td><td>6h 19m</td><td>from the run history</td></tr>"
+    "</table></div>"
+)
+
 DASHBOARD = (
     "<html><body><main>"
-    "<div class='md-card table-card'><h2>Campaign summary</h2>"
-    "<table><tr><th>Field</th></tr></table></div>"
-    "<div class='md-card table-card'><h2>Summary table</h2>"
+    + SUMMARY_CARD
+    + "<div class='md-card table-card'><h2>Summary table</h2>"
     "<table class='full-table'><thead><tr><th>old</th></tr></thead>"
     "<tbody><tr><td>stale</td></tr></tbody></table>"
     "<div class='summary-table-footer'><p><a href='boltz_summary.csv'>Download full CSV</a></p></div>"
@@ -151,3 +161,55 @@ def test_card_span_counts_nesting(refresher):
     html = "<div class='md-card'><h2>X</h2><div><div>deep</div></div></div>TAIL"
     start, end = refresher._card_span(html, "X")
     assert html[start:end].endswith("</div>") and html[end:] == "TAIL"
+
+
+# ---------------------------------------------------------------------------
+#  The campaign summary has to agree with the KPI boxes above it
+# ---------------------------------------------------------------------------
+
+def _summary_rows(path):
+    import re
+    h = _dashboard_of(path)
+    k = h.index("<h2>Campaign summary</h2>")
+    return {re.sub("<[^>]+>", "", f).strip(): re.sub("<[^>]+>", "", v).strip()
+            for f, v in re.findall(r"<tr>\s*<td>(.*?)</td>\s*<td>(.*?)</td>", h[k:])}
+
+
+def test_stale_counts_are_recomputed_not_just_relabelled(refresher, bm, tmp_path):
+    """A dashboard predating group counting says "Proteins 9" where the page's own
+    KPI boxes say 1 -- two answers to one question, which is worse than the old
+    wording was."""
+    path = _bundle(tmp_path)
+    refresher.process(path, bm, dry_run=False)
+    assert _summary_rows(path)["Proteins"] == "1"
+
+
+def test_the_old_label_is_replaced_by_the_shared_one(refresher, bm, tmp_path):
+    path = _bundle(tmp_path)
+    refresher.process(path, bm, dry_run=False)
+    rows = _summary_rows(path)
+    assert "Predictions" in rows and "Targets (protein x ligand)" not in rows
+    assert "Co-folded partners" in rows and "Partners" not in rows
+
+
+def test_rows_the_bundle_never_had_are_inserted(refresher, bm, tmp_path):
+    path = _bundle(tmp_path)
+    refresher.process(path, bm, dry_run=False)
+    rows = _summary_rows(path)
+    assert "Pockets" in rows and "Ligand-free companions" in rows
+
+
+def test_rows_the_bundle_cannot_recompute_survive(refresher, bm, tmp_path):
+    """Runtime comes from the campaign directory's run history, which a bundle does
+    not carry. Rebuilding the panel wholesale would silently drop it."""
+    path = _bundle(tmp_path)
+    refresher.process(path, bm, dry_run=False)
+    assert _summary_rows(path)["Boltz predict runtime"] == "6h 19m"
+
+
+def test_the_new_rows_land_before_the_total_they_add_up_to(refresher, bm, tmp_path):
+    path = _bundle(tmp_path)
+    refresher.process(path, bm, dry_run=False)
+    h = _dashboard_of(path)
+    assert h.index("<td>Pockets</td>") < h.index("<td>Predictions</td>")
+    assert h.index("<td>Ligand-free companions</td>") < h.index("<td>Predictions</td>")

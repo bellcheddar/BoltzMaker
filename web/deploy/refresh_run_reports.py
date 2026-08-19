@@ -72,9 +72,80 @@ def _card_span(html: str, title: str):
     return None
 
 
+#: Campaign-summary rows that are a pure function of the campaign file, old label
+#: to new. Everything else in that panel -- runtime, accelerator, the run history --
+#: comes from the campaign directory, which a bundle does not carry, so those rows
+#: are moved across untouched rather than rebuilt from nothing.
+_SUMMARY_REBUILT = {
+    "Proteins": "Proteins",
+    "Partners": "Co-folded partners",
+    "Co-folded partners": "Co-folded partners",
+    "Ligands": "Ligands",
+    "Pockets": "Pockets",
+    "Ligand-free companions": "Ligand-free companions",
+    "Targets (protein x ligand)": "Predictions",
+    "Predictions": "Predictions",
+}
+
+_ROW_RE = re.compile(r"<tr>\s*<td>(.*?)</td>\s*<td>(.*?)</td>\s*<td>(.*?)</td>\s*</tr>", re.S)
+
+
+def _rebuild_campaign_summary(html: str, bm, campaign) -> tuple:
+    """Recompute the counts, keep everything the bundle cannot recompute.
+
+    A relabel alone was not enough: a dashboard generated before proteins were
+    counted by group says "Proteins 9" where the page's own KPI boxes say 3, and
+    two different answers to the same question on one page is worse than the old
+    wording was.
+    """
+    span = _card_span(html, "Campaign summary")
+    if span is None:
+        return html, False
+    card = html[span[0]:span[1]]
+
+    # A directory that does not exist: _build_campaign_summary skips its run-history
+    # rows rather than inventing them, which is exactly what is wanted here.
+    fresh = {field: (field, value, detail) for field, value, detail
+             in bm._build_campaign_summary(campaign, Path("/nonexistent-for-refresh"))}
+
+    def cell(row) -> str:
+        return "<tr>" + "".join(f"<td>{part}</td>" for part in row) + "</tr>"
+
+    seen, out, changed = set(), [], False
+    for match in _ROW_RE.finditer(card):
+        field = re.sub(r"<[^>]+>", "", match.group(1)).strip()
+        wanted = _SUMMARY_REBUILT.get(field)
+        if wanted and wanted in fresh:
+            # Insert the rows this dashboard never had, immediately before the total
+            # they are components of, so the panel reads in the same order as the
+            # KPI boxes above it.
+            if wanted == "Predictions":
+                for extra in ("Pockets", "Ligand-free companions"):
+                    if extra in fresh and extra not in seen:
+                        out.append((match.span(), cell(fresh[extra])))
+                        seen.add(extra)
+            out.append((match.span(), cell(fresh[wanted])))
+            seen.add(wanted)
+            changed = True
+        else:
+            out.append((match.span(), match.group(0)))
+
+    if not changed:
+        return html, False
+    rebuilt, at = [], 0
+    for (lo, hi), text in out:
+        rebuilt.append(card[at:lo]); rebuilt.append(text); at = hi
+    rebuilt.append(card[at:])
+    return html[:span[0]] + "".join(rebuilt) + html[span[1]:], True
+
+
 def refresh(html: str, bm, campaign, df) -> tuple:
     """Returns (new_html, [what changed])."""
     changed = []
+
+    html, rebuilt = _rebuild_campaign_summary(html, bm, campaign)
+    if rebuilt:
+        changed.append("campaign summary counts and labels brought into line")
 
     span = _card_span(html, "Summary table")
     if span is not None:
