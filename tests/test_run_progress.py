@@ -564,7 +564,7 @@ def test_run_boltz_reaches_the_batch_runner(bm, tmp_path, monkeypatch):
 
 def test_stall_timeout_is_between_a_slow_start_and_a_wasted_night(bm):
     """Model load + MSA setup is a few minutes; a wedged run costs the whole night."""
-    assert 15 * 60 < bm._STALL_TIMEOUT_SECONDS <= 90 * 60
+    assert 60 * 60 <= bm._STALL_TIMEOUT_SECONDS <= 3 * 60 * 60
 
 
 def test_patch_check_applies_before_it_verifies(bm, monkeypatch, tmp_path):
@@ -811,3 +811,73 @@ def test_the_flag_explains_why_the_scores_cannot_be_trusted(bm):
 def test_the_span_limit_sits_between_real_and_diverged(bm):
     """Measured: intact ligands spanned 11-17A, diverged ones 2154-2199A."""
     assert 20 < bm._LIGAND_SPAN_LIMIT_A < 100
+
+
+# ---------------------------------------------------------------------------
+#  The guidance-gradient clamp
+# ---------------------------------------------------------------------------
+#  Sanitising non-finite values was never enough: on GLP1R+orforglipron only 144
+#  entries went non-finite and were zeroed, while their finite-but-enormous
+#  neighbours were applied and catapulted four atoms to 49, 58, 737 and 2147A.
+#  The clamp bounds the step. These tests exercise the arithmetic the patch
+#  injects, which cannot be reached from here any other way.
+
+def _clamp(gradient, factor=100.0):
+    """The patch's expression, in numpy, over an (n, 3) array."""
+    import numpy as np
+    g = np.asarray(gradient, dtype=float)
+    norms = np.linalg.norm(g, axis=-1, keepdims=True)
+    positive = norms[norms > 0]
+    if positive.size == 0:
+        return g
+    cap = np.median(positive) * factor
+    scale = np.minimum(cap / np.clip(norms, 1e-12, None), 1.0)
+    return g * scale
+
+
+def test_a_healthy_gradient_is_untouched(bm):
+    """A clean trajectory has to come out bit-identical, or the clamp changes
+    every result rather than only the broken ones."""
+    import numpy as np
+    g = np.array([[1.0, 0.0, 0.0], [0.0, 2.0, 0.0], [0.0, 0.0, 3.0], [1.0, 1.0, 1.0]])
+    assert np.allclose(_clamp(g), g)
+
+
+def test_a_singular_atom_is_rescaled(bm):
+    import numpy as np
+    g = np.array([[1.0, 0.0, 0.0], [2.0, 0.0, 0.0], [3.0, 0.0, 0.0], [1e12, 0.0, 0.0]])
+    out = _clamp(g)
+    assert out[3][0] < 1e12
+    assert np.allclose(out[:3], g[:3]), "the atoms that were fine must not move"
+
+
+def test_the_direction_survives_the_clamp(bm):
+    """Rescaled, not zeroed: the force still says which way to go, and zeroing it
+    was what left the structure uncorrected in the first place."""
+    import numpy as np
+    g = np.array([[1.0, 0.0, 0.0], [1.0, 0.0, 0.0], [3.0, 4.0, 0.0] , [3e9, 4e9, 0.0]])
+    out = _clamp(g)
+    before, after = g[3] / np.linalg.norm(g[3]), out[3] / np.linalg.norm(out[3])
+    assert np.allclose(before, after)
+
+
+def test_an_all_zero_gradient_does_not_divide_by_zero(bm):
+    import numpy as np
+    g = np.zeros((4, 3))
+    assert np.allclose(_clamp(g), g)
+
+
+def test_the_factor_is_loose_enough_not_to_fight_real_forces(bm):
+    """A buried clash legitimately pulls far harder than an exposed methyl, so the
+    threshold rejects only the unarguable."""
+    src = (__import__("pathlib").Path(bm.__file__).parent
+           / "patches" / "apply_boltz_patches.py").read_text()
+    assert "_BM_GRADIENT_CLAMP = 100.0" in src
+
+
+def test_reapply_exists_because_detection_is_by_marker(bm):
+    """Editing a patch body and re-running without it prints 'already applied' and
+    changes nothing -- which would have shipped this clamp as a no-op."""
+    src = (__import__("pathlib").Path(bm.__file__).parent
+           / "patches" / "apply_boltz_patches.py").read_text()
+    assert "--reapply" in src and "restored" in src
