@@ -755,6 +755,24 @@ def _receptor_of(chains: list, target) -> dict | None:
                 proteins[0] if proteins else None)
 
 
+def _centroid_of(cif_text: str) -> list:
+    """Mean position of a written-out ligand, or None if it has no atoms."""
+    xs = ys = zs = 0.0
+    n = 0
+    for line in cif_text.splitlines():
+        if not line.startswith(("ATOM", "HETATM")):
+            continue
+        parts = line.split()
+        if len(parts) < 13:
+            continue
+        try:
+            x, y, z = float(parts[10]), float(parts[11]), float(parts[12])
+        except ValueError:
+            continue
+        xs += x; ys += y; zs += z; n += 1
+    return None if not n else [round(xs / n, 2), round(ys / n, 2), round(zs / n, 2)]
+
+
 def _overlay_payload(session: Path, loaded: bmz.Results) -> dict:
     """Every target superposed onto one reference, for the two overlay panes.
 
@@ -791,6 +809,13 @@ def _overlay_payload(session: Path, loaded: bmz.Results) -> dict:
     structures = session / "campaign" / "structures"
     reference = None
     fits = []
+    # Targets whose ligand came apart are not predictions. BoltzMaker judges that at
+    # analysis time and says so in the flags; repeating the geometry test here would
+    # be a second opinion that can disagree with the report the reader is looking at.
+    # Their ligands are left out of the overlay panes entirely: a single atom flung
+    # 1400A out sets the camera's bounding box and leaves every real pose sub-pixel,
+    # which is what made two panes look empty on the first campaign it happened to.
+    broken = {t.target_id for t in loaded.targets if "BROKEN_LIGAND_GEOMETRY" in (t.flags or [])}
     for target in loaded.targets:
         path = structures / f"{target.target_id}.cif"
         if not path.is_file():
@@ -851,6 +876,7 @@ def _overlay_payload(session: Path, loaded: bmz.Results) -> dict:
         ligand_chains = {c["id"] for c in fit["chains"] if c["kind"] == "ligand"}
         receptor = fit["receptor"]
         wrote_ligand = False
+        centroid = None
         try:
             trace = alphafold.transform_subset(
                 text, rotation, centres,
@@ -858,12 +884,13 @@ def _overlay_payload(session: Path, loaded: bmz.Results) -> dict:
                               and f[c["label_atom_id"]] == "CA"
                               and _as_int(f[c["auth_seq_id"]]) in mine))
             (session / f"overlay-ca-{target.target_id}.cif").write_text(trace)
-            if ligand_chains:
+            if ligand_chains and target.target_id not in broken:
                 ligand = alphafold.transform_subset(
                     text, rotation, centres,
                     lambda f, c: f[c["auth_asym_id"]] in ligand_chains)
                 (session / f"overlay-lig-{target.target_id}.cif").write_text(ligand)
                 wrote_ligand = True
+                centroid = _centroid_of(ligand)
         except (alphafold.AlphaFoldError, OSError):
             continue
 
@@ -880,6 +907,17 @@ def _overlay_payload(session: Path, loaded: bmz.Results) -> dict:
             "rmsd": None if shared_rmsd is None else round(shared_rmsd, 2),
             "matched": fit["matched"], "core": len(fit["kept"]),
             "shared": len(mine), "has_ligand": wrote_ligand,
+            # Where the ligand actually ended up, in the reference's frame. Two panes
+            # draw these and both looked broken on the first campaign where the answer
+            # was interesting: a third of the ligands landed ~110A away, on the G
+            # protein rather than the receptor, so framing everything zoomed out until
+            # the ligands were sub-pixel. Reporting the spread turns a viewer that
+            # looks empty into the campaign's actual result.
+            "centroid": centroid,
+            # Said out loud rather than silently omitted: the row still appears in the
+            # list, greyed by having no ligand, so the reader can see the target ran
+            # and why its pose is not drawn.
+            "broken_ligand": target.target_id in broken,
         })
 
     # Ordered exactly as the Pockets table orders its rows -- named pockets

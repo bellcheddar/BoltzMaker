@@ -374,6 +374,35 @@
 
   Wrapper.prototype.frameAll = function () { this.resetCamera(); };
 
+  /* Frame the camera on some of the loaded extras rather than all of them.
+
+     A pane holding a dozen superposed receptors plus their ligands frames, with
+     resetCamera, a box big enough for the receptors -- and on this campaign the
+     ligands span 117A because a third of them docked onto the G protein instead
+     of the receptor, so "everything" is an enormous box and the ligands inside it
+     are sub-pixel. Mol*'s focusLoci takes an array and unions the bounding
+     spheres, so a subset is one call. */
+  Wrapper.prototype.frameExtras = function (names) {
+    var self = this;
+    var loci = [];
+    (names || Object.keys(this.extras)).forEach(function (name) {
+      var entry = self.extras[name];
+      var data = entry && entry.cell && entry.cell.obj && entry.cell.obj.data;
+      if (!data || !data.units || !data.units.length) return;
+      loci.push({
+        kind: "element-loci", structure: data,
+        elements: data.units.map(function (unit) {
+          return { unit: unit, indices: allIndices(unit) };
+        }),
+      });
+    });
+    if (!loci.length) { this.resetCamera(); return false; }
+    // A single-element array is not the array branch in Mol*'s own code, so hand
+    // it the loci itself and let the ordinary path frame it.
+    this.plugin.managers.camera.focusLoci(loci.length === 1 ? loci[0] : loci);
+    return true;
+  };
+
   /* Closest atom of a residue (or chain) to a reference point, as a one-atom
      loci. A contact is between two atoms, and a dashed line drawn between two
      whole residues is drawn between their centroids -- which for a tryptophan

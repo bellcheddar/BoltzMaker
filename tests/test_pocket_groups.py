@@ -305,3 +305,21 @@ def test_a_genuine_variant_stays_a_protein_of_its_own():
     from boltzmaker_web import results as bmz
     md = "Protein: WT\nSequence: AAAA\n\nProtein: MUT\nSequence: AAAC\n"
     assert len(set(bmz.protein_identity(md).values())) == 2
+
+
+def test_the_overlay_defers_to_the_report_on_broken_geometry():
+    """One opinion, not two: BoltzMaker judges at analysis time and the flag travels
+    in the bundle. Re-testing the geometry here could disagree with the report the
+    reader is looking at."""
+    import pathlib
+    src = (pathlib.Path(__file__).resolve().parent.parent
+           / "web" / "boltzmaker_web" / "views_auto.py").read_text()
+    assert 'BROKEN_LIGAND_GEOMETRY' in src
+    assert "target.target_id not in broken" in src
+
+
+def test_a_target_with_no_pose_is_explained_not_hidden():
+    import pathlib
+    js = (pathlib.Path(__file__).resolve().parent.parent
+          / "web" / "static" / "js" / "explorer.js").read_text()
+    assert "the predicted ligand came apart" in js

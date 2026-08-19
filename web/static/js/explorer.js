@@ -534,6 +534,12 @@ var BoltzExplorer = (function () {
       // two panes: the pose opened on the whole complex, the interaction pane on
       // the pocket. Resetting both to "everything" would throw away the second
       // pane's entire reason for being.
+      if (which === "pockets") {
+        // Reset means "the view this pane opened with", which here is the ligand
+        // cluster. Framing everything would put the receptors back in charge of the
+        // box and undo the reason this pane frames the way it does.
+        if (pocketRows.length) { framePocketLigands(pocketRows, pocketSpread); return; }
+      }
       if (which === "contacts") {
         var target = data.targets.filter(function (x) { return x.id === current; })[0];
         var ligand = ((sequence && sequence.chains) || []).filter(function (c) {
@@ -713,8 +719,10 @@ var BoltzExplorer = (function () {
       return;
     }
     var reference = payload.reference;
+    var spread = which === "ligands" ? centroidSpread(rows) : null;
     note.textContent = which === "ligands"
       ? rows.length + " ligands, in the frame of " + reference + "."
+        + strayNote(spread, rows.length)
       : rows.length + " targets on " + reference + ", over the "
         + (payload.shared || 0) + " residues most of them agree on. "
         + "Every trace is that same region, so the RMSDs compare like with like.";
@@ -776,7 +784,15 @@ var BoltzExplorer = (function () {
           }).catch(function () { /* one missing file is not the whole pane */ });
         });
       }, Promise.resolve()).then(function () {
-        wrapper.frameAll();
+        // Framed on the cluster, not on everything: one pose out on a G protein
+        // otherwise sets the box and leaves the other twenty-three sub-pixel, which
+        // reads as an empty viewer. The strays are still drawn and still listed --
+        // untick the core rows and the camera is yours.
+        if (spread && spread.core.length && spread.strays.length) {
+          wrapper.frameExtras(spread.core.map(function (r) { return r.id; }));
+        } else {
+          wrapper.frameAll();
+        }
       });
     });
   }
@@ -799,6 +815,52 @@ var BoltzExplorer = (function () {
   //: the subject, and transparency on a sphere reads as uncertainty about where
   //: the atom is.
   var RECEPTOR_ALPHA = 0.3;
+
+  /* Which ligands landed away from the crowd.
+
+     Boltz places a ligand wherever it likes unless a pocket says otherwise, and on
+     a receptor co-folded with a G protein "wherever it likes" is sometimes the G
+     protein -- 100A from the site anyone cares about. One such pose stretches the
+     camera's bounding box until every other ligand is a dot, which is what made
+     two panes look empty rather than informative. Reported instead of hidden: an
+     outlier here is a result, not a rendering fault.
+
+     The cluster is found by counting neighbours within CLUSTER_RADIUS rather than
+     by averaging: a mean position is dragged by the very outliers it is meant to
+     identify, so the densest point wins instead. */
+  var CLUSTER_RADIUS = 25;      // A -- generous for one site, far below the ~110A strays
+
+  function centroidSpread(rows) {
+    var placed = rows.filter(function (r) { return r.centroid; });
+    if (placed.length < 2) return { core: placed, strays: [], span: 0 };
+    function gap(a, b) {
+      var dx = a[0] - b[0], dy = a[1] - b[1], dz = a[2] - b[2];
+      return Math.sqrt(dx * dx + dy * dy + dz * dz);
+    }
+    var best = null, bestCount = -1;
+    placed.forEach(function (candidate) {
+      var near = placed.filter(function (other) {
+        return gap(candidate.centroid, other.centroid) <= CLUSTER_RADIUS;
+      });
+      if (near.length > bestCount) { bestCount = near.length; best = candidate; }
+    });
+    var core = [], strays = [], span = 0;
+    placed.forEach(function (row) {
+      (gap(best.centroid, row.centroid) <= CLUSTER_RADIUS ? core : strays).push(row);
+    });
+    placed.forEach(function (a) {
+      placed.forEach(function (b) { span = Math.max(span, gap(a.centroid, b.centroid)); });
+    });
+    return { core: core, strays: strays, span: span };
+  }
+
+  function strayNote(spread, total) {
+    if (!spread.strays.length) return "";
+    return " " + spread.strays.length + " of " + total + " landed more than "
+      + CLUSTER_RADIUS + "\u00c5 from the main cluster (spread "
+      + Math.round(spread.span) + "\u00c5) \u2014 a pose that far out is usually on a "
+      + "co-folded partner rather than the receptor.";
+  }
 
   function pocketColour(payload, group) {
     var order = payload.pocket_order || [];
@@ -847,6 +909,9 @@ var BoltzExplorer = (function () {
      ids -- it is markup the report generated and this page only sanitised -- so
      the match is made on what the row displays: its Pocket and Protein cells
      against each target's own pocket and family. */
+  var pocketSpread = null;      // kept so a deselect can restore the opening frame
+  var pocketRows = [];          // and so Reset knows what "the opening frame" was
+
   function wirePocketTable(rows) {
     var pane = document.querySelector(".md-pockets-pane");
     var card = pane && pane.closest(".md-card");
@@ -868,12 +933,17 @@ var BoltzExplorer = (function () {
         if (pocketRowSelected === tr) {   // clicking the selected row shows everything
           clearPocketTableSelection();
           showOnlyPocketTargets(null);
+          framePocketLigands(rows, pocketSpread);
           return;
         }
         clearPocketTableSelection();
         tr.classList.add("md-row-selected");
         pocketRowSelected = tr;
         showOnlyPocketTargets(ids);
+        // Re-frame on what is now on screen. Selecting four ligands and leaving the
+        // camera where it was would show the same wide view with less in it.
+        var wrapper = viewers.pockets.wrapper;
+        if (wrapper) wrapper.frameExtras(ids.map(function (id) { return "lig:" + id; }));
       });
     });
   }
@@ -885,6 +955,7 @@ var BoltzExplorer = (function () {
     if (!BoltzViewer.available()) { note.textContent = BoltzViewer.reason(); return; }
 
     var rows = payload.targets.filter(function (row) { return row.has_ligand; });
+    var broken = payload.targets.filter(function (row) { return row.broken_ligand; });
     list.innerHTML = "";
     pocketBoxes = {};
     pocketRowSelected = null;
@@ -896,11 +967,17 @@ var BoltzExplorer = (function () {
     rows.forEach(function (row) {
       if (groups.indexOf(row.pocket) < 0) groups.push(row.pocket);
     });
+    var spread = centroidSpread(rows);
     note.textContent = rows.length + " ligand" + (rows.length === 1 ? "" : "s")
       + " across " + groups.length + " pocket" + (groups.length === 1 ? "" : "s")
       + ", every receptor superposed on " + payload.reference
       + " and drawn in grey. Colours match the table above, and clicking a row of it "
-      + "shows only that row's structures -- click it again for all of them.";
+      + "shows only that row's structures -- click it again for all of them."
+      + strayNote(spread, rows.length)
+      + (broken.length
+         ? " " + broken.length + " target" + (broken.length === 1 ? " is" : "s are")
+           + " not drawn: the predicted ligand came apart, so there is no pose to show."
+         : "");
 
     rows.forEach(function (row) {
       var colour = pocketColour(payload, row.pocket);
@@ -942,6 +1019,8 @@ var BoltzExplorer = (function () {
       list.appendChild(label);
     });
 
+    pocketSpread = spread;
+    pocketRows = rows;
     wirePocketTable(rows);
 
     ensureViewer("pockets").then(function (wrapper) {
@@ -964,9 +1043,23 @@ var BoltzExplorer = (function () {
             .catch(function () { /* ditto */ });
         });
       }, Promise.resolve()).then(function () {
-        wrapper.frameAll();
+        framePocketLigands(rows, spread);
       });
     });
+  }
+
+  /* Frame on the ligands, never on the receptors.
+
+     Twelve superposed receptors are a far bigger box than the site they share, so
+     framing everything put the poses -- the entire point of the pane -- at a few
+     pixels across. Where some poses are strays, frame the cluster and leave them
+     to be found by unticking or by clicking their row. */
+  function framePocketLigands(rows, spread) {
+    var wrapper = viewers.pockets.wrapper;
+    if (!wrapper) return;
+    var wanted = (spread && spread.strays.length && spread.core.length)
+      ? spread.core : rows;
+    wrapper.frameExtras(wanted.map(function (r) { return "lig:" + r.id; }));
   }
 
   // ---- the AlphaFold overlay ----------------------------------------------
