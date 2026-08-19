@@ -642,6 +642,23 @@ Guards 4, 5 and 6 only ever act on values that are *already* broken, so any targ
 that would have worked before produces byte-for-byte the same structure and the same
 affinity. They can only rescue targets that previously produced nothing.
 
+**6b. Steering that pulled a molecule apart, quietly.** Guard 6 stops an *infinite*
+force being applied. It turns out that was only half the problem: alongside those
+infinities sit finite but enormous values, and those were applied. One compound came
+out with four of its atoms 49, 58, 737 and 2147 angstroms from the rest of the
+molecule -- the same four atoms, to within a few angstroms, in three separate runs.
+The protein was fine. Every score was excellent: 0.80 confidence, and top of the
+binder ranking. Nothing in the report mentioned that the ligand was no longer a
+molecule, because nothing in the report looked at its geometry.
+
+Two limits now apply. A push far beyond anything else happening in that same step is
+treated as a singularity and scaled back, keeping its direction; and no single step
+may move an atom more than a tenth of a chemical bond. Together they take that
+compound from 2154 angstroms across to 16.5 -- the same answer, to within two
+angstroms, as running it with the steering switched off entirely. The instability is
+still there and still reported; it is simply no longer able to throw atoms across the
+room.
+
 **7. Patches that were only applied one way in.** All of the above are edits to the
 installed Boltz, and they used to be applied only by `run_campaign.sh`. Start a
 campaign directly with `BoltzMaker.py all`, or rebuild the environment -- installing
@@ -1290,8 +1307,12 @@ example campaigns.
 - [ ] Re-derive `preflight`'s size check from the recorded peaks rather than
   `--memory-warn-tokens`, so it reports "this is the size of a target that peaked at 61GB
   here" instead of a threshold someone guessed.
-- [ ] Recover `GLP1R_orfo`, the one target whose diffusion diverges to all-NaN denoised
-  coordinates: try `--no-potentials` first, then fp32 for that single target.
+- [x] Recover `GLP1R_orfo`, the one target whose diffusion diverges. `--no-potentials`
+  confirmed the potentials were the cause (16.8A vs 2154A), but sampling three targets
+  differently from the other 21 is not a fix. Two clamps contain it instead -- a
+  gradient bound anchored to the trajectory's quietest scale, and a 0.1A cap on how far
+  one guidance step may move an atom -- and all three now land within 2A of that
+  control with steering on, so the whole matrix is comparable.
 - [ ] Work out whether the NaN divergence is bf16-specific by exposing Boltz's hardcoded
   `precision="bf16-mixed"` as an option, rather than patching it per incident.
 - [x] Run a real GPU campaign end to end -- prepared on the site, run from the bundle, packed, uploaded and explored. Four bundle defects had reached a user before this (a preflight timeout too short for a cold torch import, `sse_comparison` and `vendor` missing from the bundle, pre-1980 zip timestamps, `sh` portability), because everything up to the campaign is verified automatically while the `pixi install` -> `boltz predict` -> `analyze` path is not. Worth repeating before each release
