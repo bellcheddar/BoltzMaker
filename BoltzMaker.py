@@ -633,6 +633,19 @@ class Settings:
     # 3 in the last four. Only process exit frees it, so the process is recycled.
     # 0 disables the recycling and restores the old single-invocation behaviour.
     targets_per_invocation: int = 4
+    # Keep a ligand on its own receptor even when no pocket is named.
+    #
+    # Co-fold a receptor with a G protein and an unconstrained ligand is free to dock
+    # onto either. Measured on this campaign: GIPR's LSN1, run unconstrained, made 359
+    # contacts with GNB1 and NONE AT ALL with GIPR, and LSN2 did the same -- a baseline
+    # answering a question nobody asked. With this on, a target naming no pocket still
+    # gets a constraint listing every receptor residue, satisfied by the nearest one,
+    # which reads as "be somewhere on this protein" without choosing a site.
+    #
+    # Off restores the older behaviour, where a ligand may land anywhere in the complex
+    # -- a legitimate diagnostic when the question is whether the model finds the
+    # receptor unaided.
+    confine_to_receptor: bool = True
 
 
 @dataclass
@@ -727,7 +740,7 @@ _FIELD_RE = re.compile(r"^([A-Za-z][A-Za-z ]*?)\s*:\s*(.*)$")
 
 _RECORD_ALLOWED_FIELDS = {
     "settings": {"output folder", "predict affinity", "pocket distance",
-                 "targets per invocation"},
+                 "targets per invocation", "confine to receptor"},
     "protein": {"sequence", "partners", "ligands", "modifications", "cyclic", "msa", "templates",
                 "apo structure", "apo chain", "family type", "group"},
     "partner": {"sequence", "type", "copies", "modifications", "cyclic", "msa"},
@@ -1305,6 +1318,13 @@ def parse_md(path: Path) -> Campaign:
     for record_type, name, fields, lineno in records:
         if record_type == "settings":
             settings.output_dir = fields.get("output folder", settings.output_dir)
+            raw_confine = fields.get("confine to receptor", "").strip().lower()
+            if raw_confine:
+                if raw_confine not in ("yes", "no", "true", "false", "on", "off"):
+                    raise MDParseError(
+                        f"Settings: 'Confine to receptor: {raw_confine}' is not yes or no.")
+                settings.confine_to_receptor = raw_confine in ("yes", "true", "on")
+
             raw_chunk = fields.get("targets per invocation", "").strip()
             if raw_chunk:
                 try:
@@ -1473,12 +1493,28 @@ def _build_yaml_doc(fam: ProteinFamily, lig: object, campaign: Campaign,
         # [chain, residue_or_atom] pair (verified against the installed boltz 2.2.1
         # schema parser) -- there is no whole-chain-only shorthand, so a family with
         # no pocket_contacts gets no pocket constraint at all (unconstrained folding).
-        pocket = {"binder": lig.id, "contacts": pocket_contacts}
+        # force: Boltz's featurizer skips any pocket constraint without it -- without
+        # force the contacts are a hint the model may ignore, not a restraint.
+        pocket = {"binder": lig.id, "contacts": pocket_contacts, "force": True}
         # Only written when it differs from Boltz's own default, so an existing
         # campaign's YAML is byte-identical to what it was before this setting existed.
         if campaign.settings.pocket_distance != 6.0:
             pocket["max_distance"] = campaign.settings.pocket_distance
         constraints.append({"pocket": pocket})
+    elif lig is not None and campaign.settings.confine_to_receptor:
+        # No named pocket: keep the ligand on its own receptor rather than letting it
+        # dock onto a co-folded partner. Every receptor residue is listed and `any`
+        # makes the nearest one satisfy the constraint, so this says "be somewhere on
+        # this protein" without choosing a site. Boltz's own semantics sum a penalty
+        # over all contacts, which a whole chain could never satisfy -- see the
+        # pocket-any patches.
+        constraints.append({"pocket": {
+            "binder": lig.id,
+            "contacts": [[fam.id, i + 1] for i in range(len(fam.sequence))],
+            "max_distance": campaign.settings.pocket_distance,
+            "force": True,
+            "any": True,
+        }})
     for atom1, atom2 in (fam.bond_constraints or []):
         constraints.append({"bond": {"atom1": atom1, "atom2": atom2}})
     for entry in (fam.contact_constraints or []):
