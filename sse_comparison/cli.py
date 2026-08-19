@@ -9,7 +9,8 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from BoltzMaker import _expand_targets, _family_display_name, _target_display_name  # noqa: E402
+from BoltzMaker import (_expand_targets, _family_display_name, _target_display_name,  # noqa: E402
+                        _target_stem)
 
 from .alignment import InsufficientReferenceRegionError, build_comparison_frame
 from .annotators.gpcrdb import GPCRdbAnnotator
@@ -111,9 +112,17 @@ def run_compare_sse(campaign: object, campaign_dir: Path, family_id: object = No
                   f"superposition/metrics need at least a stable reference region, skipped")
             continue
 
-        fam_targets = [(f, lig) for f, lig in all_targets if f.id == fam.id]
+        # Three-tuples since pockets: a ligand is run once per named pocket plus an
+        # unconstrained baseline, and each of those is its own target with its own
+        # stem. Unpacking two here crashed `analyze` outright on the first matrix
+        # campaign, after the predictions had all been computed. Ligand-free targets
+        # are dropped: an apo target is the reference this compares against, not a
+        # holo structure to compare.
+        fam_targets = [(f, lig, code) for f, lig, code in all_targets
+                       if f.id == fam.id and lig is not None]
         if target_stem:
-            fam_targets = [(f, lig) for f, lig in fam_targets if f"{f.id}_{lig.id}" == target_stem]
+            fam_targets = [(f, lig, code) for f, lig, code in fam_targets
+                           if _target_stem(f, lig, code) == target_stem]
             if not fam_targets:
                 msg = f"target '{target_stem}' not found for family '{fam.id}'"
                 if strict:
@@ -124,8 +133,11 @@ def run_compare_sse(campaign: object, campaign_dir: Path, family_id: object = No
                 continue
 
         fam_row_count, fam_target_count, missing_holo = 0, 0, 0
-        for fam2, lig in fam_targets:
-            stem = f"{fam2.id}_{lig.id}"
+        for fam2, lig, code in fam_targets:
+            # _target_stem, not f"{id}_{id}": a pocket-constrained target carries the
+            # pocket code, so building the name by hand looked for a file that a
+            # matrix campaign never writes.
+            stem = _target_stem(fam2, lig, code)
             holo_path = campaign_dir / "boltz_cif" / f"{stem}_model_0.cif"
             if not holo_path.exists():
                 missing_holo += 1
