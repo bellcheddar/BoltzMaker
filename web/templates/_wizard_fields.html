@@ -106,26 +106,6 @@
         mmCIF is used where the PDB has no legacy file, which is the case for most recent
         cryo-EM entries.</p>
     </div>
-    {#  A HOLO structure: one with a ligand actually bound. Every pocket named across
-        all proteins is run against every protein, so two proteins each naming one site
-        gives the full matrix -- 7E14/V6G on GLP1R and 7RBT/41Y on GIPR yields four
-        combinations per ligand, plus an unconstrained baseline each. Applying a site to
-        a protein it was not solved on is a projection through a sequence alignment, and
-        a hypothesis rather than a reproduction.  #}
-    <div class="md-field md-pocket-field">
-      <label>Pocket references (holo &mdash; optional)</label>
-      <p class="md-hint">Each one is a site this protein's ligands are run against, plus an
-        unconstrained baseline. Add several to compare sites: a run is named after the
-        pocket's ligand, so 7E14/V6G and 7RBT/41Y give &hellip;_V6G and &hellip;_41Y
-        alongside the unconstrained one.</p>
-      <div class="md-pocket-rows"></div>
-      <button type="button" class="md-add-row-btn add-pocket">+ Add pocket reference</button>
-    </div>
-
-    {#  Website metadata, not a pipeline input: it names the entry whose AlphaFold
-        model the explorer can overlay on this protein's prediction. It travels in
-        config.json rather than boltz_input.md, so BoltzMaker.py never has to know
-        about a key it does not use.  #}
     {#  The value is the row's ordinal, stamped by wizard.js, not a plain "on".
         An unchecked box posts nothing at all, so a bare name="...[]" checkbox would
         shift every later row's value up by one -- the same silent misalignment that
@@ -144,6 +124,22 @@
         no apo reference, so it is skipped by the comparison. Each prediction is an extra
         target to compute.</p>
     </div>
+    {#  A HOLO structure: one with a ligand actually bound. Every pocket named across
+        all proteins is run against every protein, so two proteins each naming one site
+        gives the full matrix -- 7E14/V6G on GLP1R and 7RBT/41Y on GIPR yields four
+        combinations per ligand, plus an unconstrained baseline each. Applying a site to
+        a protein it was not solved on is a projection through a sequence alignment, and
+        a hypothesis rather than a reproduction.  #}
+    <div class="md-field md-pocket-field">
+      <label>Pocket references (holo &mdash; optional)</label>
+      <p class="md-hint">Each one is a site this protein's ligands are run against, plus an
+        unconstrained baseline. Add several to compare sites: a run is named after the
+        pocket's ligand, so 7E14/V6G and 7RBT/41Y give &hellip;_V6G and &hellip;_41Y
+        alongside the unconstrained one.</p>
+      <div class="md-pocket-rows"></div>
+      <button type="button" class="md-add-row-btn add-pocket">+ Add pocket reference</button>
+    </div>
+
   </div>
 </template>
 

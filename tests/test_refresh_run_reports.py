@@ -196,7 +196,7 @@ def test_rows_the_bundle_never_had_are_inserted(refresher, bm, tmp_path):
     path = _bundle(tmp_path)
     refresher.process(path, bm, dry_run=False)
     rows = _summary_rows(path)
-    assert "Pockets" in rows and "Ligand-free companions" in rows
+    assert "Pockets" in rows and "Apo structure references" in rows
 
 
 def test_rows_the_bundle_cannot_recompute_survive(refresher, bm, tmp_path):
@@ -212,4 +212,4 @@ def test_the_new_rows_land_before_the_total_they_add_up_to(refresher, bm, tmp_pa
     refresher.process(path, bm, dry_run=False)
     h = _dashboard_of(path)
     assert h.index("<td>Pockets</td>") < h.index("<td>Predictions</td>")
-    assert h.index("<td>Ligand-free companions</td>") < h.index("<td>Predictions</td>")
+    assert h.index("<td>Apo structure references</td>") < h.index("<td>Predictions</td>")

@@ -82,7 +82,8 @@ _SUMMARY_REBUILT = {
     "Co-folded partners": "Co-folded partners",
     "Ligands": "Ligands",
     "Pockets": "Pockets",
-    "Ligand-free companions": "Ligand-free companions",
+    "Ligand-free companions": "Apo structure references",
+    "Apo structure references": "Apo structure references",
     "Targets (protein x ligand)": "Predictions",
     "Predictions": "Predictions",
 }
@@ -120,7 +121,7 @@ def _rebuild_campaign_summary(html: str, bm, campaign) -> tuple:
             # they are components of, so the panel reads in the same order as the
             # KPI boxes above it.
             if wanted == "Predictions":
-                for extra in ("Pockets", "Ligand-free companions"):
+                for extra in ("Pockets", "Apo structure references"):
                     if extra in fresh and extra not in seen:
                         out.append((match.span(), cell(fresh[extra])))
                         seen.add(extra)

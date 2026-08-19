@@ -167,11 +167,6 @@ var BoltzExplorer = (function () {
     });
 
     document.getElementById("empty-note").style.display = rows.length ? "none" : "";
-    document.getElementById("stat-shown").textContent = rows.length;
-    document.getElementById("stat-flagged").textContent =
-      data.targets.filter(function (t) { return t.flags.length; }).length;
-    document.getElementById("stat-structures").textContent =
-      data.targets.filter(function (t) { return t.structure; }).length;
   }
 
   // ---- the report's scatter, made clickable ---------------------------------

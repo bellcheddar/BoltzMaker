@@ -371,17 +371,16 @@ img, canvas { max-width: 100%; height: auto; }
   display: grid; gap: 10px; margin-top: 14px;
   grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
 }
+/* All six read as one set: accenting the total made it look like a different
+   kind of number rather than the last of the six. `help` rather than `default`
+   because every box carries a definition on hover. */
 .md-kpi {
-  display: flex; flex-direction: column; gap: 2px;
+  display: flex; flex-direction: column; gap: 2px; cursor: help;
   padding: 10px 12px; border: 1px solid var(--md-border); border-radius: 6px;
   background: var(--md-bg-alt);
 }
 .md-kpi-value { font-size: 24px; font-weight: 700; color: var(--md-text); line-height: 1.1;
   font-variant-numeric: tabular-nums; }
-/* Predictions is the one that says what the run cost, and the one the prepare
-   form also singles out, so it carries the accent in both places. */
-.md-kpi-total { border-color: var(--md-primary); }
-.md-kpi-total .md-kpi-value { color: var(--md-primary); }
 .md-kpi-label { font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.05em;
   color: var(--md-text-muted); line-height: 1.25; }
 

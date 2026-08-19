@@ -605,6 +605,7 @@ def _render_explorer(token: str, loaded: bmz.Results):
         ligand_cards=json.dumps(ligands),
         counts=bmz.campaign_counts(loaded),
         kpi_fields=bmz.KPI_FIELDS, kpi_labels=bmz.KPI_LABELS,
+        kpi_titles=bmz.KPI_TITLES,
     )
 
 
@@ -910,6 +911,7 @@ def _package_bytes(session: Path, token: str, loaded: bmz.Results) -> bytes:
         # exception into a file nobody opens until they are offline.
         counts=bmz.campaign_counts(loaded),
         kpi_fields=bmz.KPI_FIELDS, kpi_labels=bmz.KPI_LABELS,
+        kpi_titles=bmz.KPI_TITLES,
     )
     # The overlay files and the per-target sequence and pocket files are written
     # on demand, so a campaign nobody has scrolled through has none of them yet.

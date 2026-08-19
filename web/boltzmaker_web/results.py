@@ -194,8 +194,25 @@ KPI_LABELS = {
     "partners": "Co-folded partners",
     "ligands": "Ligands",
     "pockets": "Pockets",
-    "companions": "Ligand-free companions",
+    "companions": "Apo structure references",
     "predictions": "Predictions",
+}
+
+#: What each number actually counts, as a hover. The labels have to stay short
+#: enough to fit a box; this is where the definition lives, so a reader does not
+#: have to infer whether "proteins" means sequences, blocks or receptors.
+KPI_TITLES = {
+    "proteins": "Distinct receptors. A protein written as several blocks -- with "
+                "partners, without, ligand-free -- counts once.",
+    "partners": "Chains co-folded alongside the proteins, counted once each however "
+                "many proteins name them.",
+    "ligands": "Distinct ligands that were actually run, not merely defined.",
+    "pockets": "Named pocket constraints. Every ligand also runs once unconstrained, "
+               "so a protein with N pockets gives N+1 runs per ligand.",
+    "companions": "Ligand-free predictions used as the apo reference for the "
+                  "apo-vs-holo comparison.",
+    "predictions": "Everything that was run: one per protein, ligand and pocket "
+                   "combination, plus each apo reference.",
 }
 
 _PARTNERS_RE = re.compile(r"^\s*partners:\s*(.+)$", re.IGNORECASE | re.MULTILINE)
