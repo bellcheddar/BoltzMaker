@@ -15,6 +15,7 @@ import pathlib
 import sys
 import types
 
+import pandas as pd
 import pytest
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -612,3 +613,129 @@ def test_patch_check_runs_once_per_process(bm, monkeypatch, tmp_path):
     bm.check_boltz_patches()
     assert len(calls) == first, "second call must be memoised, not re-scan every file"
     bm._PATCH_STATE["result"] = None
+
+
+# ---------------------------------------------------------------------------
+#  Summary table and the Pockets panel
+# ---------------------------------------------------------------------------
+
+def _frame(rows):
+    import pandas as pd
+    return pd.DataFrame(rows)
+
+
+def test_affinity_group_comes_before_confidence(bm):
+    """The table is read to answer "does it bind"; confidence qualifies that answer."""
+    order = bm._FULL_TABLE_GROUP_ORDER
+    assert order.index("Affinity") < order.index("Confidence")
+
+
+def test_rows_rank_by_binder_probability(bm):
+    df = _frame([{"family_id": "A", "ligand_id": "L1", "affinity_probability_binary": 0.2},
+                 {"family_id": "A", "ligand_id": "L2", "affinity_probability_binary": 0.9},
+                 {"family_id": "B", "ligand_id": "L3", "affinity_probability_binary": 0.5}])
+    ordered, applied = bm._summary_table_order(df)
+    assert applied
+    assert list(ordered["ligand_id"]) == ["L2", "L3", "L1"]
+
+
+def test_apo_rows_sink_rather_than_lead(bm):
+    """An apo row has no binder probability at all; it must not head the ranking."""
+    df = _frame([{"ligand_id": None, "affinity_probability_binary": float("nan")},
+                 {"ligand_id": "L1", "affinity_probability_binary": 0.4}])
+    ordered, _ = bm._summary_table_order(df)
+    ids = list(ordered["ligand_id"])
+    # pandas stores the missing ligand as NaN, not None, so compare on presence.
+    assert ids[0] == "L1" and pd.isna(ids[1])
+
+
+def test_ties_keep_generation_order(bm):
+    """Many campaigns pin a lot of rows at 0.00 -- two runs must render identically."""
+    df = _frame([{"ligand_id": f"L{i}", "affinity_probability_binary": 0.0} for i in range(5)])
+    ordered, _ = bm._summary_table_order(df)
+    assert list(ordered["ligand_id"]) == [f"L{i}" for i in range(5)]
+
+
+def test_a_campaign_without_affinity_keeps_its_order(bm):
+    df = _frame([{"ligand_id": "L1"}, {"ligand_id": "L2"}])
+    ordered, applied = bm._summary_table_order(df)
+    assert not applied and list(ordered["ligand_id"]) == ["L1", "L2"]
+
+
+def test_family_dividers_are_dropped_once_ranked(bm):
+    """They mean "a new family starts here", which is false once rows interleave."""
+    df = _frame([{"family_id": "A", "family_group": "A", "ligand_id": "L1",
+                  "affinity_probability_binary": 0.1},
+                 {"family_id": "B", "family_group": "B", "ligand_id": "L2",
+                  "affinity_probability_binary": 0.9}])
+    assert "row-group-start" not in bm._build_full_table_html(df)
+
+
+def test_sortable_headers_carry_the_indicator_styles(bm):
+    """The glyph is fixed-width so switching it cannot rewrap the header row."""
+    assert ".full-table thead tr:last-child th::after" in bm._BRAND_CSS
+    assert "ft-sorted-asc" in bm._BRAND_CSS and "ft-sorted-desc" in bm._BRAND_CSS
+
+
+POCKET_MD = """Settings:
+Output folder: ./out
+Predict affinity: yes
+Pocket distance: 8
+
+Protein: RECP
+Sequence: MKTAYIAKQRQISFVKSHFSRQLEERLGLIEVQ
+Pocket contact: RECP residue 12 as V6G
+Pocket contact: RECP residue 15 as V6G
+Pocket contact: RECP residue 20 as 41Y
+
+Ligand: LIG1
+SMILES: CCO
+
+Ligand: LIG2
+SMILES: CCC
+"""
+
+
+def test_pockets_panel_groups_by_pocket_including_the_baseline(bm, tmp_path):
+    """A matrix run is only legible if you can see what each stem suffix meant."""
+    md = tmp_path / "c.md"; md.write_text(POCKET_MD)
+    html = bm._build_pockets_panel_html(bm.parse_md(md))
+    assert "<h2>Pockets</h2>" in html
+    import re
+    rows = re.findall(r"<tr><td>(.*?)</td>", html)
+    assert rows == ["41Y", "V6G", "Unconstrained"], rows
+    assert "2 named pocket(s) (41Y, V6G)" in html
+    assert "within 8 A" in html, "the enforced distance is part of what the pocket means"
+
+
+def test_every_ligand_appears_under_every_pocket(bm, tmp_path):
+    md = tmp_path / "c.md"; md.write_text(POCKET_MD)
+    html = bm._build_pockets_panel_html(bm.parse_md(md))
+    assert html.count("LIG1, LIG2") == 3, "two named pockets plus the unconstrained baseline"
+
+
+def test_contact_counts_are_per_pocket(bm, tmp_path):
+    md = tmp_path / "c.md"; md.write_text(POCKET_MD)
+    html = bm._build_pockets_panel_html(bm.parse_md(md))
+    assert "1 residue(s)" in html and "2 residue(s)" in html
+
+
+def test_unconstrained_is_named_as_a_choice_not_an_absence(bm, tmp_path):
+    md = tmp_path / "c.md"; md.write_text(POCKET_MD)
+    html = bm._build_pockets_panel_html(bm.parse_md(md))
+    assert "ligand placed freely" in html
+
+
+def test_a_campaign_with_no_pockets_still_describes_itself(bm, tmp_path):
+    md = tmp_path / "c.md"
+    md.write_text("\n".join(l for l in POCKET_MD.splitlines()
+                                if not l.startswith("Pocket contact:")))
+    html = bm._build_pockets_panel_html(bm.parse_md(md))
+    assert "No named pockets" in html
+
+
+def test_apo_targets_are_not_listed_as_binding_a_pocket(bm, tmp_path):
+    md = tmp_path / "c.md"
+    md.write_text(POCKET_MD.replace("Protein: RECP\n", "Protein: RECP\nLigands: none\n"))
+    html = bm._build_pockets_panel_html(bm.parse_md(md))
+    assert html == "", "a ligand-free campaign has nothing to place in a pocket"
