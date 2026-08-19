@@ -739,3 +739,24 @@ def test_apo_targets_are_not_listed_as_binding_a_pocket(bm, tmp_path):
     md.write_text(POCKET_MD.replace("Protein: RECP\n", "Protein: RECP\nLigands: none\n"))
     html = bm._build_pockets_panel_html(bm.parse_md(md))
     assert html == "", "a ligand-free campaign has nothing to place in a pocket"
+
+
+def test_compare_sse_unpacks_the_pocket_code(bm):
+    """_expand_targets yields three-tuples since pockets arrived.
+
+    compare-sse still unpacked two, so `analyze` died with "too many values to
+    unpack" on the first matrix campaign -- after all 26 predictions had been
+    computed, which is the worst moment to find out.
+    """
+    import pathlib
+    src = (pathlib.Path(bm.__file__).parent / "sse_comparison" / "cli.py").read_text()
+    assert "for fam2, lig, code in fam_targets:" in src
+    assert "for f, lig in all_targets" not in src
+
+
+def test_compare_sse_builds_stems_with_the_shared_helper(bm):
+    """A pocket-constrained target's file is named with its pocket code."""
+    import pathlib
+    src = (pathlib.Path(bm.__file__).parent / "sse_comparison" / "cli.py").read_text()
+    assert "_target_stem(fam2, lig, code)" in src
+    assert 'stem = f"{fam2.id}_{lig.id}"' not in src

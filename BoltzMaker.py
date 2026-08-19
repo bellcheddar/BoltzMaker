@@ -4326,10 +4326,13 @@ def _build_campaign_summary(campaign: Campaign, campaign_dir: Path) -> list:
     else:
         rows.append(("Input file", "n/a", ""))
 
-    # Counted by group where one exists: a receptor written as several Protein blocks
-    # (with partners, without, ligand-free) is one protein to the reader, and calling
-    # that nine proteins is the same conflation the column headers used to make.
-    groups = {(f.group or f.id) for f in campaign.families}
+    # One protein means one receptor, however many blocks it took to write it. A
+    # receptor split across blocks (with partners, without, ligand-free) is grouped by
+    # its `Group:` when it has one and by its sequence when it does not -- the apo
+    # companion of a receptor carries that receptor's sequence exactly, which is what
+    # makes it the same protein. Falling back to the block id instead reported the
+    # GLP1R/GIPR matrix as four proteins when it studies two.
+    groups = {(f.group or f.sequence) for f in campaign.families}
     fam_details = "; ".join(f"{f.id} ({len(f.sequence)} aa)" for f in campaign.families)
     if len(groups) != len(campaign.families):
         fam_details = (f"{len(campaign.families)} protein block(s) in {len(groups)} group(s): "
