@@ -1265,6 +1265,14 @@ example campaigns.
   other panel byte-for-byte -- and already-uploaded runs get the change too. Clearing
   the server's `panels.json` caches is part of that: 61 of them would otherwise have
   gone on serving the old panels.
+- [x] Put a viewer under the Pockets table: every receptor superposed in one grey,
+  every ligand in its pocket's colour (pocket 1 green, pocket 2 blue, the
+  unconstrained baseline always red), a checkbox per target, and the same spin/reset
+  controls as the Superposed targets pane. Only targets that bind something are drawn
+  -- an apo target has no pose to place -- so the 15-target 5-HT2 campaign shows its
+  12. Which pocket a target used is recovered from its own stem, matching the whole of
+  `family_ligand_code` rather than the suffix, so a ligand that happens to share a
+  pocket's name is not misread as a constrained run.
 - [ ] Classify the failure before retrying, and escalate along the axis that addresses it:
   a memory ladder (isolation, then `--max-msa-seqs 2048`) and a NaN ladder
   (`--no-potentials`, then fp32). Retrying with identical parameters is already known to be
