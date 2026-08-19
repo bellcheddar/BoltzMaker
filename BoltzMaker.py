@@ -4152,6 +4152,19 @@ tr:nth-child(even) { background: var(--md-bg-alt); }
 .full-table th.ft-group-start, .full-table td.ft-group-start { border-left: 2px solid var(--md-primary); }
 .full-table tr.row-group-start td { border-top: 2px solid var(--md-primary); }
 .full-table th.ft-flags, .full-table td.ft-flags { text-align: center; }
+/* Sortable column headers. The indicator sits in a fixed-width ::after so switching
+   between the neutral and active glyphs cannot reflow the header row -- these headers
+   are already tight enough that a width change would rewrap labels and shift every
+   column. Neutral is dimmed rather than hidden-until-hover: a control nobody can see
+   is a control nobody uses, and hover does not exist on a tablet. */
+.full-table thead tr:last-child th { cursor: pointer; user-select: none; }
+.full-table thead tr:last-child th::after {
+  content: '\2195'; display: inline-block; width: 0.9em; margin-left: 0.15em;
+  text-align: center; opacity: 0.28; font-weight: 400;
+}
+.full-table thead tr:last-child th.ft-sorted-asc::after { content: '\2191'; opacity: 1; color: var(--md-primary); }
+.full-table thead tr:last-child th.ft-sorted-desc::after { content: '\2193'; opacity: 1; color: var(--md-primary); }
+.full-table thead tr:last-child th:hover::after { opacity: 0.7; }
 .flag-ok, .flag-warn, .flag-bad { cursor: default; }
 .cell-na { color: var(--md-text-muted); font-style: italic; }
 .summary-table-footer { display: flex; flex-wrap: wrap; justify-content: space-between;
@@ -4407,7 +4420,9 @@ _FULL_TABLE_GROUPS = {
     "pIC50": "Affinity", "affinity_probability_binary": "Affinity",
     "cif_file": "Structure",
 }
-_FULL_TABLE_GROUP_ORDER = ["Identity", "Confidence", "Affinity", "Interactions", "Structure", "Other"]
+# Affinity before Confidence: the question the table is read to answer is "does it
+# bind", and confidence qualifies that answer rather than preceding it.
+_FULL_TABLE_GROUP_ORDER = ["Identity", "Affinity", "Confidence", "Interactions", "Structure", "Other"]
 _FULL_TABLE_TEXT_COLS = {"family_id", "family_group", "partner_ids", "ligand_id", "flags"}
 _PLIP_COUNT_LABELS = {
     "hydrogen_bonds": "H-bond", "hydrophobic": "Phobic", "pi_stacks": "π-stack",
@@ -4604,6 +4619,84 @@ def write_summary_csv(df: pd.DataFrame, path: Path) -> None:
     export_df.to_csv(path, index=False)
 
 
+def _build_pockets_panel_html(campaign: Campaign) -> str:
+    """What each pocket constraint was, and which ligands were run against it.
+
+    A matrix campaign runs every ligand against every named pocket *and* once
+    unconstrained, so the same SMILES appears several times in the summary table under
+    stems that differ only by a three-letter suffix. Without this panel the reader has
+    to reconstruct what `GLP1R_ORFO_V6G` means from the campaign file. Grouping by
+    pocket also makes the comparison the matrix exists for -- same ligand, same
+    receptor, different constraint -- something you can read off one card.
+
+    Built from the campaign rather than the results, so a pocket that produced no
+    finished structure is still listed. A group with no targets would be a
+    campaign-definition bug, and silently omitting it would hide exactly that.
+    """
+    groups: dict = {}
+    for fam, lig, code in _expand_targets(campaign):
+        if lig is None:
+            continue                      # apo targets have no ligand to place
+        contacts = _pocket_for(fam, lig, code)
+        # `code` names a pocket from the matrix. Without one a target can still be
+        # constrained -- by the ligand's own `Pocket contact:` or the protein's unnamed
+        # one -- and calling that "unconstrained" would be wrong.
+        name = code or ("Unnamed pocket" if contacts else "Unconstrained")
+        entry = groups.setdefault((name, fam.id), {"ligands": [], "contacts": contacts})
+        entry["ligands"].append(lig.id)
+
+    if not groups:
+        return ""
+
+    def sort_key(item):
+        (name, fam_id), _info = item
+        # Unconstrained last: it is the baseline the named pockets are compared against.
+        return (name in ("Unconstrained", "Unnamed pocket"), name, fam_id)
+
+    rows = []
+    for (name, fam_id), info in sorted(groups.items(), key=sort_key):
+        contacts = info["contacts"] or []
+        detail = ", ".join(str(c) for c in contacts)
+        cell = (f"<span title='{html.escape(detail, quote=True)}'>{len(contacts)} residue(s)</span>"
+                if contacts else "<span class='cell-na'>none -- ligand placed freely</span>")
+        rows.append(f"<tr><td>{html.escape(str(name))}</td><td>{html.escape(str(fam_id))}</td>"
+                    f"<td>{html.escape(', '.join(info['ligands']))}</td>"
+                    f"<td class='ft-num'>{len(info['ligands'])}</td><td>{cell}</td></tr>")
+
+    named = sorted({n for (n, _f) in groups if n not in ("Unconstrained", "Unnamed pocket")})
+    intro = (f"{len(named)} named pocket(s) ({', '.join(named)}) plus an unconstrained baseline; "
+             f"contacts are enforced within {campaign.settings.pocket_distance:g} A."
+             if named else
+             "No named pockets in this campaign -- every ligand was placed without a site constraint.")
+    head = ("<tr><th>Pocket</th><th>Protein</th><th>Ligands</th>"
+            "<th class='ft-num'>Targets</th><th>Contacts</th></tr>")
+    return (f"<div class='md-card table-card'><h2>Pockets</h2><p>{intro}</p>"
+            f"<table class='full-table'><thead>{head}</thead>"
+            f"<tbody>{''.join(rows)}</tbody></table></div>")
+
+
+def _summary_table_order(df: "pd.DataFrame"):
+    """Rank by binder probability, strongest first.
+
+    The manifest order the table used to inherit is generation order -- protein by
+    protein, ligand by ligand -- which answers "what did I ask for", not "what bound".
+    Ranking puts the answer in the first screenful.
+
+    Apo rows sort last rather than first: they have no binder probability at all, and
+    `na_position` defaults to putting NaN at the end, which is what we want, but saying
+    so explicitly keeps it true if the default ever changes. `kind="stable"` keeps ties
+    -- of which there are many at 0.00 and 1.00 -- in their generation order, so two
+    runs of the same campaign produce the same table.
+
+    Returns the ordered frame and whether the ranking actually applied, since the
+    family dividers are only drawn when it did not.
+    """
+    col = "affinity_probability_binary"
+    if col not in df.columns or df[col].isna().all():
+        return df, False
+    return df.sort_values(col, ascending=False, na_position="last", kind="stable"), True
+
+
 def _build_full_table_html(df: pd.DataFrame) -> str:
     cols = _resolve_summary_table_columns(df)
     if not cols:
@@ -4664,10 +4757,15 @@ def _build_full_table_html(df: pd.DataFrame) -> str:
     # contiguous), so this only needs to notice when family_group changes between
     # consecutive rows -- no re-sorting -- and mark that row with a top border, the same
     # blue divider already used between column groups (border-left, see .ft-group-start).
+    ordered, sorted_by_binder = _summary_table_order(df)
     body_parts, prev_group = [], None
-    for _, row in df.iterrows():
+    for _, row in ordered.iterrows():
         group = row.get("family_group")
-        body_parts.append(body_row(row, prev_group is not None and group != prev_group))
+        # Family dividers only mean something while each family's rows are contiguous.
+        # Ranked by binder probability they are interleaved by design, so drawing them
+        # would put a rule between most consecutive rows and read as noise.
+        new_group = (not sorted_by_binder) and prev_group is not None and group != prev_group
+        body_parts.append(body_row(row, new_group))
         prev_group = group
     body = "".join(body_parts)
     return (f"<table class='full-table'><thead>{group_header_row()}{column_header_row()}</thead>"
@@ -4687,6 +4785,10 @@ def write_html(df: pd.DataFrame, path: Path, campaign_dir: Path, campaign: Campa
     footer = f"<div class='summary-table-footer'>{csv_links}{_build_summary_legend_html()}</div>"
     parts.append(f"<div class='md-card table-card'><h2>Summary table</h2>"
                  f"{_build_full_table_html(df)}{footer}</div>")
+
+    pockets_html = _build_pockets_panel_html(campaign)
+    if pockets_html:
+        parts.append(pockets_html)
 
     lig_notes = _ligand_chemistry_notes(campaign)
     if lig_notes:
@@ -4916,8 +5018,61 @@ def write_html(df: pd.DataFrame, path: Path, campaign_dir: Path, campaign: Campa
   }
 })();
 """
-    doc = (
-        "<!DOCTYPE html><html lang='en'><head><meta charset='utf-8'>"
+
+    # Click-to-sort for every generated table (the summary table and the SSE motif-shift
+    # table both render as .full-table). Written against the DOM rather than re-rendering
+    # from data, because the cells carry formatting the raw values do not -- "0.82 +/- 0.03",
+    # a CIF link, the N/A span for apo rows -- and rebuilding them here would mean keeping
+    # two formatters in step.
+    _TABLE_SORT_JS = """
+(function () {
+  function value(cell) {
+    var t = cell.textContent.trim();
+    if (t === '' || t === 'N/A' || t === '--') { return null; }
+    // Take the leading number so "0.82 +/- 0.03" ranks by the estimate, not the string.
+    var m = t.match(/^-?\\d+(\\.\\d+)?/);
+    return m ? parseFloat(m[0]) : t.toLowerCase();
+  }
+  function sortTable(table, index, dir) {
+    var body = table.tBodies[0];
+    var rows = Array.prototype.slice.call(body.rows);
+    rows.forEach(function (r, i) { r._i = i; });        // stable: ties keep their order
+    rows.sort(function (a, b) {
+      var x = value(a.cells[index]), y = value(b.cells[index]);
+      // Blanks and N/A always sort to the bottom, whichever direction is asked for --
+      // "sort by pIC50" should surface the strongest, never a screenful of apo rows.
+      if (x === null && y === null) { return a._i - b._i; }
+      if (x === null) { return 1; }
+      if (y === null) { return -1; }
+      if (x === y) { return a._i - b._i; }
+      if (typeof x === 'number' && typeof y === 'number') { return dir * (x - y); }
+      return dir * String(x).localeCompare(String(y));
+    });
+    rows.forEach(function (r) {
+      // Family dividers assume each family's rows are contiguous, which no longer holds
+      // once the reader has sorted by something else.
+      r.classList.remove('row-group-start');
+      body.appendChild(r);
+    });
+  }
+  document.querySelectorAll('table.full-table').forEach(function (table) {
+    var head = table.tHead;
+    if (!head || !head.rows.length) { return; }
+    var row = head.rows[head.rows.length - 1];
+    Array.prototype.slice.call(row.cells).forEach(function (th, index) {
+      th.addEventListener('click', function () {
+        var asc = !th.classList.contains('ft-sorted-asc');
+        Array.prototype.slice.call(row.cells).forEach(function (other) {
+          other.classList.remove('ft-sorted-asc', 'ft-sorted-desc');
+        });
+        th.classList.add(asc ? 'ft-sorted-asc' : 'ft-sorted-desc');
+        sortTable(table, index, asc ? 1 : -1);
+      });
+    });
+  });
+})();
+"""
+    doc = (        "<!DOCTYPE html><html lang='en'><head><meta charset='utf-8'>"
         "<meta name='viewport' content='width=device-width, initial-scale=1.0'>"
         "<title>BoltzMaker Report | Marc C. Deller</title>"
         "<link href='https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700"
@@ -4926,6 +5081,7 @@ def write_html(df: pd.DataFrame, path: Path, campaign_dir: Path, campaign: Campa
         + f"<style>{_BRAND_CSS}</style></head><body>"
         + _BRAND_HEADER + "<main class='md-main'>" + "".join(parts) + "</main>" + _BRAND_FOOTER
         + f"<script>{_LIGAND_GRID_PAGER_JS}</script>"
+        + f"<script>{_TABLE_SORT_JS}</script>"
         + f"<script>{_IFRAME_RESIZE_JS}</script>"
         + "</body></html>"
     )
