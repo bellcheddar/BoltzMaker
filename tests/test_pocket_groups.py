@@ -102,3 +102,36 @@ def test_the_viewer_carries_the_same_controls_as_the_other_panes():
 def test_pockets_is_ordered_above_ligand_preparation():
     order = list(reports.PANEL_ORDER)
     assert order.index("Pockets") < order.index("Ligand preparation")
+
+
+# ---------------------------------------------------------------------------
+#  Uniform colour has to outlive the representation rebuild
+# ---------------------------------------------------------------------------
+
+def _viewer_js():
+    import pathlib
+    return (pathlib.Path(__file__).resolve().parent.parent
+            / "web" / "static" / "js" / "viewer.js").read_text()
+
+
+def test_type_is_applied_before_colour():
+    """Changing a representation's type rebuilds it with that type's default theme.
+
+    Applied the other way round -- or concurrently, which is what Promise.all did --
+    the rebuild overwrites the uniform colour with element colours on a ligand and
+    chain colours on a receptor, and the pockets pane comes out rainbow when it asked
+    for grey backbones and one colour per pocket.
+    """
+    js = _viewer_js()
+    body = js[js.index("Wrapper.prototype.loadExtra"):js.index("Wrapper.prototype.setExtraVisible")]
+    assert body.index("updateRepresentations(") < body.index("updateRepresentationsTheme("), \
+        "type must be set before the uniform colour"
+
+
+def test_they_are_not_raced_against_each_other():
+    js = _viewer_js()
+    body = js[js.index("Wrapper.prototype.loadExtra"):js.index("Wrapper.prototype.setExtraVisible")]
+    # Comments stripped: the fix explains itself by naming Promise.all, and matching
+    # the prose instead of the code would make this test pass on the broken version.
+    code = "\n".join(l for l in body.splitlines() if not l.strip().startswith("//"))
+    assert "Promise.all" not in code, "these two updates are order-dependent, not parallel"

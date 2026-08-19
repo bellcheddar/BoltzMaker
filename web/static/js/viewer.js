@@ -332,20 +332,31 @@
         if (structures.length <= before) throw new Error("nothing loaded for " + name);
         var entry = structures[structures.length - 1];
         self.extras[name] = entry;
-        var work = [];
-        if (options.color !== undefined) {
-          work.push(self.plugin.managers.structure.component.updateRepresentationsTheme(
-            entry.components, { color: "uniform", colorParams: { value: options.color } }));
-        }
+        // Type FIRST, then colour, and in series -- not Promise.all. Changing a
+        // representation's type rebuilds it with that type's default colour theme,
+        // so a uniform colour applied concurrently is overwritten by whatever the
+        // rebuild chose: element colours on a ligand (carbon grey, oxygen red,
+        // nitrogen blue) and chain colours on a receptor. That is exactly the
+        // "everything is a different colour" the pockets pane showed when it asked
+        // for grey backbones and one-colour-per-pocket spheres.
+        var done = Promise.resolve();
         if (options.type) {
           entry.components.forEach(function (component) {
             if (!component.representations.length) return;
-            work.push(self.plugin.managers.structure.component.updateRepresentations(
-              [component], component.representations[0],
-              { type: { name: options.type, params: options.typeParams || {} } }));
+            done = done.then(function () {
+              return self.plugin.managers.structure.component.updateRepresentations(
+                [component], component.representations[0],
+                { type: { name: options.type, params: options.typeParams || {} } });
+            });
           });
         }
-        return Promise.all(work).then(function () { return entry; });
+        if (options.color !== undefined) {
+          done = done.then(function () {
+            return self.plugin.managers.structure.component.updateRepresentationsTheme(
+              entry.components, { color: "uniform", colorParams: { value: options.color } });
+          });
+        }
+        return done.then(function () { return entry; });
       });
     });
   };
