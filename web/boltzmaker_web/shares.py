@@ -74,6 +74,10 @@ class Share:
     bytes_stored: int = 0
     attempts: int = 0
     locked_until: float = 0.0
+    #: Token of the share that replaced this one, if any. The older share keeps
+    #: working and keeps its content -- a link handed to someone months ago should
+    #: not turn into a 404 because the campaign grew -- and gains a pointer onward.
+    superseded_by: str = ""
 
     @property
     def is_locked(self) -> bool:
@@ -185,6 +189,7 @@ def create(runs_root: Path, package: bytes, campaign: str, run_key: str = "") ->
 def _share_from(manifest: dict) -> Share:
     return Share(token=manifest["token"], campaign=manifest.get("campaign", ""),
                  created=manifest.get("created", ""), run_key=manifest.get("run_key", ""),
+                 superseded_by=manifest.get("superseded_by", ""),
                  bytes_stored=int(manifest.get("bytes_stored", 0)),
                  attempts=int(manifest.get("attempts", 0)),
                  locked_until=float(manifest.get("locked_until", 0.0)))
@@ -256,6 +261,69 @@ def site_dir(runs_root: Path, token: str) -> Path | None:
         return None
     site = path / SITE_DIRNAME
     return site if site.is_dir() else None
+
+
+def supersede(runs_root: Path, token: str, revoke_token: str, new_token: str) -> str:
+    """Point an older share at the one that replaced it.
+
+    Authenticated by the REVOKE token, not by a matching run_key. run_key travels
+    in the uploaded bundle and is therefore attacker-chosen: anyone could pack a
+    .bmz claiming someone else's campaign and, if that were enough, redirect their
+    readers to content of their choosing. The revoke token is the one secret that
+    means "I own this share", and it is already separate from the viewing password
+    so handing someone the password never lets them do this.
+
+    The old share is left entirely intact -- same URL, same password, same
+    content. It only gains a pointer, because a link given to a collaborator
+    months ago should not break because the campaign grew.
+
+    Returns "" on success, or a short reason why not.
+    """
+    manifest = _manifest(runs_root, token)
+    if manifest is None:
+        return "that share does not exist"
+    presented = hashlib.sha256((revoke_token or "").encode("utf-8")).hexdigest()
+    if not hmac.compare_digest(presented, manifest.get("revoke_hash", "")):
+        return "that revoke link does not match this share"
+    if not TOKEN_RE.match(new_token or ""):
+        return "the newer share's link is not a valid one"
+    if new_token == token:
+        return "a share cannot supersede itself"
+    target = _manifest(runs_root, new_token)
+    if target is None:
+        return "the newer share does not exist on this server"
+    # One hop only. Chains are how a reader ends up following four redirects to
+    # find the current version, and a cycle is how they never arrive at all.
+    if target.get("superseded_by"):
+        return "the newer share has itself been superseded -- point at the newest one"
+
+    manifest["superseded_by"] = new_token
+    path = _dir(runs_root, token)
+    (path / MANIFEST_NAME).write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+    return ""
+
+
+def newest(runs_root: Path, token: str, hops: int = 8) -> str:
+    """Follow the supersede pointers to the current share.
+
+    Resolved when the page is rendered rather than rewritten when a share is
+    superseded, because a campaign extended three times otherwise leaves the first
+    reader following three redirects to arrive. A bounded hop count and a seen-set
+    because a cycle is a mistake somebody will eventually make, and an infinite
+    redirect is a worse answer than a slightly stale one.
+    """
+    seen = {token}
+    current = token
+    for _ in range(hops):
+        manifest = _manifest(runs_root, current)
+        if manifest is None:
+            return current
+        nxt = manifest.get("superseded_by") or ""
+        if not nxt or nxt in seen or _manifest(runs_root, nxt) is None:
+            return current
+        seen.add(nxt)
+        current = nxt
+    return current
 
 
 def revoke(runs_root: Path, token: str, revoke_token: str) -> bool:

@@ -1447,9 +1447,71 @@ def page(token: str, filename: str):
     site = shares.site_dir(runs_root(current_app), token)
     if site is None:
         abort(404)
+    banner = _superseded_banner(token) if filename == "index.html" else ""
+    if banner:
+        # Injected at serve time rather than written into the stored package: the
+        # package is the campaign as it was, and rewriting it would edit history to
+        # announce the future. Only index.html, only when a newer share exists, and
+        # only the one insertion -- every other asset is served untouched.
+        page_html = (site / filename).read_text(encoding="utf-8", errors="replace")
+        marker = "<body>"
+        if marker in page_html:
+            page_html = page_html.replace(marker, marker + banner, 1)
+        else:
+            page_html = banner + page_html
+        return Response(page_html, mimetype="text/html")
     # send_from_directory refuses to escape the directory it is given, which is
     # what keeps a crafted filename from reading the rest of the disk.
     return send_from_directory(site, filename)
+
+
+def _superseded_banner(token: str) -> str:
+    """A pointer to the current version, for a share that has been replaced.
+
+    The older share keeps its content and its link: someone was given that URL and
+    it should keep answering. What it gains is a way forward, resolved through the
+    whole chain so a campaign extended three times still costs the reader one click.
+    """
+    root = runs_root(current_app)
+    share = shares.get(root, token)
+    if share is None or not share.superseded_by:
+        return ""
+    newest = shares.newest(root, token)
+    if newest == token:
+        return ""
+    href = url_for("share.view", token=newest)
+    return (
+        '<div class="md-alert md-alert-info" style="margin:0;border-radius:0;text-align:center">'
+        "This campaign has been extended since this report was shared. "
+        f'<a href="{href}">Open the current version</a> '
+        "&mdash; you will need the password for it. This page stays as it was."
+        "</div>"
+    )
+
+
+@share_bp.route("/<token>/supersede/<revoke_token>", methods=["GET", "POST"])
+def supersede(token: str, revoke_token: str):
+    """Point this share at the one that replaced it.
+
+    Behind the revoke token, and POST to apply, for the same reasons Revoke is:
+    this changes what a reader is told, and a link-scanning mail client must not be
+    able to do it by following a URL.
+    """
+    root = runs_root(current_app)
+    share = shares.get(root, token)
+    if share is None:
+        abort(404)
+    error = ""
+    if request.method == "POST":
+        raw = (request.form.get("newer") or "").strip()
+        # Accept the whole URL, since that is what the owner has to hand.
+        newer = raw.rstrip("/").rsplit("/", 1)[-1] if "/" in raw else raw
+        error = shares.supersede(root, token, revoke_token, newer)
+        if not error:
+            return render_template("share_superseded.html", active=None, share=share,
+                                    newer=newer, done=True)
+    return render_template("share_superseded.html", active=None, share=share,
+                            revoke_token=revoke_token, error=error, done=False)
 
 
 @share_bp.route("/<token>/revoke/<revoke_token>", methods=["GET", "POST"])

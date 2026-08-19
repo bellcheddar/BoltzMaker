@@ -186,6 +186,11 @@ img, canvas { max-width: 100%; height: auto; }
 .md-alert-error pre { white-space: pre-wrap; word-break: break-word; margin: 6px 0 0; font-size: 12px; }
 .md-alert-success { background: #e6fbf3; border: 1px solid var(--md-accent-green); color: #0a6b4c; }
 
+/* Neutral notice: used for the banner a superseded share shows above its own
+   content, which is information rather than a problem. */
+.md-alert-info { background: var(--md-bg-alt); border: 1px solid var(--md-primary);
+  color: var(--md-text); }
+
 /* ---- prepare: run instructions ---- */
 .md-steps-list { font-size: 13px; padding-left: 20px; margin: 0 0 12px; }
 .md-steps-list li { margin-bottom: 10px; }

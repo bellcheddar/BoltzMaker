@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="md-card" style="max-width:38rem;margin:3rem auto;">
+  {% if done %}
+    <h2>Pointer added</h2>
+    <p>This share keeps its link, its password and its contents. Anyone opening it now
+      also sees a line at the top offering the current version, and one click takes
+      them there &mdash; they will need that version's password, which this server
+      cannot give them.</p>
+    <p class="md-hint">Nothing was deleted. If you would rather the old report stopped
+      being readable at all, use its revoke link instead.</p>
+  {% else %}
+    <h2>Point this share at a newer one</h2>
+    <p>For when a campaign has been extended and re-shared. The old report stays
+      exactly as it is &mdash; same link, same password, same contents, because
+      someone was given that URL and it should keep answering &mdash; and gains a
+      line at the top pointing readers to the current version.</p>
+    {% if error %}<div class="md-alert md-alert-error">{{ error }}</div>{% endif %}
+    {#  POST behind a button, like Revoke: this changes what a reader is told, and a
+        mail client fetching URLs for link previews must not be able to do it. #}
+    <form method="post">
+      <div class="md-field">
+        <label for="newer">The newer share's link</label>
+        <input type="text" id="newer" name="newer" required
+               placeholder="https://boltzmaker.mdeller.com/share/...">
+        <p class="md-hint">Paste the whole URL, or just its token. It has to be a share
+          on this server, and it cannot be this one.</p>
+      </div>
+      <div class="md-button-row">
+        <button type="submit" class="md-btn">Add the pointer</button>
+      </div>
+    </form>
+  {% endif %}
+</div>
+{% endblock %}
