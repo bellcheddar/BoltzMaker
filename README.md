@@ -1255,6 +1255,16 @@ example campaigns.
   rebuilt environment cannot run unpatched. Stop a Boltz that has said nothing for an
   hour and hand its targets to the retry ladder, instead of waiting on a wedged worker
   that will never exit. Together these retire the external watchdog.
+- [x] Make a finished campaign read as an answer rather than a listing: Affinity ahead
+  of Confidence, rows ranked by binder probability (apo rows sinking, ties stable),
+  click-to-sort on every column of the summary and SSE tables with the indicator shown
+  up front, and a Pockets panel naming each constraint and the ligands run against it.
+  The analysis page lifts these panels out of each run's stored dashboard rather than
+  building them, so `web/deploy/refresh_run_reports.py` re-renders the two that are a
+  pure function of a bundle's `boltz_input.md` and `boltz_summary.csv` -- leaving every
+  other panel byte-for-byte -- and already-uploaded runs get the change too. Clearing
+  the server's `panels.json` caches is part of that: 61 of them would otherwise have
+  gone on serving the old panels.
 - [ ] Classify the failure before retrying, and escalate along the axis that addresses it:
   a memory ladder (isolation, then `--max-msa-seqs 2048`) and a NaN ladder
   (`--no-potentials`, then fp32). Retrying with identical parameters is already known to be
