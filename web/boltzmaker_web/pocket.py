@@ -24,6 +24,7 @@ reference with nothing left simply has no pocket to offer, and says so.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 
 from .sequences import THREE_TO_ONE, _atom_site_columns, align_pair
@@ -211,3 +212,62 @@ def best_chain_for_sequence(text: str, target_sequence: str) -> str:
         if score > best_score:
             best, best_score = chain, score
     return best if best_score >= 0.3 else ""
+
+
+# ---------------------------------------------------------------------------
+#  Which pocket a finished target was run against
+# ---------------------------------------------------------------------------
+#  A matrix campaign runs every ligand against every named pocket and once
+#  unconstrained, and records which was which only in the target's own name:
+#  `_target_stem` appends the pocket code, so GLP1R_ORFO_V6G is orforglipron
+#  placed in the V6G site and GLP1R_ORFO is the same ligand left free. Nothing in
+#  the manifest carries the code, so the campaign file is the only source for the
+#  set of legal ones -- and matching the *whole* stem against
+#  family_ligand_code, rather than just its suffix, is what stops a ligand that
+#  happens to be called V6G being read as a pocket.
+
+_POCKET_NAMED_RE = re.compile(
+    r"^\s*pocket contact:.*?\bas\s+([A-Za-z0-9_-]+)\s*$", re.IGNORECASE | re.MULTILINE)
+_POCKET_ANY_RE = re.compile(r"^\s*pocket contact:", re.IGNORECASE | re.MULTILINE)
+
+UNCONSTRAINED = "Unconstrained"
+UNNAMED = "Unnamed pocket"
+
+
+def campaign_pocket_codes(md_text: str) -> list[str]:
+    """Named pocket codes, in the order the campaign file introduces them.
+
+    Order matters: it is what fixes each pocket's colour in the viewer, so the
+    same campaign always paints V6G the same shade no matter which target the
+    reader opens first.
+    """
+    seen: list[str] = []
+    for code in _POCKET_NAMED_RE.findall(md_text or ""):
+        if code not in seen:
+            seen.append(code)
+    return seen
+
+
+def has_unnamed_pocket(md_text: str) -> bool:
+    """Whether any `Pocket contact:` carries no `as CODE`.
+
+    Such a target is constrained but not part of a matrix, and calling it
+    unconstrained in the legend would be a plain misstatement of what ran.
+    """
+    named = set(campaign_pocket_codes(md_text))
+    for line in _POCKET_ANY_RE.split(md_text or "")[1:]:
+        first = line.splitlines()[0] if line.splitlines() else ""
+        match = re.search(r"\bas\s+([A-Za-z0-9_-]+)\s*$", first, re.IGNORECASE)
+        if not match or match.group(1) not in named:
+            return True
+    return False
+
+
+def group_for(target_id: str, family_id: str, ligand_id: str,
+              codes: list[str], unnamed: bool) -> str:
+    """The pocket group this target belongs to, by the name the table uses."""
+    if ligand_id:
+        for code in codes:
+            if target_id == f"{family_id}_{ligand_id}_{code}":
+                return code
+    return UNNAMED if unnamed else UNCONSTRAINED

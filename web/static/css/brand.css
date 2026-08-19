@@ -552,6 +552,20 @@ tr.md-check-na .md-check-fail { color: var(--md-text-muted); }
   white-space: nowrap; }
 .md-overlay-rmsd { color: var(--md-text-muted); font-variant-numeric: tabular-nums; }
 
+/* The pockets viewer sits under the pockets table inside one card, rather than in
+   the two-up detail grid the other overlay panes live in, so it needs its own
+   height: .md-detail-pane only gets one from the grid row it is normally a cell
+   of, and without this the Mol* canvas collapses to nothing. Taller than the
+   300px panes above because this one is showing a dozen superposed receptors and
+   every ligand at once, and it is the only viewer on the card. */
+.md-pockets-pane { margin-top: 16px; }
+.md-pockets-pane > .md-detail-body { min-height: 420px; }
+.md-pockets-pane .md-viewer { min-height: 420px; }
+/* Wider than the RMSD column it borrows its class from: this holds a pocket name
+   ("Unconstrained"), not a number. */
+.md-pockets-pane .md-overlay-rmsd { font-variant-numeric: normal; font-size: 11px; }
+.md-pockets-pane .md-overlay-list { max-height: 240px; }
+
 /* A campaign name is an identifier, not prose: upper case everywhere it is
    listed, whatever case it was typed in. Transformed rather than upper-cased at
    the source, so the name the bundle and the results file carry is untouched. */

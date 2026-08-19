@@ -780,6 +780,11 @@ def _overlay_payload(session: Path, loaded: bmz.Results) -> dict:
         except (json.JSONDecodeError, OSError):
             pass
 
+    # The campaign file is the only record of which pockets exist: the manifest
+    # keeps the contacts a target used but never the code that names them.
+    pocket_codes = pocket_finder.campaign_pocket_codes(loaded.md_text)
+    unnamed_pocket = pocket_finder.has_unnamed_pocket(loaded.md_text)
+
     structures = session / "campaign" / "structures"
     reference = None
     fits = []
@@ -862,13 +867,25 @@ def _overlay_payload(session: Path, loaded: bmz.Results) -> dict:
         rows.append({
             "id": target.target_id, "name": target.display_name,
             "ligand": target.ligand_id,
+            # Which pocket this target was run against, so the pockets pane can
+            # colour it to match the row of the table above it.
+            "pocket": pocket_finder.group_for(target.target_id, target.family_id,
+                                              target.ligand_id, pocket_codes, unnamed_pocket),
             "rmsd": None if shared_rmsd is None else round(shared_rmsd, 2),
             "matched": fit["matched"], "core": len(fit["kept"]),
             "shared": len(mine), "has_ligand": wrote_ligand,
         })
 
+    # Ordered exactly as the Pockets table orders its rows -- named pockets
+    # alphabetically, the baseline last -- because that ordering is what assigns
+    # each pocket its colour, and a legend that disagrees with the table above it
+    # is worse than no legend.
+    groups = [g for g in sorted({r["pocket"] for r in rows})
+              if g not in (pocket_finder.UNCONSTRAINED, pocket_finder.UNNAMED)]
+    groups += [g for g in (pocket_finder.UNNAMED, pocket_finder.UNCONSTRAINED)
+               if any(r["pocket"] == g for r in rows)]
     payload = {"reference": reference["id"] if reference else "",
-               "shared": len(core), "targets": rows}
+               "shared": len(core), "targets": rows, "pocket_order": groups}
     try:
         cache.write_text(json.dumps(payload))
     except OSError:

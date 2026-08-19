@@ -48,7 +48,8 @@ var BoltzExplorer = (function () {
   var viewers = { pose: { promise: null, wrapper: null },
                   contacts: { promise: null, wrapper: null },
                   ligands: { promise: null, wrapper: null },
-                  traces: { promise: null, wrapper: null } };
+                  traces: { promise: null, wrapper: null },
+                  pockets: { promise: null, wrapper: null } };
   var sequence = null;      // the open target's track, logo and chain map
   var ligandCards = {};     // ligand id -> the report's own depiction
   var extraSpecs = [];      // charts this page builds rather than replays
@@ -424,6 +425,7 @@ var BoltzExplorer = (function () {
   var VIEWER_HOSTS = {
     pose: "viewer", contacts: "viewer-contacts",
     ligands: "viewer-ligands", traces: "viewer-traces",
+    pockets: "viewer-pockets",
   };
 
   function ensureViewer(which) {
@@ -694,6 +696,7 @@ var BoltzExplorer = (function () {
                     "lig", { type: "ball-and-stick" });
         overlayPane("traces", payload, function () { return true; },
                     "ca", { type: "backbone" });
+        pocketsPane(payload);
       })
       .catch(function () {
         ["ligands", "traces"].forEach(function (which) {
@@ -776,6 +779,115 @@ var BoltzExplorer = (function () {
           return wrapper.loadExtra(row.id, url, {
             color: overlayColour(index), type: options.type,
           }).catch(function () { /* one missing file is not the whole pane */ });
+        });
+      }, Promise.resolve()).then(function () {
+        wrapper.frameAll();
+      });
+    });
+  }
+
+  // ---- the pockets pane ----------------------------------------------------
+
+  //: Pocket 1 green, pocket 2 blue, then on through hues that stay apart on a
+  //: grey background; the unconstrained baseline is always red, whichever
+  //: position it holds, because it is the control every named pocket is read
+  //: against and it should not change colour between campaigns.
+  var POCKET_COLOURS = [0x00875a, 0x1e73be, 0xb07d00, 0x9b51e0, 0x0f9ba8, 0xc45500];
+  var POCKET_BASELINE = 0xcf2f3c;
+  //: One grey for every receptor. The point of this pane is where the ligands
+  //: went, and colouring twelve near-identical superposed backbones would say
+  //: "these differ" about the one thing that does not.
+  var RECEPTOR_GREY = 0x9aa0a6;
+
+  function pocketColour(payload, group) {
+    var order = payload.pocket_order || [];
+    if (group === "Unconstrained" || group === "Unnamed pocket") return POCKET_BASELINE;
+    var named = order.filter(function (g) {
+      return g !== "Unconstrained" && g !== "Unnamed pocket";
+    });
+    var at = named.indexOf(group);
+    return POCKET_COLOURS[(at < 0 ? 0 : at) % POCKET_COLOURS.length];
+  }
+
+  /* Only the targets that actually bind something: a ligand-free (apo) target has
+     no pose to place, and drawing its receptor would add a backbone to the grey
+     haze while contributing nothing to the question the pane asks. In the 15-target
+     5-HT2 campaign that is the 12 with a ligand, and the three apo targets are
+     left to the Superposed targets pane, which is about backbones. */
+  function pocketsPane(payload) {
+    var note = document.getElementById("pockets-note");
+    var list = document.getElementById("pockets-list");
+    if (!note || !list) return;               // report predates the Pockets panel
+    if (!BoltzViewer.available()) { note.textContent = BoltzViewer.reason(); return; }
+
+    var rows = payload.targets.filter(function (row) { return row.has_ligand; });
+    list.innerHTML = "";
+    if (!rows.length) {
+      note.textContent = "No target in this campaign has a ligand to place.";
+      return;
+    }
+    var groups = [];
+    rows.forEach(function (row) {
+      if (groups.indexOf(row.pocket) < 0) groups.push(row.pocket);
+    });
+    note.textContent = rows.length + " ligand" + (rows.length === 1 ? "" : "s")
+      + " across " + groups.length + " pocket" + (groups.length === 1 ? "" : "s")
+      + ", every receptor superposed on " + payload.reference
+      + " and drawn in grey. Colours match the table above.";
+
+    rows.forEach(function (row) {
+      var colour = pocketColour(payload, row.pocket);
+      var label = document.createElement("label");
+      label.className = "md-overlay-row";
+
+      var box = document.createElement("input");
+      box.type = "checkbox";
+      box.checked = true;
+      label.appendChild(box);
+
+      var swatch = document.createElement("span");
+      swatch.className = "md-overlay-swatch";
+      swatch.style.background = hexOf(colour);
+      label.appendChild(swatch);
+
+      var name = document.createElement("span");
+      name.className = "md-overlay-name";
+      name.textContent = row.name;
+      name.title = row.name + " -- " + row.pocket;
+      label.appendChild(name);
+
+      var tag = document.createElement("span");
+      tag.className = "md-overlay-rmsd";
+      tag.textContent = row.pocket;
+      tag.title = "The pocket this target was run against";
+      label.appendChild(tag);
+
+      // One checkbox hides the ligand and its receptor together: they are one
+      // prediction, and leaving a backbone behind after its pose has gone
+      // misreports which structures are still on screen.
+      box.addEventListener("change", function () {
+        var wrapper = viewers.pockets.wrapper;
+        if (!wrapper) return;
+        wrapper.setExtraVisible("lig:" + row.id, box.checked);
+        wrapper.setExtraVisible("ca:" + row.id, box.checked);
+      });
+      list.appendChild(label);
+    });
+
+    ensureViewer("pockets").then(function (wrapper) {
+      // In series for the same reason the other panes are: concurrent loads race
+      // each other through Mol*'s state tree and the structure a load returns is
+      // then not always the one it just added.
+      return rows.reduce(function (chain, row) {
+        return chain.then(function () {
+          return wrapper.loadExtra("ca:" + row.id, sources.overlay("ca", row.id),
+                                   { color: RECEPTOR_GREY, type: "backbone" })
+            .catch(function () { /* one missing file is not the whole pane */ });
+        }).then(function () {
+          return wrapper.loadExtra("lig:" + row.id, sources.overlay("lig", row.id),
+                                   { color: pocketColour(payload, row.pocket),
+                                     type: "ball-and-stick" })
+            .catch(function () { /* ditto */ });
         });
       }, Promise.resolve()).then(function () {
         wrapper.frameAll();

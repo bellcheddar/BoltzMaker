@@ -525,6 +525,27 @@ _REBUILT_PANELS = {
 }
 
 
+
+#: Appended below the Pockets table, not substituted for it: the table is real data
+#: the report computed and this page cannot recompute, while the viewer is this
+#: page's own -- reports.py strips every script from an upload, so a viewer that
+#: arrived in the dashboard could never run here. Same controls and list markup as
+#: the Superposed targets pane, because it is the same question asked of the same
+#: superposition: where does each ligand actually sit.
+POCKETS_VIEWER_HTML = (
+    '<div class="md-detail-pane md-pockets-pane">'
+    '<h3 class="md-sub">Where the ligands landed</h3>'
+    '<div class="md-detail-body"><div id="viewer-pockets" class="md-viewer"></div></div>'
+    '<div class="md-viewer-controls md-button-row" data-viewer="pockets">'
+    '<button type="button" class="md-btn md-btn-secondary" data-style="spin">Spin</button>'
+    '<button type="button" class="md-btn md-btn-secondary" data-style="reset">Reset</button>'
+    '</div>'
+    '<p class="md-hint" id="pockets-note" style="margin-bottom:0"></p>'
+    '<div class="md-overlay-list" id="pockets-list"></div>'
+    '</div>'
+)
+
+
 def rebuild_panels(panels: list) -> list:
     """Swap in this page's own markup for the panels it redraws."""
     for panel in panels:
@@ -534,6 +555,8 @@ def rebuild_panels(panels: list) -> list:
             panel["kind"] = "plain"
         elif title == "Summary table" and isinstance(panel, dict):
             panel["html"] = shorten_headers(panel["html"])
+        elif title == "Pockets" and isinstance(panel, dict):
+            panel["html"] = panel["html"] + POCKETS_VIEWER_HTML
     return panels
 
 #: Header text the summary table can spare. Every column of that table is a
