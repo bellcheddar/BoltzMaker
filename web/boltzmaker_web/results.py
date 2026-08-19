@@ -216,6 +216,33 @@ KPI_TITLES = {
 }
 
 _PARTNERS_RE = re.compile(r"^\s*partners:\s*(.+)$", re.IGNORECASE | re.MULTILINE)
+#: `Protein:` through to its `Sequence:`, plus the `Group:` that may follow. Used to
+#: decide which blocks are the same receptor.
+_PROTEIN_BLOCK_RE = re.compile(
+    r"^protein:[ \t]*(?P<id>\S+)[ \t]*$(?P<body>(?:\n(?!protein:).*)*)",
+    re.IGNORECASE | re.MULTILINE)
+_SEQUENCE_RE = re.compile(r"^\s*sequence:\s*(\S+)\s*$", re.IGNORECASE | re.MULTILINE)
+_GROUP_RE = re.compile(r"^\s*group:\s*(\S+)\s*$", re.IGNORECASE | re.MULTILINE)
+
+
+def protein_identity(md_text: str) -> dict:
+    """Block id -> what makes it one receptor rather than one block.
+
+    A receptor is often several `Protein:` blocks -- with partners, without, and a
+    ligand-free companion -- and counting blocks reports the GLP1R/GIPR matrix as
+    four proteins when it studies two. `Group:` says so when it is set; when it is
+    not, the sequence does, because an apo companion carries its receptor's
+    sequence exactly. A genuine variant (a mutant, a truncation) has a different
+    sequence and stays a protein of its own, which is right.
+    """
+    identity = {}
+    for match in _PROTEIN_BLOCK_RE.finditer(md_text or ""):
+        body = match.group("body")
+        group = _GROUP_RE.search(body)
+        sequence = _SEQUENCE_RE.search(body)
+        key = group.group(1) if group else (sequence.group(1) if sequence else match.group("id"))
+        identity[match.group("id")] = key
+    return identity
 
 
 def campaign_counts(results: "Results") -> dict:
@@ -231,7 +258,12 @@ def campaign_counts(results: "Results") -> dict:
     from . import pocket as pocket_finder
 
     targets = results.targets
-    proteins = {t.family_group or t.family_id for t in targets if (t.family_group or t.family_id)}
+    # Keyed through the campaign file, not on family_group alone: that falls back to
+    # the block id when no `Group:` is set, which is how a two-receptor matrix came
+    # out as four proteins.
+    identity = protein_identity(results.md_text or "")
+    proteins = {identity.get(t.family_id) or t.family_group or t.family_id
+                for t in targets if (t.family_id or t.family_group)}
     ligands = {t.ligand_id for t in targets if t.ligand_id}
     partners: set[str] = set()
     for line in _PARTNERS_RE.findall(results.md_text or ""):

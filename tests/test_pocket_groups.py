@@ -273,3 +273,35 @@ def test_the_offline_package_gets_the_same_context_as_the_page():
     src = (pathlib.Path(__file__).resolve().parent.parent
            / "web" / "boltzmaker_web" / "views_auto.py").read_text()
     assert src.count("kpi_fields=bmz.KPI_FIELDS") == 2
+
+
+def test_a_receptor_split_across_blocks_without_a_group_is_one_protein():
+    """The GLP1R/GIPR matrix writes four blocks for two receptors and sets no
+    Group:. Counting blocks called it four proteins when it studies two -- the apo
+    companion carries its receptor's sequence exactly, which is what makes it the
+    same protein."""
+    from boltzmaker_web import results as bmz
+    md = ("Protein: GLP1R\nSequence: AAAA\nLigands: L1\n\n"
+          "Protein: GIPR\nSequence: BBBB\nLigands: L1\n\n"
+          "Protein: GLPAP\nSequence: AAAA\nLigands: none\n\n"
+          "Protein: GIPAP\nSequence: BBBB\nLigands: none\n")
+    counts = bmz.campaign_counts(_results_stub(
+        [("GLP1R", "GLP1R", "L1"), ("GIPR", "GIPR", "L1"),
+         ("GLPAP", "GLPAP", None), ("GIPAP", "GIPAP", None)], md))
+    assert counts["proteins"] == 2
+    assert counts["companions"] == 2
+    assert counts["predictions"] == 4
+
+
+def test_a_group_still_wins_where_one_is_set():
+    from boltzmaker_web import results as bmz
+    md = ("Protein: 5HT2A\nSequence: AAAA\nGroup: 5HT2A\n\n"
+          "Protein: H2ANG\nSequence: AAAA\nGroup: 5HT2A\n")
+    assert set(bmz.protein_identity(md).values()) == {"5HT2A"}
+
+
+def test_a_genuine_variant_stays_a_protein_of_its_own():
+    """A mutant or truncation is a different construct, not the same receptor."""
+    from boltzmaker_web import results as bmz
+    md = "Protein: WT\nSequence: AAAA\n\nProtein: MUT\nSequence: AAAC\n"
+    assert len(set(bmz.protein_identity(md).values())) == 2
