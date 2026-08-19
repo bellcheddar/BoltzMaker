@@ -4777,22 +4777,35 @@ def _build_pockets_panel_html(campaign: Campaign) -> str:
 
 
 def _summary_table_order(df: "pd.DataFrame"):
-    """Rank by binder probability, strongest first.
+    """Rank by predicted pIC50, strongest first.
 
     The manifest order the table used to inherit is generation order -- protein by
     protein, ligand by ligand -- which answers "what did I ask for", not "what bound".
     Ranking puts the answer in the first screenful.
 
-    Apo rows sort last rather than first: they have no binder probability at all, and
+    **Not by binder probability**, which this table used at first. Measured on the
+    GLP1R/GIPR campaign, across 24 ligand targets, the binary head correlated with
+    pIC50 at r = +0.07 -- no relationship -- and returned nothing above 0.71 for a set
+    of four real, characterised compounds. Its mean was flat across ligands (0.34-0.51)
+    while varying with the *pocket condition* (0.30 unconstrained, 0.50-0.51
+    constrained), so it was responding to how a target was set up rather than to what
+    was in the site. Orforglipron, a confirmed potent GLP1R binder, came 0.59 and
+    ranked below compounds it beats by orders of magnitude experimentally.
+
+    pIC50 put the same four in their known order -- ORFO 11.2, LIG1 9.8, LSN1 8.4,
+    LSN2 7.9 -- so it is the output carrying the quantitative signal, and it is what
+    the table ranks on. A binary binder/non-binder score also has nothing to separate
+    when every ligand in the campaign is a real binder.
+
+    Apo rows sort last rather than first: they have no affinity at all, and
     `na_position` defaults to putting NaN at the end, which is what we want, but saying
     so explicitly keeps it true if the default ever changes. `kind="stable"` keeps ties
-    -- of which there are many at 0.00 and 1.00 -- in their generation order, so two
-    runs of the same campaign produce the same table.
+    in their generation order, so two runs of the same campaign produce the same table.
 
     Returns the ordered frame and whether the ranking actually applied, since the
     family dividers are only drawn when it did not.
     """
-    col = "affinity_probability_binary"
+    col = "pIC50"
     if col not in df.columns or df[col].isna().all():
         return df, False
     return df.sort_values(col, ascending=False, na_position="last", kind="stable"), True
