@@ -2,7 +2,10 @@
   <h2 style="display:flex;align-items:baseline;gap:10px;flex-wrap:wrap">
     {{ results.campaign_name }}
     <span class="md-hint" style="font-weight:400">
-      {{ results.targets | length }} target{{ 's' if results.targets | length != 1 }}
+      {#  "prediction", not "target": one word per thing, the same word the prepare
+          form uses. "Target" meant a protein in the summary table and a run in the
+          list below it, on this page, which is what made the counts unreadable.  #}
+      {{ counts.predictions }} prediction{{ 's' if counts.predictions != 1 }}
       {#  This is manifest.created_utc: when the results were packed, not when the
           campaign ran. Normally minutes apart, so "run" was a fair label -- but not
           for a campaign packed later from an archive, where it read as a run date
@@ -18,6 +21,19 @@
     is everything that did.
   </div>
   {% endif %}
+
+  {#  What the campaign was made of, in the order and the words the prepare form
+      asks for them, so the page you read afterwards lines up with the form you
+      filled in. Counted from what ran, not from what was declared: a ligand
+      defined and never used is not a ligand of this campaign.  #}
+  <div class="md-kpi-row">
+    {% for field in kpi_fields %}
+    <div class="md-kpi{{ ' md-kpi-total' if field == 'predictions' }}">
+      <span class="md-kpi-value">{{ counts[field] }}</span>
+      <span class="md-kpi-label">{{ kpi_labels[field] }}</span>
+    </div>
+    {% endfor %}
+  </div>
 
   <div class="md-stat-row">
     <div class="md-stat"><span class="md-stat-value" id="stat-shown">{{ results.targets | length }}</span><span class="md-stat-label">predictions</span></div>
@@ -93,11 +109,11 @@
 
 {% if slot.kind == 'own' and slot.which == 'targets' %}
 <div class="md-card" id="{{ slot.anchor }}">
-  <h2>Targets</h2>
-  <p class="md-hint" style="margin-top:0">Click a target row to see its pose and interactions,
-    in the panel below.</p>
+  <h2>Predictions</h2>
+  <p class="md-hint" style="margin-top:0">One row per prediction. Click one to see its pose
+    and interactions, in the panel below.</p>
   <div class="md-filter-row">
-    <input type="search" id="filter-text" placeholder="Filter by target, ligand or family...">
+    <input type="search" id="filter-text" placeholder="Filter by prediction, ligand or protein...">
     {#  BoltzMaker calls each `Protein:` block a family, and its own reports below
         use that word. In this campaign the two are HTR2A and its apo companion, so
         "2 families" read as though there were two protein families. "Protein" is
@@ -112,7 +128,7 @@
     <table class="md-data-table" id="target-table">
       <thead>
         <tr>
-          <th data-sort="name">Target</th>
+          <th data-sort="name">Prediction</th>
           <th data-sort="family">Protein</th>
           <th data-sort="ligand">Ligand</th>
           <th data-sort="confidence" class="num">Confidence</th>

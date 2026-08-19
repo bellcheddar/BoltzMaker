@@ -362,6 +362,29 @@ img, canvas { max-width: 100%; height: auto; }
 .md-stat-value { font-size: 26px; font-weight: 700; color: var(--md-primary); line-height: 1.1; }
 .md-stat-label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--md-text-muted); }
 
+/* What the campaign was made of. Boxes rather than the bare .md-stat row below
+   them, because these six are fixed facts about the run while those three move as
+   the reader filters -- giving them the same shape said they were the same kind of
+   number. Auto-fit so six sit on one line on a laptop and wrap to two or three on
+   a phone without a breakpoint per count. */
+.md-kpi-row {
+  display: grid; gap: 10px; margin-top: 14px;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+}
+.md-kpi {
+  display: flex; flex-direction: column; gap: 2px;
+  padding: 10px 12px; border: 1px solid var(--md-border); border-radius: 6px;
+  background: var(--md-bg-alt);
+}
+.md-kpi-value { font-size: 24px; font-weight: 700; color: var(--md-text); line-height: 1.1;
+  font-variant-numeric: tabular-nums; }
+/* Predictions is the one that says what the run cost, and the one the prepare
+   form also singles out, so it carries the accent in both places. */
+.md-kpi-total { border-color: var(--md-primary); }
+.md-kpi-total .md-kpi-value { color: var(--md-primary); }
+.md-kpi-label { font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.05em;
+  color: var(--md-text-muted); line-height: 1.25; }
+
 .md-filter-row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-bottom: 14px; }
 .md-filter-row input[type=search], .md-filter-row select {
   padding: 7px 10px; border: 1px solid var(--md-border); border-radius: var(--md-radius);

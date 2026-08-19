@@ -28,6 +28,7 @@ from __future__ import annotations
 import csv
 import io
 import json
+import re
 import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -180,6 +181,52 @@ class Target:
     @property
     def plip_total(self) -> int:
         return sum(self.plip_counts.values())
+
+
+#: The six numbers that describe a campaign, in the words the prepare form uses.
+#: One vocabulary across the whole tool matters more than any individual label:
+#: "target" used to mean a protein in the summary table and a prediction in the
+#: targets list, on the same page, which is what made these counts unreadable.
+KPI_FIELDS = ("proteins", "partners", "ligands", "pockets", "companions", "predictions")
+
+KPI_LABELS = {
+    "proteins": "Proteins",
+    "partners": "Co-folded partners",
+    "ligands": "Ligands",
+    "pockets": "Pockets",
+    "companions": "Ligand-free companions",
+    "predictions": "Predictions",
+}
+
+_PARTNERS_RE = re.compile(r"^\s*partners:\s*(.+)$", re.IGNORECASE | re.MULTILINE)
+
+
+def campaign_counts(results: "Results") -> dict:
+    """What the campaign asked for, counted the way the prepare form counts it.
+
+    Proteins are counted by group: a receptor written as several `Protein:` blocks
+    -- one with partners, one without, one ligand-free -- is one protein to the
+    reader, and the 5-HT2 panel's nine blocks are three proteins. Partners are the
+    distinct chains actually named on a `Partners:` line, so a partner defined and
+    never used is not counted as co-folded. Ligands and companions are counted from
+    the targets rather than the definitions, because this page reports what ran.
+    """
+    from . import pocket as pocket_finder
+
+    targets = results.targets
+    proteins = {t.family_group or t.family_id for t in targets if (t.family_group or t.family_id)}
+    ligands = {t.ligand_id for t in targets if t.ligand_id}
+    partners: set[str] = set()
+    for line in _PARTNERS_RE.findall(results.md_text or ""):
+        partners |= {p.strip() for p in line.split(",") if p.strip()}
+    return {
+        "proteins": len(proteins),
+        "partners": len(partners),
+        "ligands": len(ligands),
+        "pockets": len(pocket_finder.campaign_pocket_codes(results.md_text or "")),
+        "companions": sum(1 for t in targets if not t.ligand_id),
+        "predictions": len(targets),
+    }
 
 
 @dataclass

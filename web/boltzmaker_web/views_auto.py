@@ -603,6 +603,8 @@ def _render_explorer(token: str, loaded: bmz.Results):
         slots=slots, nav=report_panels.navigation(slots),
         has_panels=bool(panels), report_charts=json.dumps(charts),
         ligand_cards=json.dumps(ligands),
+        counts=bmz.campaign_counts(loaded),
+        kpi_fields=bmz.KPI_FIELDS, kpi_labels=bmz.KPI_LABELS,
     )
 
 
@@ -903,6 +905,11 @@ def _package_bytes(session: Path, token: str, loaded: bmz.Results) -> bytes:
         "_explorer_panels.html", results=loaded, token="", package=True,
         slots=slots, nav=report_panels.navigation(slots),
         has_panels=bool(panels), low_confidence=bmz.LOW_CONFIDENCE_THRESHOLD,
+        # Same context as the live page: this template is rendered from two places,
+        # and a variable added for one of them leaves the other rendering an
+        # exception into a file nobody opens until they are offline.
+        counts=bmz.campaign_counts(loaded),
+        kpi_fields=bmz.KPI_FIELDS, kpi_labels=bmz.KPI_LABELS,
     )
     # The overlay files and the per-target sequence and pocket files are written
     # on demand, so a campaign nobody has scrolled through has none of them yet.

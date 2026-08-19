@@ -198,3 +198,78 @@ def test_the_row_affordance_is_styled():
     css = _brand_css()
     assert ".full-table tr.md-row-clickable { cursor: pointer; }" in css
     assert "md-row-selected" in css
+
+
+# ---------------------------------------------------------------------------
+#  One vocabulary, and the counts behind it
+# ---------------------------------------------------------------------------
+
+def _results_stub(targets, md_text=""):
+    from boltzmaker_web import results as bmz
+
+    class T:
+        def __init__(self, family_group, family_id, ligand_id):
+            self.family_group, self.family_id, self.ligand_id = family_group, family_id, ligand_id
+    rows = [T(*t) for t in targets]
+    return bmz.Results(manifest={}, targets=rows, families=[], campaign_name="c",
+                       created_utc="2026-01-01", md_text=md_text)
+
+
+FIVE_HT2_MD = """Protein: 5HT2A
+Partners: GNAQ, GNB1, GNG2
+Protein: H2ANG
+Protein: H2AAP
+"""
+
+
+def test_the_5ht2_campaign_counts_the_way_a_reader_would():
+    """Nine protein blocks, three receptors: a protein written with partners,
+    without, and ligand-free is one protein to whoever reads the page."""
+    from boltzmaker_web import results as bmz
+    targets = []
+    for fam in ("5HT2A", "5HT2B", "5HT2C"):
+        for lig in ("L1", "L2"):
+            targets.append((fam, fam, lig))                 # with partners
+            targets.append((fam, fam + "NG", lig))           # without
+        targets.append((fam, fam + "AP", None))              # ligand-free companion
+    counts = bmz.campaign_counts(_results_stub(targets, FIVE_HT2_MD))
+    assert counts["proteins"] == 3
+    assert counts["partners"] == 3
+    assert counts["ligands"] == 2
+    assert counts["pockets"] == 0
+    assert counts["companions"] == 3
+    assert counts["predictions"] == 15
+
+
+def test_a_partner_defined_but_never_co_folded_is_not_counted():
+    from boltzmaker_web import results as bmz
+    md = "Partner: GNAQ\nSequence: MK\nProtein: P\n"      # never on a Partners: line
+    assert bmz.campaign_counts(_results_stub([("P", "P", "L")], md))["partners"] == 0
+
+
+def test_pockets_are_counted_from_the_campaign():
+    from boltzmaker_web import results as bmz
+    md = "Pocket contact: P residue 1 as V6G\nPocket contact: P residue 2 as 41Y\n"
+    assert bmz.campaign_counts(_results_stub([("P", "P", "L")], md))["pockets"] == 2
+
+
+def test_every_kpi_has_a_label():
+    from boltzmaker_web import results as bmz
+    assert set(bmz.KPI_FIELDS) == set(bmz.KPI_LABELS)
+
+
+def test_the_protein_column_is_not_called_target():
+    """It was, while the list below it called a prediction a target -- one word for
+    two things, on one page."""
+    import pathlib
+    src = (pathlib.Path(__file__).resolve().parent.parent / "BoltzMaker.py").read_text()
+    assert '"family_group": "Protein"' in src
+    assert '"family_id": "Protein"' in src
+
+
+def test_the_offline_package_gets_the_same_context_as_the_page():
+    """_explorer_panels.html is rendered from two places."""
+    import pathlib
+    src = (pathlib.Path(__file__).resolve().parent.parent
+           / "web" / "boltzmaker_web" / "views_auto.py").read_text()
+    assert src.count("kpi_fields=bmz.KPI_FIELDS") == 2
