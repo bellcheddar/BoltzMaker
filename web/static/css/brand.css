@@ -378,8 +378,28 @@ table.md-data-table th, table.md-data-table td { border-bottom: 1px solid var(--
 table.md-data-table th { background: var(--md-bg-alt); cursor: pointer; user-select: none; white-space: nowrap; position: sticky; top: 0; }
 table.md-data-table th:hover { color: var(--md-primary); }
 table.md-data-table th.num, table.md-data-table td.num { text-align: right; font-variant-numeric: tabular-nums; }
-table.md-data-table th.md-sorted-asc::after { content: " \2191"; color: var(--md-primary); }
-table.md-data-table th.md-sorted-desc::after { content: " \2193"; color: var(--md-primary); }
+/* Every sortable column shows its indicator up front, dimmed, rather than only after
+   it has been clicked -- the header row was already clickable but gave no sign of it.
+   Fixed-width so swapping the glyph cannot rewrap the header and shift the columns. */
+table.md-data-table th[data-sort]::after {
+  content: "\2195"; display: inline-block; width: 0.9em; margin-left: 0.15em;
+  text-align: center; opacity: 0.28; font-weight: 400;
+}
+table.md-data-table th[data-sort]:hover::after { opacity: 0.7; }
+table.md-data-table th.md-sorted-asc::after { content: "\2191"; opacity: 1; color: var(--md-primary); }
+table.md-data-table th.md-sorted-desc::after { content: "\2193"; opacity: 1; color: var(--md-primary); }
+
+/* The report's own tables, rendered into this page from an upload. Their markup
+   carries the .full-table class but none of the dashboard's script, so the affordance
+   and the behaviour both have to come from here (see enableReportTableSorting). */
+.full-table thead tr:last-child th { cursor: pointer; user-select: none; }
+.full-table thead tr:last-child th::after {
+  content: "\2195"; display: inline-block; width: 0.9em; margin-left: 0.15em;
+  text-align: center; opacity: 0.28; font-weight: 400;
+}
+.full-table thead tr:last-child th:hover::after { opacity: 0.7; }
+.full-table thead tr:last-child th.ft-sorted-asc::after { content: "\2191"; opacity: 1; color: var(--md-primary); }
+.full-table thead tr:last-child th.ft-sorted-desc::after { content: "\2193"; opacity: 1; color: var(--md-primary); }
 tr.md-row { cursor: pointer; }
 tr.md-row:hover { background: var(--md-bg-alt); }
 tr.md-row-active { background: #e8f1fb; }

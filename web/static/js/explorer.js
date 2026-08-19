@@ -1071,6 +1071,57 @@ var BoltzExplorer = (function () {
 
   // ---- wiring -------------------------------------------------------------
 
+  // The report's own tables (the summary table and the SSE motif-shift table, both
+  // rendered as .full-table) arrive here as markup only -- reports.py strips every
+  // script from an upload on purpose, so the sorting BoltzMaker embeds in the
+  // standalone dashboard cannot run on this page. The behaviour therefore has to be
+  // the site's, applied to markup it did not write. Sorting the DOM rather than
+  // re-rendering from data is deliberate: these cells carry formatting that has no
+  // raw equivalent here ("0.82 +/- 0.03", a CIF link, the N/A span for apo rows).
+  function enableReportTableSorting() {
+    function value(cell) {
+      var t = cell.textContent.trim();
+      if (t === "" || t === "N/A" || t === "--") return null;
+      var m = t.match(/^-?\d+(\.\d+)?/);       // "0.82 +/- 0.03" ranks by the estimate
+      return m ? parseFloat(m[0]) : t.toLowerCase();
+    }
+    document.querySelectorAll("table.full-table").forEach(function (table) {
+      var head = table.tHead;
+      if (!head || !head.rows.length || !table.tBodies.length) return;
+      var row = head.rows[head.rows.length - 1];   // not the column-group row above it
+      Array.prototype.slice.call(row.cells).forEach(function (th, index) {
+        th.addEventListener("click", function () {
+          var asc = !th.classList.contains("ft-sorted-asc");
+          Array.prototype.slice.call(row.cells).forEach(function (other) {
+            other.classList.remove("ft-sorted-asc", "ft-sorted-desc");
+          });
+          th.classList.add(asc ? "ft-sorted-asc" : "ft-sorted-desc");
+          var dir = asc ? 1 : -1;
+          var body = table.tBodies[0];
+          var rows = Array.prototype.slice.call(body.rows);
+          rows.forEach(function (r, i) { r._i = i; });   // stable: ties keep their order
+          rows.sort(function (a, b) {
+            var x = value(a.cells[index]), y = value(b.cells[index]);
+            // Blanks sink whichever way the column is sorted -- "sort by pIC50" should
+            // surface the strongest, never a screenful of apo rows.
+            if (x === null && y === null) return a._i - b._i;
+            if (x === null) return 1;
+            if (y === null) return -1;
+            if (x === y) return a._i - b._i;
+            if (typeof x === "number" && typeof y === "number") return dir * (x - y);
+            return dir * String(x).localeCompare(String(y));
+          });
+          rows.forEach(function (r) {
+            // Family dividers assume each family's rows are contiguous, which stops
+            // being true the moment the reader sorts by anything else.
+            r.classList.remove("row-group-start");
+            body.appendChild(r);
+          });
+        });
+      });
+    });
+  }
+
   function init(sessionToken) {
     token = sessionToken;
     sources = token ? serverSources(token) : fileSources();
@@ -1095,6 +1146,8 @@ var BoltzExplorer = (function () {
         renderTable();
       });
     });
+
+    enableReportTableSorting();
 
     document.querySelectorAll(".md-viewer-controls").forEach(function (row) {
       var which = row.getAttribute("data-viewer");
