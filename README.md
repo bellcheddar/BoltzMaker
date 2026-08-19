@@ -1255,6 +1255,24 @@ example campaigns.
   rebuilt environment cannot run unpatched. Stop a Boltz that has said nothing for an
   hour and hand its targets to the retry ladder, instead of waiting on a wedged worker
   that will never exit. Together these retire the external watchdog.
+- [x] Make a finished campaign read as an answer rather than a listing: Affinity ahead
+  of Confidence, rows ranked by binder probability (apo rows sinking, ties stable),
+  click-to-sort on every column of the summary and SSE tables with the indicator shown
+  up front, and a Pockets panel naming each constraint and the ligands run against it.
+  The analysis page lifts these panels out of each run's stored dashboard rather than
+  building them, so `web/deploy/refresh_run_reports.py` re-renders the two that are a
+  pure function of a bundle's `boltz_input.md` and `boltz_summary.csv` -- leaving every
+  other panel byte-for-byte -- and already-uploaded runs get the change too. Clearing
+  the server's `panels.json` caches is part of that: 61 of them would otherwise have
+  gone on serving the old panels.
+- [x] Put a viewer under the Pockets table: every receptor superposed in one grey,
+  every ligand in its pocket's colour (pocket 1 green, pocket 2 blue, the
+  unconstrained baseline always red), a checkbox per target, and the same spin/reset
+  controls as the Superposed targets pane. Only targets that bind something are drawn
+  -- an apo target has no pose to place -- so the 15-target 5-HT2 campaign shows its
+  12. Which pocket a target used is recovered from its own stem, matching the whole of
+  `family_ligand_code` rather than the suffix, so a ligand that happens to share a
+  pocket's name is not misread as a constrained run.
 - [ ] Classify the failure before retrying, and escalate along the axis that addresses it:
   a memory ladder (isolation, then `--max-msa-seqs 2048`) and a NaN ladder
   (`--no-potentials`, then fp32). Retrying with identical parameters is already known to be

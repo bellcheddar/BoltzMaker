@@ -4326,21 +4326,38 @@ def _build_campaign_summary(campaign: Campaign, campaign_dir: Path) -> list:
     else:
         rows.append(("Input file", "n/a", ""))
 
+    # Counted by group where one exists: a receptor written as several Protein blocks
+    # (with partners, without, ligand-free) is one protein to the reader, and calling
+    # that nine proteins is the same conflation the column headers used to make.
+    groups = {(f.group or f.id) for f in campaign.families}
     fam_details = "; ".join(f"{f.id} ({len(f.sequence)} aa)" for f in campaign.families)
-    rows.append(("Proteins", str(len(campaign.families)), fam_details))
+    if len(groups) != len(campaign.families):
+        fam_details = (f"{len(campaign.families)} protein block(s) in {len(groups)} group(s): "
+                       + fam_details)
+    rows.append(("Proteins", str(len(groups)), fam_details))
 
     partner_list = list(campaign.partners.values())
     partner_details = "; ".join(f"{_partner_display_id(p.id)} ({p.type}, {len(p.sequence)} aa)"
                                  for p in partner_list) if partner_list else "none"
-    rows.append(("Partners", str(len(partner_list)), partner_details))
+    rows.append(("Co-folded partners", str(len(partner_list)), partner_details))
 
     lig_details = "; ".join(f"{l.id} ({'SMILES' if l.smiles else f'CCD {l.ccd}'})" for l in campaign.ligands)
     rows.append(("Ligands", str(len(campaign.ligands)), lig_details))
 
-    target_stems = ", ".join(_target_stem(fam, lig, code) for fam, lig, code in targets)
-    rows.append(("Targets (protein x ligand)", str(len(targets)), target_stems))
+    pocket_codes = sorted({c for f in campaign.families for c in (f.pockets or {})})
+    rows.append(("Pockets", str(len(pocket_codes)),
+                 ", ".join(pocket_codes) if pocket_codes
+                 else "none -- every ligand folded without a site constraint"))
 
-    aff_detail = ("pIC50 predicted for every target" if campaign.settings.predict_affinity
+    apo = [fam for fam, lig, _code in targets if lig is None]
+    rows.append(("Ligand-free companions", str(len(apo)),
+                 ", ".join(f.id for f in apo) if apo
+                 else "none -- no apo-vs-holo comparison in this campaign"))
+
+    target_stems = ", ".join(_target_stem(fam, lig, code) for fam, lig, code in targets)
+    rows.append(("Predictions", str(len(targets)), target_stems))
+
+    aff_detail = ("pIC50 predicted for every ligand-bound prediction" if campaign.settings.predict_affinity
                   else "structure only -- no affinity model run")
     rows.append(("Predict affinity", "yes" if campaign.settings.predict_affinity else "no", aff_detail))
 
@@ -4406,7 +4423,12 @@ _FULL_TABLE_HIDE_PATTERNS = [
 ]
 
 _FULL_TABLE_RENAME = {
-    "family_id": "Target", "family_group": "Target", "partner_ids": "Partner", "ligand_id": "Ligand",
+    # "Protein", not "Target": a target in this codebase is one prediction, so heading
+    # the receptor column with it made the same word mean two things on one page --
+    # the summary table's "Target" was a protein while the targets list's was a run.
+    # The user-facing vocabulary is the one the prepare form uses: proteins, co-folded
+    # partners, ligands, pockets, ligand-free companions, and predictions.
+    "family_id": "Protein", "family_group": "Protein", "partner_ids": "Partner", "ligand_id": "Ligand",
     "flags": "Summary", "confidence_score": "Score", "ptm": "pTM", "iptm": "ipTM",
     "ligand_iptm": "Lig ipTM", "protein_iptm": "PPI ipTM",
     "complex_plddt": "pLDDT", "pIC50": "pIC50", "pIC50_ensemble_std": "pIC50 SD",
