@@ -232,6 +232,73 @@ def _bm_note_clamp(n, worst, cap, busy, step_idx):
 import boltz.model.layers.initialize as init""",
     ),
     dict(
+        name="pocket constraint: accept `any`, satisfied by the nearest contact",
+        relpath="boltz/data/parse/schema.py",
+        marker="# BOLTZMAKER-PATCH: pocket-any-parse",
+        old="""            force = constraint["pocket"].get("force", False)
+            pocket_constraints.append((binder, contacts, max_distance, force))""",
+        new="""            force = constraint["pocket"].get("force", False)
+            # BOLTZMAKER-PATCH: pocket-any-parse -- `any: true` means the constraint is
+            # satisfied by the NEAREST listed contact rather than by all of them at
+            # once. Boltz's own semantics sum a penalty over every contact, which is
+            # right for a handful of residues lining one site and unsatisfiable for a
+            # whole chain. Carrying the flag through lets a target say "be somewhere on
+            # this protein" -- the baseline a campaign wants when the alternative is a
+            # ligand docking onto a co-folded G protein instead of the receptor.
+            any_contact = constraint["pocket"].get("any", False)
+            pocket_constraints.append(
+                (binder, contacts, max_distance, force, any_contact))""",
+    ),
+    dict(
+        name="pocket constraint: union the contacts when `any` is set",
+        relpath="boltz/data/feature/featurizerv2.py",
+        marker="# BOLTZMAKER-PATCH: pocket-any-union",
+        old="""    for binder, contacts, max_distance, force in inference_pocket_constraints:
+        if not force:
+            continue
+
+        binder_chain = data.structure.chains[binder]""",
+        new="""    # BOLTZMAKER-PATCH: pocket-any-union -- the tuple gained a fifth element; older
+    # four-element ones keep Boltz's behaviour exactly.
+    for _constraint in inference_pocket_constraints:
+        binder, contacts, max_distance, force = _constraint[:4]
+        any_contact = _constraint[4] if len(_constraint) > 4 else False
+        if not force:
+            continue
+
+        # One union group for the whole constraint, so the soft-min runs across every
+        # contact and the nearest one satisfies it. Boltz gives each contact its own
+        # group and sums, which requires proximity to all of them simultaneously.
+        _shared_union = union_idx if any_contact else None
+
+        binder_chain = data.structure.chains[binder]""",
+    ),
+    dict(
+        name="pocket constraint: one union index per `any` constraint",
+        relpath="boltz/data/feature/featurizerv2.py",
+        marker="# BOLTZMAKER-PATCH: pocket-any-index",
+        old="""                pair_index.append(atom_idx_pairs)
+                union_index.append(torch.full((atom_idx_pairs.shape[1],), union_idx))
+                negation_mask.append(
+                    torch.ones((atom_idx_pairs.shape[1],), dtype=torch.bool)
+                )
+                thresholds.append(torch.full((atom_idx_pairs.shape[1],), max_distance))
+                union_idx += 1""",
+        new="""                pair_index.append(atom_idx_pairs)
+                # BOLTZMAKER-PATCH: pocket-any-index
+                union_index.append(torch.full(
+                    (atom_idx_pairs.shape[1],),
+                    _shared_union if _shared_union is not None else union_idx))
+                negation_mask.append(
+                    torch.ones((atom_idx_pairs.shape[1],), dtype=torch.bool)
+                )
+                thresholds.append(torch.full((atom_idx_pairs.shape[1],), max_distance))
+                if _shared_union is None:
+                    union_idx += 1
+        if _shared_union is not None:
+            union_idx += 1""",
+    ),
+    dict(
         name="steering: resample on the CPU, off the MPS random-number kernel",
         relpath="boltz/model/modules/diffusionv2.py",
         marker="# BOLTZMAKER-PATCH: multinomial-on-cpu",

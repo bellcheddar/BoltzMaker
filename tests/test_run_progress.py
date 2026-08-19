@@ -448,9 +448,15 @@ def test_each_matrix_target_carries_its_own_pocket(bm, tmp_path):
     assert pocket_of("RECA_orfo_V6G")["contacts"] == [["RECA", 10], ["RECA", 11]]
     assert pocket_of("RECA_orfo_41Y")["contacts"] == [["RECA", 40]]
     assert pocket_of("RECB_orfo_V6G")["contacts"] == [["RECB", 12]]
-    # the baseline is genuinely unconstrained
-    assert pocket_of("RECA_orfo") is None
-    assert pocket_of("RECB_orfo") is None
+    # The baseline names no site, but is still held to its own receptor: co-folded
+    # with a partner, an entirely free ligand docks onto the partner instead. It is
+    # every residue of that receptor with `any`, so the nearest one satisfies it.
+    for stem, receptor in (("RECA_orfo", "RECA"), ("RECB_orfo", "RECB")):
+        baseline = pocket_of(stem)
+        assert baseline is not None, f"{stem} could dock anywhere in the complex"
+        assert baseline["any"] is True and baseline["force"] is True
+        assert {c[0] for c in baseline["contacts"]} == {receptor}
+        assert len(baseline["contacts"]) > 2, "a site, not a whole chain"
 
 
 def test_a_campaign_without_named_pockets_is_unchanged(bm, tmp_path):
@@ -891,3 +897,86 @@ def test_reapply_exists_because_detection_is_by_marker(bm):
     src = (__import__("pathlib").Path(bm.__file__).parent
            / "patches" / "apply_boltz_patches.py").read_text()
     assert "--reapply" in src and "restored" in src
+
+
+# ---------------------------------------------------------------------------
+#  Keeping a ligand on its own receptor
+# ---------------------------------------------------------------------------
+#  Co-fold a receptor with a G protein and an unconstrained ligand may dock onto
+#  either. Measured: GIPR's LSN1 run unconstrained made 359 contacts with GNB1 and
+#  none at all with GIPR.
+
+CONFINE_MD = """Settings:
+Output folder: ./out
+Predict affinity: yes
+
+Protein: RECP
+Sequence: MKTAYIAKQRQISFVKSHFSRQ
+Partners: PART
+
+Partner: PART
+Sequence: MGSSHHHHHH
+
+Ligand: LIG
+SMILES: CCO
+"""
+
+
+def test_confining_is_on_by_default(bm, tmp_path):
+    md = tmp_path / "c.md"; md.write_text(CONFINE_MD)
+    assert bm.parse_md(md).settings.confine_to_receptor is True
+
+
+def test_it_can_be_turned_off(bm, tmp_path):
+    md = tmp_path / "c.md"
+    md.write_text(CONFINE_MD.replace("Predict affinity: yes",
+                                     "Predict affinity: yes\nConfine to receptor: no"))
+    assert bm.parse_md(md).settings.confine_to_receptor is False
+
+
+def test_a_bad_value_is_refused(bm, tmp_path):
+    md = tmp_path / "c.md"
+    md.write_text(CONFINE_MD.replace("Predict affinity: yes",
+                                     "Predict affinity: yes\nConfine to receptor: maybe"))
+    with pytest.raises(bm.MDParseError, match="not yes or no"):
+        bm.parse_md(md)
+
+
+def _pocket_of(bm, campaign, stem_wanted):
+    for fam, lig, code in bm._expand_targets(campaign):
+        if lig is None:
+            continue
+        if bm._target_stem(fam, lig, code) != stem_wanted:
+            continue
+        for con in bm._build_yaml_doc(fam, lig, campaign, code).get("constraints", []):
+            if "pocket" in con:
+                return con["pocket"]
+    return None
+
+
+def test_an_unpocketed_target_is_held_to_its_receptor(bm, tmp_path):
+    md = tmp_path / "c.md"; md.write_text(CONFINE_MD)
+    campaign = bm.parse_md(md)
+    pk = _pocket_of(bm, campaign, "RECP_LIG")
+    assert pk is not None, "no constraint at all -- the ligand could dock on the partner"
+    assert pk["any"] is True, "must be satisfied by the nearest residue, not all of them"
+    assert pk["force"] is True, "boltz skips a pocket constraint that is not forced"
+    assert len(pk["contacts"]) == 22, "every receptor residue, and only the receptor"
+    assert {c[0] for c in pk["contacts"]} == {"RECP"}, "the partner must not be listed"
+
+
+def test_turning_it_off_restores_free_placement(bm, tmp_path):
+    md = tmp_path / "c.md"
+    md.write_text(CONFINE_MD.replace("Predict affinity: yes",
+                                     "Predict affinity: yes\nConfine to receptor: no"))
+    assert _pocket_of(bm, bm.parse_md(md), "RECP_LIG") is None
+
+
+def test_a_named_pocket_is_now_actually_enforced(bm, tmp_path):
+    """Without force, boltz's featurizer skips the constraint entirely -- the contacts
+    were a hint the model could ignore."""
+    md = tmp_path / "c.md"
+    md.write_text(CONFINE_MD + "\nPocket contact: RECP residue 5 as SITE\n")
+    pk = _pocket_of(bm, bm.parse_md(md), "RECP_LIG_SITE")
+    assert pk["force"] is True
+    assert not pk.get("any"), "a named site keeps boltz's all-contacts semantics"
