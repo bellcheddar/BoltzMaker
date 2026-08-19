@@ -1508,12 +1508,23 @@ def _build_yaml_doc(fam: ProteinFamily, lig: object, campaign: Campaign,
         # this protein" without choosing a site. Boltz's own semantics sum a penalty
         # over all contacts, which a whole chain could never satisfy -- see the
         # pocket-any patches.
+        # A sparse sweep of the receptor, using Boltz's own semantics: every contact
+        # contributes a penalty and they sum, so the pull is toward the receptor as a
+        # whole. Deliberately NOT `any` -- that unions the contacts into a soft-min,
+        # which is the right meaning ("be near the nearest one") and the wrong force:
+        # measured, it returned one contact's worth of gradient, 0.18-1.07, and a
+        # ligand fifty angstroms away on a G protein did not move at all.
+        #
+        # Every eighth residue gives ~58 contacts, the same order as the V6G pocket's
+        # 59, so the restraint sits in a force regime Boltz already handles well. It
+        # is not satisfiable in the sense of being within 8A of all of them -- it is
+        # directional, and the direction is "onto this protein".
+        stride = max(1, len(fam.sequence) // 58)
         constraints.append({"pocket": {
             "binder": lig.id,
-            "contacts": [[fam.id, i + 1] for i in range(len(fam.sequence))],
+            "contacts": [[fam.id, i + 1] for i in range(0, len(fam.sequence), stride)],
             "max_distance": campaign.settings.pocket_distance,
             "force": True,
-            "any": True,
         }})
     for atom1, atom2 in (fam.bond_constraints or []):
         constraints.append({"bond": {"atom1": atom1, "atom2": atom2}})

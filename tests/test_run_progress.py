@@ -454,9 +454,8 @@ def test_each_matrix_target_carries_its_own_pocket(bm, tmp_path):
     for stem, receptor in (("RECA_orfo", "RECA"), ("RECB_orfo", "RECB")):
         baseline = pocket_of(stem)
         assert baseline is not None, f"{stem} could dock anywhere in the complex"
-        assert baseline["any"] is True and baseline["force"] is True
+        assert baseline["force"] is True
         assert {c[0] for c in baseline["contacts"]} == {receptor}
-        assert len(baseline["contacts"]) > 2, "a site, not a whole chain"
 
 
 def test_a_campaign_without_named_pockets_is_unchanged(bm, tmp_path):
@@ -959,10 +958,13 @@ def test_an_unpocketed_target_is_held_to_its_receptor(bm, tmp_path):
     campaign = bm.parse_md(md)
     pk = _pocket_of(bm, campaign, "RECP_LIG")
     assert pk is not None, "no constraint at all -- the ligand could dock on the partner"
-    assert pk["any"] is True, "must be satisfied by the nearest residue, not all of them"
     assert pk["force"] is True, "boltz skips a pocket constraint that is not forced"
-    assert len(pk["contacts"]) == 22, "every receptor residue, and only the receptor"
     assert {c[0] for c in pk["contacts"]} == {"RECP"}, "the partner must not be listed"
+    # Boltz's own summing semantics, deliberately NOT `any`. Unioning the contacts
+    # into a soft-min is the right meaning and the wrong force: measured live, it
+    # returned one contact's worth of gradient (max 0.18-1.07) and a ligand fifty
+    # angstroms away on a G protein did not move at all.
+    assert not pk.get("any"), "union semantics make the restraint far too weak to act"
 
 
 def test_turning_it_off_restores_free_placement(bm, tmp_path):
@@ -970,6 +972,21 @@ def test_turning_it_off_restores_free_placement(bm, tmp_path):
     md.write_text(CONFINE_MD.replace("Predict affinity: yes",
                                      "Predict affinity: yes\nConfine to receptor: no"))
     assert _pocket_of(bm, bm.parse_md(md), "RECP_LIG") is None
+
+
+def test_the_restraint_has_a_workable_number_of_contacts(bm, tmp_path):
+    """Sized to the force regime that demonstrably works on this system.
+
+    The V6G pocket that reliably holds a ligand in its site has 62 contacts, and
+    Boltz sums a penalty over each, so contact count is force. A sparse sweep of the
+    receptor at the same count puts the whole-protein restraint in the same regime;
+    listing every residue instead would be several times stronger and pull the ligand
+    to the centroid rather than onto the surface.
+    """
+    md = tmp_path / "c.md"
+    md.write_text(CONFINE_MD.replace("MKTAYIAKQRQISFVKSHFSRQ", "M" * 463))
+    pk = _pocket_of(bm, bm.parse_md(md), "RECP_LIG")
+    assert 40 <= len(pk["contacts"]) <= 80, f"{len(pk['contacts'])} contacts is out of regime"
 
 
 def test_a_named_pocket_is_now_actually_enforced(bm, tmp_path):

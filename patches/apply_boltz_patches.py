@@ -232,6 +232,13 @@ def _bm_note_clamp(n, worst, cap, busy, step_idx):
 import boltz.model.layers.initialize as init""",
     ),
     dict(
+        # NOT USED BY DEFAULT, and the measurement is why. `any` is semantically what
+        # "be somewhere on this protein" means, but boltz sums a penalty over every
+        # contact, so unioning them into a soft-min returns ONE contact's worth of
+        # gradient. Measured on a live run: max gradient 0.18-1.07, and a ligand fifty
+        # angstroms away on a G protein did not move at all. BoltzMaker uses a sparse
+        # sweep with boltz's native summing instead. Kept because the patch is correct
+        # and a future caller may want the semantics where the force is already enough.
         name="pocket constraint: accept `any`, satisfied by the nearest contact",
         relpath="boltz/data/parse/schema.py",
         marker="# BOLTZMAKER-PATCH: pocket-any-parse",
