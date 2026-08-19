@@ -78,6 +78,9 @@ def _parse_form() -> tuple[bool, list[ProteinInput], list[PartnerInput], list[Li
     used_names: set[str] = set()
 
     predict_affinity = request.form.get("predict_affinity") == "on"
+    # Checked by default in the form, so an absent value on a hand-built POST means
+    # off; the form always sends it when ticked.
+    confine_to_receptor = request.form.get("confine_to_receptor") == "on"
 
     partner_names = request.form.getlist("partner_name[]")
     partner_sequences = request.form.getlist("partner_sequence[]")
@@ -197,7 +200,7 @@ def _parse_form() -> tuple[bool, list[ProteinInput], list[PartnerInput], list[Li
             raise WizardValidationError(f"Ligand '{name}' needs a SMILES or CCD value.", field="ligand_value")
         ligands.append(LigandInput(name=name, kind=kind, value=value))
 
-    return predict_affinity, proteins, partners, ligands
+    return predict_affinity, proteins, partners, ligands, confine_to_receptor
 
 
 @bp.route("/new", methods=["GET", "POST"])
@@ -206,7 +209,7 @@ def new():
         return render_template("new_wizard.html", active="new")
 
     try:
-        predict_affinity, proteins, partners, ligands = _parse_form()
+        predict_affinity, proteins, partners, ligands, confine_to_receptor = _parse_form()
         md_text = assemble_boltz_input_md(predict_affinity, proteins, partners, ligands)
     except WizardValidationError as exc:
         return render_template("new_wizard.html", active="new", error=str(exc), form=request.form)

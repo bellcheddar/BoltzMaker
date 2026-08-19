@@ -245,7 +245,7 @@ def prepare():
     compare_sse = not cfg.get("skip_sse")
 
     try:
-        predict_affinity, proteins, partners, ligands = _parse_form()
+        predict_affinity, proteins, partners, ligands, confine_to_receptor = _parse_form()
         use_same_pocket = request.form.get("use_same_pocket") in ("1", "on", "true", "yes")
         raw_distance = (request.form.get("pocket_distance") or "8").strip()
         try:
@@ -379,7 +379,8 @@ def prepare():
         md_text = assemble_boltz_input_md(predict_affinity, proteins, partners, ligands,
                                           compare_sse=compare_sse,
                                           apo_reference_paths=apo_paths,
-                                          pocket_distance=pocket_distance if use_same_pocket else 0.0)
+                                          pocket_distance=pocket_distance if use_same_pocket else 0.0,
+                                          confine_to_receptor=confine_to_receptor)
     except WizardValidationError as exc:
         return _render_prepare(defaults=cfg, error=str(exc), form=request.form,
                                error_field=getattr(exc, 'field', ''))

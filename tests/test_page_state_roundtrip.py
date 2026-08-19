@@ -109,3 +109,38 @@ def test_a_state_that_is_not_a_form(client):
 def test_no_file_at_all(client):
     r = client.post("/auto/prepare/page-state", data={}, content_type="multipart/form-data")
     assert r.status_code == 400
+
+
+# ---------------------------------------------------------------------------
+#  Keeping a ligand on its own protein
+# ---------------------------------------------------------------------------
+
+def test_the_setting_is_on_by_default_and_silent():
+    """On is the default, so a spec built with it on is byte-identical to what the
+    wizard produced before this option existed."""
+    from boltzmaker_web import wizard
+    from boltzmaker_web.wizard import ProteinInput, LigandInput
+    md = wizard.assemble_boltz_input_md(
+        False, [ProteinInput(name="RECP", sequence="MKTAYIAK")], [],
+        [LigandInput(name="LIG", value="CCO", kind="smiles")])
+    assert "Confine to receptor" not in md
+
+
+def test_turning_it_off_is_written_into_the_spec():
+    from boltzmaker_web import wizard
+    from boltzmaker_web.wizard import ProteinInput, LigandInput
+    md = wizard.assemble_boltz_input_md(
+        False, [ProteinInput(name="RECP", sequence="MKTAYIAK")], [],
+        [LigandInput(name="LIG", value="CCO", kind="smiles")],
+        confine_to_receptor=False)
+    assert "Confine to receptor: no" in md
+
+
+def test_the_checkbox_is_ticked_by_default_in_the_form():
+    """A ligand docking onto a co-folded partner is the failure this prevents, so it
+    has to be the default rather than something you remember to turn on."""
+    import pathlib
+    html = (pathlib.Path(__file__).resolve().parent.parent
+            / "web" / "templates" / "_wizard_fields.html").read_text()
+    i = html.index('name="confine_to_receptor"')
+    assert "checked" in html[i:i + 80]

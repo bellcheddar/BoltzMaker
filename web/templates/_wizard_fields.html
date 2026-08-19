@@ -13,6 +13,21 @@
       <label><input type="checkbox" name="predict_affinity"> Predict binding affinity too (slower, adds Kd/pIC50 estimates)</label>
     </div>
 
+    {#  Checked by default, and the reason is measured rather than assumed: run
+        unconstrained inside a receptor + G-protein complex, GIPR's LSN1 made 359
+        atom contacts with GNB1 and NONE AT ALL with GIPR, and LSN2 did the same.
+        A baseline like that answers a question nobody asked. Unticking restores
+        the older behaviour, which is a legitimate diagnostic when what you want
+        to know is whether the model finds the receptor unaided.  #}
+    <div class="md-field">
+      <label><input type="checkbox" name="confine_to_receptor" checked> Keep ligands on their
+        own protein &mdash; a ligand with no pocket set still has to bind its receptor
+        somewhere, rather than a co-folded partner</label>
+      <p class="md-hint">Without this, an unconstrained ligand may dock onto a co-folded
+        partner chain instead of the protein you are studying. It does not choose a site:
+        any point on the receptor satisfies it.</p>
+    </div>
+
     {#  Co-folding puts a ligand wherever the model likes. Measured on a real
         GLP1R/GIPR campaign: 6 of 27 ligands docked onto the G-protein subunits
         rather than the receptor, and only 6 of 14 GIPR ligands shared a site --

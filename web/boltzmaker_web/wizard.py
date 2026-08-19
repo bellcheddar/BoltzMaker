@@ -146,6 +146,7 @@ def assemble_boltz_input_md(
     partners: list[PartnerInput],
     ligands: list[LigandInput],
     compare_sse: bool = True,
+    confine_to_receptor: bool = True,
     apo_reference_paths: dict = None,
     pocket_distance: float = 0.0,
 ) -> str:
@@ -166,6 +167,10 @@ def assemble_boltz_input_md(
 
     out = ["Settings:", "Output folder: ./boltz_yamls",
            f"Predict affinity: {'yes' if predict_affinity else 'no'}"]
+    # Only written when it is off, since on is the default -- a campaign built with
+    # it on produces the same spec it always did.
+    if not confine_to_receptor:
+        out.append("Confine to receptor: no")
     # Only written when a pocket is actually in use, so a campaign without one
     # produces the same file it always did.
     if pocket_distance and any(p.pockets for p in proteins):
