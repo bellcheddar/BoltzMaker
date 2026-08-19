@@ -113,6 +113,10 @@ def main() -> int:
         if path.is_file():
             members.append((f"reports/{name}", path))
     add("config.json", CAMPAIGN_DIR / "config.json", "config")
+    # The wizard state this campaign was built from, if the bundle carried one.
+    # Without it, extending a finished campaign means retyping every protein,
+    # ligand and pocket into the form, or hand-editing the spec.
+    add("page_state.json", CAMPAIGN_DIR / "page_state.json", "wizard state")
     for name in ("boltz_summary.csv", "boltz_interactions.csv",
                  "boltz_sse_comparison.csv", "boltz_sse_family_status.json"):
         path = CAMPAIGN_DIR / name

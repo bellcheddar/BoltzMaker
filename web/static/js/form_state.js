@@ -143,6 +143,23 @@ var BoltzFormState = (function () {
     }
   }
 
+  /* Attach the current state to the submission, so the bundle can carry it.
+     Written on submit rather than kept in sync on every keystroke: the value is
+     only ever read by the server at this moment, and a hidden field that updates
+     continuously is one more thing to get out of step with the form. */
+  function stampStateForSubmit() {
+    var form = document.querySelector("form");
+    var field = document.getElementById("page-state-field");
+    if (!form || !field) return;
+    form.addEventListener("submit", function () {
+      try {
+        field.value = JSON.stringify(collect());
+      } catch (err) {
+        field.value = "";        // a bundle without it still runs; it just cannot reload the form
+      }
+    });
+  }
+
   function restore() {
     var raw;
     try {
@@ -203,7 +220,46 @@ var BoltzFormState = (function () {
     status("Saved " + link.download + " to your downloads.", "ok");
   }
 
+  /* A finished campaign's results file, rather than a saved page.
+
+     The wizard state travels inside the .bmz, so extending a campaign starts by
+     uploading the results you already have: the form comes back as it was, you add
+     the new ligands, and you download a new bundle. Unzipping happens on the server
+     because the browser cannot read a zip without shipping a library to do it, and
+     the server already has one. */
+  function loadFromBundle(file) {
+    var body = new FormData();
+    body.append("results_file", file);
+    status("Reading " + file.name + "...", "");
+    fetch("/auto/prepare/page-state", { method: "POST", body: body })
+      .then(function (response) {
+        return response.json().then(function (payload) {
+          return { ok: response.ok, payload: payload };
+        });
+      })
+      .then(function (result) {
+        if (!result.ok) {
+          status(result.payload.error || "Could not read that file.", "bad");
+          return;
+        }
+        try {
+          apply(result.payload);
+        } catch (err) {
+          status(err.message, "bad");
+          return;
+        }
+        save();
+        status("Loaded the campaign from " + file.name
+               + ". Add what you want and download a new bundle.", "ok");
+      })
+      .catch(function () { status("Could not read that file.", "bad"); });
+  }
+
   function loadFromDisk(file) {
+    // A .bmz is a zip; a saved page is JSON. Chosen by extension rather than by
+    // sniffing, because the two are asked for by two different buttons' worth of
+    // intent and guessing wrong wastes an upload.
+    if (/\.bmz$/i.test(file.name)) { loadFromBundle(file); return; }
     var reader = new FileReader();
     reader.onload = function () {
       var parsed;
@@ -254,6 +310,7 @@ var BoltzFormState = (function () {
     // navigation -- but saving here means the state is written even if the user
     // typed nothing since the last event.
     form.addEventListener("submit", save);
+    stampStateForSubmit();
 
     var saveBtn = document.getElementById("save-page");
     if (saveBtn) saveBtn.addEventListener("click", saveToDisk);

@@ -26,6 +26,7 @@ would delete a session out from under someone still reading it.
 from __future__ import annotations
 
 import json
+import zipfile
 import math
 import re
 import secrets
@@ -184,6 +185,36 @@ def archiving_allowed() -> tuple[bool, str]:
     if referer.startswith(request.url_root):
         return True, ""
     return False, "no same-origin Sec-Fetch-Site or Referer (not a browser form submission)"
+
+
+#: A page state larger than this is not a form, it is someone posting a file at the
+#: endpoint. The real thing is a few KB even for a matrix campaign.
+_MAX_PAGE_STATE_BYTES = 512 * 1024
+
+#: The member a bundle and its results archive both store the wizard state under.
+PAGE_STATE_NAME = "page_state.json"
+
+
+def _page_state_from(form) -> str:
+    """The wizard's serialised state, validated before it goes into a bundle.
+
+    Stored verbatim rather than rebuilt from the parsed campaign, because the point
+    is fidelity: the spec has no idea which PDB id a pocket came from, or that a
+    checkbox was ticked rather than absent. Checked for shape all the same -- this
+    arrives from a browser and ends up in a file other people download.
+    """
+    raw = (form.get("page_state") or "").strip()
+    if not raw or len(raw.encode("utf-8")) > _MAX_PAGE_STATE_BYTES:
+        return ""
+    try:
+        parsed = json.loads(raw)
+    except (ValueError, TypeError):
+        return ""
+    if not isinstance(parsed, dict):
+        return ""
+    # Re-serialised rather than passed through: whatever arrives is now a JSON
+    # document this server produced, not a string it forwarded unread.
+    return json.dumps(parsed, indent=2, sort_keys=True)
 
 
 def _render_prepare(**kwargs):
@@ -413,7 +444,8 @@ def prepare():
 
     try:
         built = bundle.build(campaign_name, final_md, cfg, target_count, config_json,
-                             run_key=run_key, private=private, extra_files=extra_files)
+                             run_key=run_key, private=private, extra_files=extra_files,
+                             page_state=_page_state_from(request.form))
     except bundle.BundleError as exc:
         return _render_prepare(defaults=cfg, error=str(exc), form=request.form,
                                error_field=getattr(exc, 'field', ''))
@@ -467,6 +499,49 @@ def _count_targets(scratch: Path) -> int:
 # ===========================================================================
 #  Step 2 -- Analysis
 # ===========================================================================
+
+@bp.route("/prepare/page-state", methods=["POST"])
+def page_state_from_bundle():
+    """Pull the wizard state out of a finished campaign's results file.
+
+    So a campaign can be extended on the page it was built on: upload its .bmz,
+    the form comes back exactly as it was, add the new ligands, download a new
+    bundle. The alternative is retyping every protein, ligand and pocket, or
+    editing boltz_input.md by hand, which is what this whole step exists to avoid.
+
+    Only ever reads one named member, and only after checking its declared size --
+    a zip is an archive of whatever its author chose, including a member that
+    claims to be small and expands to fill the disk.
+    """
+    uploaded = request.files.get("results_file")
+    if not uploaded or not uploaded.filename:
+        return Response('{"error": "no file"}', status=400, mimetype="application/json")
+    try:
+        with zipfile.ZipFile(uploaded.stream) as archive:
+            try:
+                info = archive.getinfo(PAGE_STATE_NAME)
+            except KeyError:
+                return Response(
+                    '{"error": "This bundle has no saved page. It was built before the '
+                    'wizard started storing one, so the form cannot be restored from it."}',
+                    status=404, mimetype="application/json")
+            if info.file_size > _MAX_PAGE_STATE_BYTES:
+                return Response('{"error": "saved page is implausibly large"}',
+                                status=413, mimetype="application/json")
+            raw = archive.read(PAGE_STATE_NAME).decode("utf-8", "replace")
+    except (zipfile.BadZipFile, OSError, ValueError):
+        return Response('{"error": "That file is not a readable .bmz."}',
+                        status=400, mimetype="application/json")
+    try:
+        parsed = json.loads(raw)
+    except ValueError:
+        return Response('{"error": "the saved page inside it is not valid JSON"}',
+                        status=422, mimetype="application/json")
+    if not isinstance(parsed, dict):
+        return Response('{"error": "the saved page inside it is not a form"}',
+                        status=422, mimetype="application/json")
+    return Response(json.dumps(parsed), mimetype="application/json")
+
 
 @bp.route("/analysis", methods=["GET", "POST"])
 def analysis():

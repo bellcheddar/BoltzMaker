@@ -239,7 +239,7 @@ __BOLTZMAKER_PAYLOAD__
 
 def build(campaign_name: str, md_text: str, cfg: dict[str, Any], target_count: int,
           config_json: str, run_key: str = "", private: bool = False,
-          extra_files: dict[str, bytes] = None) -> Bundle:
+          extra_files: dict[str, bytes] = None, page_state: str = "") -> Bundle:
     """Render every runtime template and assemble the self-extracting bundle.
 
     `extra_files` carries campaign data that is neither a template nor part of the
@@ -258,6 +258,11 @@ def build(campaign_name: str, md_text: str, cfg: dict[str, Any], target_count: i
         "pack_results.py": env.get_template("pack_results.py.j2").render(**context).encode("utf-8"),
         "README.md": env.get_template("README.md.j2").render(**context).encode("utf-8"),
     }
+    if page_state:
+        # The wizard's own state, so a finished campaign can repopulate the form it
+        # came from and be extended there rather than by hand-editing the spec.
+        # Travels with the campaign, into its results archive, and back to Step 1.
+        files["page_state.json"] = page_state.encode("utf-8")
 
     for name in REPO_FILES:
         path = REPO_ROOT / name

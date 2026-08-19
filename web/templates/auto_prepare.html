@@ -124,7 +124,13 @@
       {#  Kept inside the form only so it travels with this block; it is never
           submitted -- form_state.js reads the chosen file in the browser, and the
           serialiser skips file inputs.  #}
-      <input type="file" id="upload-page-file" accept=".json,application/json" hidden>
+      <input type="file" id="upload-page-file" accept=".json,application/json,.bmz" hidden>
+      {#  The form's own state, serialised by form_state.js just before submit and
+          stored in the bundle. That is what lets a finished campaign repopulate this
+          page months later: the alternative is parsing boltz_input.md back into form
+          fields, which loses everything the spec does not carry -- the pocket PDB ids
+          become contact tokens, and a checkbox becomes an absence.  #}
+      <input type="hidden" name="page_state" id="page-state-field">
     </div>
     <p class="md-hint" id="state-status"></p>
     <p class="md-hint" style="margin-top:8px">
@@ -132,7 +138,9 @@
       <code>.bmz</code> file. Everything you type here is kept in this browser, so
       downloading a bundle, visiting Step&nbsp;2 or reloading will not lose it.
       <b>Save page</b> writes it to a small <code>.json</code> file you can keep or send to
-      someone; <b>Upload page</b> reads one back in.
+      someone; <b>Upload page</b> reads one back in &mdash; or reads a finished campaign's
+      <code>.bmz</code>, which brings this page back exactly as it was so you can add
+      ligands and rebuild without retyping anything.
     </p>
   </div>
 </form>
