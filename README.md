@@ -1273,7 +1273,7 @@ example campaigns.
   hour and hand its targets to the retry ladder, instead of waiting on a wedged worker
   that will never exit. Together these retire the external watchdog.
 - [x] Make a finished campaign read as an answer rather than a listing: Affinity ahead
-  of Confidence, rows ranked by binder probability (apo rows sinking, ties stable),
+  of Confidence, rows ranked by predicted pIC50 (apo rows sinking, ties stable),
   click-to-sort on every column of the summary and SSE tables with the indicator shown
   up front, and a Pockets panel naming each constraint and the ligands run against it.
   The analysis page lifts these panels out of each run's stored dashboard rather than
@@ -1297,6 +1297,17 @@ example campaigns.
   5-HT2 panel's nine `Protein:` blocks are its three receptors. The analysis page opens
   with those six as KPI boxes, in the order the prepare form asks for them, and the
   campaign summary reports the same six numbers.
+- [x] Rank the summary table by predicted pIC50 rather than by binder probability.
+  Measured across 24 ligand targets on the GLP1R/GIPR campaign, the binary head
+  correlated with pIC50 at **r = +0.07** and returned nothing above 0.71 for a set of
+  four real, characterised compounds. Its mean was flat across ligands (0.34-0.51)
+  while tracking the *pocket condition* instead (0.30 unconstrained, 0.50-0.51
+  constrained) -- it was reporting how a target was set up, not what was in the site.
+  Orforglipron, a confirmed potent GLP1R binder, scored 0.59 and ranked below
+  compounds it beats experimentally by orders of magnitude. pIC50 put the same four in
+  their known order (ORFO 11.2, LIG1 9.8, LSN1 8.4, LSN2 7.9), so that is what the
+  table ranks on. A binary binder/non-binder score also has nothing to separate when
+  every ligand in a campaign is a real binder.
 - [ ] Classify the failure before retrying, and escalate along the axis that addresses it:
   a memory ladder (isolation, then `--max-msa-seqs 2048`) and a NaN ladder
   (`--no-potentials`, then fp32). Retrying with identical parameters is already known to be

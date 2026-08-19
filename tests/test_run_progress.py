@@ -630,19 +630,31 @@ def test_affinity_group_comes_before_confidence(bm):
     assert order.index("Affinity") < order.index("Confidence")
 
 
-def test_rows_rank_by_binder_probability(bm):
-    df = _frame([{"family_id": "A", "ligand_id": "L1", "affinity_probability_binary": 0.2},
-                 {"family_id": "A", "ligand_id": "L2", "affinity_probability_binary": 0.9},
-                 {"family_id": "B", "ligand_id": "L3", "affinity_probability_binary": 0.5}])
+def test_rows_rank_by_predicted_pic50(bm):
+    df = _frame([{"family_id": "A", "ligand_id": "L1", "pIC50": 7.2},
+                 {"family_id": "A", "ligand_id": "L2", "pIC50": 11.2},
+                 {"family_id": "B", "ligand_id": "L3", "pIC50": 9.5}])
     ordered, applied = bm._summary_table_order(df)
     assert applied
     assert list(ordered["ligand_id"]) == ["L2", "L3", "L1"]
 
 
+def test_binder_probability_does_not_drive_the_ranking(bm):
+    """It measured the pocket setup rather than the ligand: on a real campaign it
+    correlated with pIC50 at r = +0.07, and put a confirmed potent binder below
+    compounds it beats experimentally by orders of magnitude."""
+    df = _frame([{"ligand_id": "weak_but_confident", "pIC50": 7.0,
+                  "affinity_probability_binary": 0.95},
+                 {"ligand_id": "potent", "pIC50": 11.2,
+                  "affinity_probability_binary": 0.20}])
+    ordered, _ = bm._summary_table_order(df)
+    assert list(ordered["ligand_id"])[0] == "potent"
+
+
 def test_apo_rows_sink_rather_than_lead(bm):
-    """An apo row has no binder probability at all; it must not head the ranking."""
-    df = _frame([{"ligand_id": None, "affinity_probability_binary": float("nan")},
-                 {"ligand_id": "L1", "affinity_probability_binary": 0.4}])
+    """An apo row has no affinity at all; it must not head the ranking."""
+    df = _frame([{"ligand_id": None, "pIC50": float("nan")},
+                 {"ligand_id": "L1", "pIC50": 9.4}])
     ordered, _ = bm._summary_table_order(df)
     ids = list(ordered["ligand_id"])
     # pandas stores the missing ligand as NaN, not None, so compare on presence.
@@ -651,7 +663,7 @@ def test_apo_rows_sink_rather_than_lead(bm):
 
 def test_ties_keep_generation_order(bm):
     """Many campaigns pin a lot of rows at 0.00 -- two runs must render identically."""
-    df = _frame([{"ligand_id": f"L{i}", "affinity_probability_binary": 0.0} for i in range(5)])
+    df = _frame([{"ligand_id": f"L{i}", "pIC50": 8.0} for i in range(5)])
     ordered, _ = bm._summary_table_order(df)
     assert list(ordered["ligand_id"]) == [f"L{i}" for i in range(5)]
 
@@ -664,10 +676,8 @@ def test_a_campaign_without_affinity_keeps_its_order(bm):
 
 def test_family_dividers_are_dropped_once_ranked(bm):
     """They mean "a new family starts here", which is false once rows interleave."""
-    df = _frame([{"family_id": "A", "family_group": "A", "ligand_id": "L1",
-                  "affinity_probability_binary": 0.1},
-                 {"family_id": "B", "family_group": "B", "ligand_id": "L2",
-                  "affinity_probability_binary": 0.9}])
+    df = _frame([{"family_id": "A", "family_group": "A", "ligand_id": "L1", "pIC50": 7.1},
+                 {"family_id": "B", "family_group": "B", "ligand_id": "L2", "pIC50": 9.9}])
     assert "row-group-start" not in bm._build_full_table_html(df)
 
 
