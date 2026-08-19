@@ -170,6 +170,30 @@ def _bm_note(where, n, step_idx):
               f"(latest {where}, step {step_idx})", flush=True)
 
 
+# How many times the median per-atom gradient an atom may be pushed before the push
+# is treated as a singularity rather than a force. Deliberately loose: a real
+# gradient varies a lot across atoms in one step -- a buried clash legitimately
+# pulls far harder than a solvent-exposed methyl -- and the failure being caught is
+# not 100x the median but astronomically beyond it. Set to reject only the
+# unarguable, so a healthy trajectory is untouched.
+_BM_GRADIENT_CLAMP = 100.0
+
+_BM_CLAMP = {"count": 0, "worst": 0.0}
+
+
+def _bm_note_clamp(n, worst, cap, step_idx):
+    _BM_CLAMP["count"] += 1
+    _BM_CLAMP["worst"] = max(_BM_CLAMP["worst"], worst)
+    # First and then sparsely: the point is to record the true magnitudes, so the
+    # ratio is printed rather than a bare "clamped" -- that number is the evidence
+    # for whether the threshold is in the right place.
+    if _BM_CLAMP["count"] == 1 or _BM_CLAMP["count"] % 25 == 0:
+        print(f"| STEERING_CLAMP {n} atom(s) at step {step_idx}: worst "
+              f"{worst:.3e} vs cap {cap:.3e} ({worst / max(cap, 1e-12):.1f}x over) "
+              f"-- rescaled, direction kept; {_BM_CLAMP['count']} clamp(s) so far",
+              flush=True)
+
+
 import boltz.model.layers.initialize as init""",
     ),
     dict(
@@ -197,6 +221,33 @@ import boltz.model.layers.initialize as init""",
                                      int((~torch.isfinite(energy_gradient)).sum()), step_idx)
                             energy_gradient = torch.nan_to_num(
                                 energy_gradient, nan=0.0, posinf=0.0, neginf=0.0)
+                        # Sanitising non-finite values is not enough on its own, and the
+                        # GLP1R+orforglipron targets are why. Only 144 entries went
+                        # non-finite there and were zeroed; their finite-but-enormous
+                        # neighbours passed straight through and were applied, 20 descent
+                        # steps per diffusion step for the last 80 steps, until four atoms
+                        # of a symmetric dimethylphenyl ring sat 49, 58, 737 and 2147A from
+                        # the molecule. Same four atoms, same distances, three independent
+                        # runs. The structure still scored 0.80 confidence and led the
+                        # binder ranking, because nothing downstream looks at geometry.
+                        #
+                        # So bound the step as well. The threshold is taken from the
+                        # gradient's own distribution rather than being a constant: the
+                        # scale of a legitimate gradient depends on the system, the step
+                        # and the potential, and a number tuned on one campaign would be
+                        # wrong for the next. A per-atom displacement that is orders of
+                        # magnitude larger than the median for that same step is not a
+                        # force, it is a singularity, and rescaling preserves its
+                        # direction while refusing its magnitude.
+                        _norms = energy_gradient.norm(dim=-1, keepdim=True)
+                        _typical = torch.median(_norms[_norms > 0]) if (_norms > 0).any() else None
+                        if _typical is not None and torch.isfinite(_typical) and _typical > 0:
+                            _cap = _typical * _BM_GRADIENT_CLAMP
+                            _over = (_norms > _cap).sum().item()
+                            if _over:
+                                _bm_note_clamp(_over, float(_norms.max()), float(_cap), step_idx)
+                                energy_gradient = energy_gradient * torch.clamp(
+                                    _cap / _norms.clamp(min=1e-12), max=1.0)
                         guidance_update -= energy_gradient
                     if not torch.isfinite(guidance_update).all():
                         _bm_note("guidance_update",
@@ -426,11 +477,30 @@ def find_site_packages() -> Path:
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--check", action="store_true", help="report status without editing")
+    ap.add_argument("--reapply", action="store_true",
+                    help="restore every .orig first, so a REVISED patch body actually lands. "
+                         "Application is detected by marker and not by content, so editing a "
+                         "patch here and re-running without this prints 'already applied' and "
+                         "changes nothing.")
     ap.add_argument("--site-packages", type=Path, default=None)
     args = ap.parse_args()
 
     sp = args.site_packages or find_site_packages()
     applied = missing = 0
+
+    if args.reapply and not args.check:
+        # Every patched file back to stock, so the loop below re-applies all of them
+        # from the current definitions. Restoring per-file rather than per-patch
+        # because several patches can share a file, and reverting one of them would
+        # leave the others half-applied.
+        restored = 0
+        for relpath in sorted({q["relpath"] for q in PATCHES}):
+            target = sp / relpath
+            backup = target.with_suffix(target.suffix + ".orig")
+            if backup.is_file():
+                shutil.copy2(backup, target)
+                restored += 1
+        print(f"  restored {restored} file(s) from .orig before re-applying")
 
     for p in PATCHES:
         path = sp / p["relpath"]
