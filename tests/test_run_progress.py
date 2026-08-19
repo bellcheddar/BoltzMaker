@@ -760,3 +760,54 @@ def test_compare_sse_builds_stems_with_the_shared_helper(bm):
     src = (pathlib.Path(bm.__file__).parent / "sse_comparison" / "cli.py").read_text()
     assert "_target_stem(fam2, lig, code)" in src
     assert 'stem = f"{fam2.id}_{lig.id}"' not in src
+
+
+# ---------------------------------------------------------------------------
+#  A diverged ligand still scores well, so something has to notice
+# ---------------------------------------------------------------------------
+
+def _ligand_cif(tmp_path, points):
+    """Minimal HETATM block in the column order BoltzMaker's own outputs use."""
+    lines = []
+    for i, (x, y, z) in enumerate(points):
+        lines.append(f"HETATM {i} C C{i} . LIG . 1 ? A {x} {y} {z} 1 5 LIG LIG 7.0 1")
+    path = tmp_path / f"t{len(points)}_{abs(hash(tuple(points))) % 9999}.cif"
+    path.write_text("data_model\nloop_\n" + "\n".join(lines) + "\n")
+    return path
+
+
+def test_an_intact_ligand_is_not_flagged(bm, tmp_path):
+    chain = [(1.5 * i, 0.0, 0.0) for i in range(12)]      # a 16A chain, bonds at 1.5A
+    assert not bm._ligand_geometry_broken(_ligand_cif(tmp_path, chain))
+
+
+def test_an_atom_flung_far_away_is_caught(bm, tmp_path):
+    """The real failure: 65 atoms, of which several sit hundreds of Angstroms out."""
+    chain = [(1.5 * i, 0.0, 0.0) for i in range(12)] + [(1453.0, 0.0, 0.0)]
+    assert bm._ligand_geometry_broken(_ligand_cif(tmp_path, chain))
+
+
+def test_an_atom_bonded_to_nothing_is_caught(bm, tmp_path):
+    """Within the span limit, but not attached: 9A from its nearest neighbour."""
+    chain = [(1.5 * i, 0.0, 0.0) for i in range(12)] + [(25.0, 0.0, 0.0)]
+    assert bm._ligand_geometry_broken(_ligand_cif(tmp_path, chain))
+
+
+def test_a_single_atom_ligand_is_not_a_failure(bm, tmp_path):
+    """An ion has no bonds to check and is not evidence of divergence."""
+    assert not bm._ligand_geometry_broken(_ligand_cif(tmp_path, [(0.0, 0.0, 0.0)]))
+
+
+def test_a_missing_file_is_not_reported_as_broken_geometry(bm, tmp_path):
+    """Absent outputs are MISSING_OUTPUTS' job; two flags for one cause help nobody."""
+    assert not bm._ligand_geometry_broken(tmp_path / "not-here.cif")
+
+
+def test_the_flag_explains_why_the_scores_cannot_be_trusted(bm):
+    text = bm._FLAG_TEMPLATES["BROKEN_LIGAND_GEOMETRY"]
+    assert "meaningless" in text and "confident" in text
+
+
+def test_the_span_limit_sits_between_real_and_diverged(bm):
+    """Measured: intact ligands spanned 11-17A, diverged ones 2154-2199A."""
+    assert 20 < bm._LIGAND_SPAN_LIMIT_A < 100
