@@ -794,10 +794,16 @@ var BoltzExplorer = (function () {
   //: against and it should not change colour between campaigns.
   var POCKET_COLOURS = [0x00875a, 0x1e73be, 0xb07d00, 0x9b51e0, 0x0f9ba8, 0xc45500];
   var POCKET_BASELINE = 0xcf2f3c;
-  //: One grey for every receptor. The point of this pane is where the ligands
+  //: One mid grey for every receptor. The point of this pane is where the ligands
   //: went, and colouring twelve near-identical superposed backbones would say
   //: "these differ" about the one thing that does not.
-  var RECEPTOR_GREY = 0x9aa0a6;
+  var RECEPTOR_GREY = 0x808080;
+  //: Translucent so the poses read through the backbones rather than from behind
+  //: them -- a dozen superposed traces are otherwise a solid cage around exactly
+  //: the thing the pane exists to show. The ligands stay fully opaque: they are
+  //: the subject, and transparency on a sphere reads as uncertainty about where
+  //: the atom is.
+  var RECEPTOR_ALPHA = 0.3;
 
   function pocketColour(payload, group) {
     var order = payload.pocket_order || [];
@@ -881,12 +887,16 @@ var BoltzExplorer = (function () {
       return rows.reduce(function (chain, row) {
         return chain.then(function () {
           return wrapper.loadExtra("ca:" + row.id, sources.overlay("ca", row.id),
-                                   { color: RECEPTOR_GREY, type: "backbone" })
+                                   { color: RECEPTOR_GREY, type: "backbone",
+                                     typeParams: { alpha: RECEPTOR_ALPHA } })
             .catch(function () { /* one missing file is not the whole pane */ });
         }).then(function () {
+          // Spheres, not sticks: at this scale a stick model of a dozen ligands is a
+          // thicket, while space-filling shows which volume each pocket's poses
+          // actually occupy -- which is the comparison being made.
           return wrapper.loadExtra("lig:" + row.id, sources.overlay("lig", row.id),
                                    { color: pocketColour(payload, row.pocket),
-                                     type: "ball-and-stick" })
+                                     type: "spacefill" })
             .catch(function () { /* ditto */ });
         });
       }, Promise.resolve()).then(function () {
