@@ -34,6 +34,7 @@ PATCH 3 -- say what actually went wrong
 """
 
 import argparse
+import ast
 import shutil
 import sys
 from pathlib import Path
@@ -170,31 +171,100 @@ def _bm_note(where, n, step_idx):
               f"(latest {where}, step {step_idx})", flush=True)
 
 
-# How many times the median per-atom gradient an atom may be pushed before the push
-# is treated as a singularity rather than a force. Deliberately loose: a real
-# gradient varies a lot across atoms in one step -- a buried clash legitimately
-# pulls far harder than a solvent-exposed methyl -- and the failure being caught is
-# not 100x the median but astronomically beyond it. Set to reject only the
-# unarguable, so a healthy trajectory is untouched.
+# How many times the 99.9th-percentile per-atom gradient an atom may be pushed
+# before the push is treated as a singularity rather than a force. Measured live on
+# a healthy step: median 1.0e-2, largest legitimate force 2.45. The failure being
+# caught is ~1e12. With the quantile as the reference, 100x sits roughly two orders
+# above anything real and ten below the divergence, so a healthy trajectory is
+# untouched and the singularity is unarguable.
 _BM_GRADIENT_CLAMP = 100.0
 
-_BM_CLAMP = {"count": 0, "worst": 0.0}
+# The furthest one guidance step may move one atom, in angstroms. Guidance nudges a
+# structure toward physical plausibility; it does not relocate atoms.
+#
+# Tuned on measurements, not taste. Unclamped, orforglipron's methyl C96 ended 2147A
+# from the molecule. Clamping the gradient alone brought that to 48.9A. Adding this
+# cap at 0.5A brought it to 2.07A -- a real bond, stretched 37% past the 1.51A the
+# same atom has in a clean structure, and still long enough that a viewer inferring
+# bonds by distance draws nothing there. 0.1A is a tenth of a carbon-carbon bond per
+# descent step and, with 20 of those per diffusion step, still lets an atom move 2A in
+# a step that genuinely calls for it.
+_BM_MAX_STEP_A = 0.1
+
+_BM_SCALE = {"n": 0}
 
 
-def _bm_note_clamp(n, worst, cap, step_idx):
+def _bm_note_scale(busy, cap, norms, step_idx):
+    # Called from the guidance block on every step, so it must not read a device
+    # value every time: each read is a pipeline sync. It reports every 500th call.
+    # The numbers are the evidence for where the cap belongs -- max/busy on a
+    # healthy step is single digits, and the divergence this catches is twelve
+    # orders of magnitude beyond it.
+    # A comment and not a docstring on purpose: this is injected from inside a
+    # triple-quoted string, which a nested triple quote would close.
+    _BM_SCALE["n"] += 1
+    if _BM_SCALE["n"] % 500 == 1:
+        # The REAL cap, passed in. An earlier version recomputed it here as
+        # busy * factor, which is the pre-anchoring formula -- so once the cap was
+        # anchored to the quietest scale, the line printed a cap the code was not
+        # using and called a clamped step "no clamp needed". Report the number that
+        # was actually applied, never a reconstruction of it.
+        b, c, m = float(busy), float(cap), float(norms.max())
+        print(f"| STEERING_SCALE step {step_idx}: busy {b:.3e}, max {m:.3e}, "
+              f"cap {c:.3e} -- " + ("CLAMPING" if m > c else "no clamp needed"),
+              flush=True)
+
+
+def _bm_note_clamp(n, worst, cap, busy, step_idx):
     _BM_CLAMP["count"] += 1
     _BM_CLAMP["worst"] = max(_BM_CLAMP["worst"], worst)
-    # First and then sparsely: the point is to record the true magnitudes, so the
-    # ratio is printed rather than a bare "clamped" -- that number is the evidence
-    # for whether the threshold is in the right place.
+    # First and then sparsely, with the true magnitudes rather than a bare
+    # "clamped": those numbers are the evidence for whether the threshold is in the
+    # right place, and the first version of this clamp was wrong precisely because
+    # it was set without them.
     if _BM_CLAMP["count"] == 1 or _BM_CLAMP["count"] % 25 == 0:
-        print(f"| STEERING_CLAMP {n} atom(s) at step {step_idx}: worst "
-              f"{worst:.3e} vs cap {cap:.3e} ({worst / max(cap, 1e-12):.1f}x over) "
+        print(f"| STEERING_CLAMP {n} atom(s) at step {step_idx}: worst {worst:.3e} "
+              f"vs cap {cap:.3e} (p99.9 {busy:.3e}, {worst / max(cap, 1e-12):.1f}x over) "
               f"-- rescaled, direction kept; {_BM_CLAMP['count']} clamp(s) so far",
               flush=True)
 
 
 import boltz.model.layers.initialize as init""",
+    ),
+    dict(
+        name="steering: resample on the CPU, off the MPS random-number kernel",
+        relpath="boltz/model/modules/diffusionv2.py",
+        marker="# BOLTZMAKER-PATCH: multinomial-on-cpu",
+        old="""                    resample_indices = (
+                        torch.multinomial(
+                            resample_weights,
+                            resample_weights.shape[1]
+                            if step_idx < num_sampling_steps - 1
+                            else 1,
+                            replacement=True,
+                        )""",
+        new="""                    # BOLTZMAKER-PATCH: multinomial-on-cpu -- torch.multinomial goes
+                    # through uniform_(), and on Metal that lands in uniform_mps_ ->
+                    # MPSGraph::encodeToCommandBuffer -> MLIR kernel compilation. Sampled
+                    # live on a wedged run, the main thread sat there for tens of minutes
+                    # with the log frozen and the GPU at 1-4%, which reads exactly like a
+                    # hang; it was killed as one four times. This call is the ONLY random
+                    # draw on the steering path, which is why --no-potentials runs never
+                    # showed it.
+                    #
+                    # resample_weights is (batch, num_particles) -- three columns -- so
+                    # drawing on the CPU costs microseconds and a copy of a handful of
+                    # integers, against a Metal kernel compile per new shape. The draw is
+                    # from the same distribution; only the generator differs, and the
+                    # weights are computed on device exactly as before.
+                    resample_indices = (
+                        torch.multinomial(
+                            resample_weights.float().cpu(),
+                            resample_weights.shape[1]
+                            if step_idx < num_sampling_steps - 1
+                            else 1,
+                            replacement=True,
+                        ).to(resample_weights.device)""",
     ),
     dict(
         name="steering: keep an exploding guidance gradient out of the coordinates",
@@ -239,21 +309,71 @@ import boltz.model.layers.initialize as init""",
                         # magnitude larger than the median for that same step is not a
                         # force, it is a singularity, and rescaling preserves its
                         # direction while refusing its magnitude.
+                        # Bound the step as well as sanitising it. Only 144 entries
+                        # went non-finite on GLP1R+orforglipron and were zeroed; their
+                        # finite-but-enormous neighbours were applied, 20 descent steps
+                        # per diffusion step, until four atoms sat 49, 58, 737 and 2147A
+                        # from the molecule -- the same four, three independent runs.
+                        #
+                        # Scaled against a HIGH QUANTILE, not the median: almost every
+                        # atom feels no guidance force, so the median is ~0 and a
+                        # multiple of it is still ~0. Measured live, a median-based cap
+                        # sat at 1.0 while the largest legitimate force that same step
+                        # was 2.45, and it clamped a healthy gradient at step 11.
+                        #
+                        # Everything here stays on the device. No boolean mask (its
+                        # output shape is data-dependent, which syncs), no .item(), no
+                        # branch on the data: the clamp is applied unconditionally and
+                        # is a no-op scale of 1.0 wherever nothing exceeds the cap. An
+                        # earlier version read four host values per guidance step --
+                        # about 4000 per target -- and the run crawled so badly it was
+                        # indistinguishable from a hang, and was twice killed as one.
+                        # topk, not torch.quantile. Both are MPS-native in isolation,
+                        # but the runs that never reached diffusion step 1 were exactly
+                        # the ones carrying quantile here, while the same clamp built on
+                        # a cheaper reduction reached step 11 and the unclamped build ran
+                        # all 26 targets. quantile sorts the whole tensor; topk of the
+                        # top 0.1% touches thirty values and is the reduction actually
+                        # wanted -- the boundary of the busy atoms.
                         _norms = energy_gradient.norm(dim=-1, keepdim=True)
-                        _typical = torch.median(_norms[_norms > 0]) if (_norms > 0).any() else None
-                        if _typical is not None and torch.isfinite(_typical) and _typical > 0:
-                            _cap = _typical * _BM_GRADIENT_CLAMP
-                            _over = (_norms > _cap).sum().item()
-                            if _over:
-                                _bm_note_clamp(_over, float(_norms.max()), float(_cap), step_idx)
-                                energy_gradient = energy_gradient * torch.clamp(
-                                    _cap / _norms.clamp(min=1e-12), max=1.0)
+                        _flat = _norms.flatten().float()
+                        _k = max(1, int(_flat.numel() * 0.001))
+                        _busy = torch.topk(_flat, _k).values.min()
+                        # Anchored to the QUIETEST scale seen in this trajectory, not to
+                        # this step's. A threshold taken from the current step is blind
+                        # to a divergence that inflates the whole distribution, and this
+                        # one does: measured live, the busy scale sat at 0.068-0.076 for
+                        # a hundred steps, then at step 125 went to 0.363 while the max
+                        # went to 34 -- so a cap of 100x the current scale rose to 36 and
+                        # the runaway passed under it by 6%. Against the running minimum
+                        # the same step is capped at ~6.8 and clamped, which is the whole
+                        # point. Reset per trajectory at step 0, since this module-level
+                        # state outlives a single target.
+                        if step_idx == 0 or _BM_SCALE.get("ref") is None:
+                            _BM_SCALE["ref"] = _busy.detach()
+                        else:
+                            _BM_SCALE["ref"] = torch.minimum(_BM_SCALE["ref"], _busy.detach())
+                        _cap = torch.clamp(_BM_SCALE["ref"], min=1e-12) * _BM_GRADIENT_CLAMP
+                        energy_gradient = energy_gradient * torch.clamp(
+                            _cap / _norms.clamp(min=1e-12), max=1.0)
+                        _bm_note_scale(_busy, _cap, _norms, step_idx)
                         guidance_update -= energy_gradient
                     if not torch.isfinite(guidance_update).all():
                         _bm_note("guidance_update",
                                  int((~torch.isfinite(guidance_update)).sum()), step_idx)
                         guidance_update = torch.nan_to_num(
                             guidance_update, nan=0.0, posinf=0.0, neginf=0.0)
+                    # Bound the DISPLACEMENT, which is the quantity that actually goes
+                    # wrong. Clamping the gradient alone took the failure from a 2154A
+                    # span to 48.9A -- better by a factor of forty, still not a molecule,
+                    # because the atoms whose gradient was non-finite are zeroed and then
+                    # have no restoring force at all, so they drift freely for the last
+                    # eighty steps. Guidance is a nudge: a per-atom step beyond
+                    # _BM_MAX_STEP_A angstroms is not a nudge, whatever produced it.
+                    # Rescaled rather than zeroed, so the direction still counts.
+                    _disp = guidance_update.norm(dim=-1, keepdim=True)
+                    guidance_update = guidance_update * torch.clamp(
+                        _BM_MAX_STEP_A / _disp.clamp(min=1e-12), max=1.0)
                     atom_coords_denoised += guidance_update""",
     ),
     dict(
@@ -474,6 +594,43 @@ def find_site_packages() -> Path:
     raise SystemExit("could not locate an installed `boltz` on sys.path; pass --site-packages")
 
 
+def verify_injected_symbols(site: Path) -> list:
+    """Every helper these patches call must exist, in that file, with that arity.
+
+    Twice now a patch has installed cleanly, parsed cleanly, and then failed at
+    runtime deep into a campaign: once with `_bm_note` anchored into a file where it
+    was never defined, and once with a reporter whose signature had moved on from its
+    call site, costing 34 minutes of a run that had otherwise worked. Neither is
+    visible to "does it compile" -- a call is only checked when it executes, and these
+    execute inside a diffusion loop that takes half an hour to reach.
+    """
+    problems = []
+    for relpath in sorted({p["relpath"] for p in PATCHES}):
+        path = site / relpath
+        if not path.is_file():
+            continue
+        try:
+            tree = ast.parse(path.read_text(errors="replace"))
+        except SyntaxError as exc:
+            problems.append(f"{relpath}: injected code does not parse ({exc})")
+            continue
+        defined = {n.name: len(n.args.args) for n in ast.walk(tree)
+                   if isinstance(n, ast.FunctionDef)}
+        for node in ast.walk(tree):
+            if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)):
+                continue
+            name = node.func.id
+            if not name.startswith("_bm_"):
+                continue
+            if name not in defined:
+                problems.append(f"{relpath}:{node.lineno} calls {name}(), which is not "
+                                f"defined in this file")
+            elif defined[name] != len(node.args):
+                problems.append(f"{relpath}:{node.lineno} calls {name}() with "
+                                f"{len(node.args)} args, defined with {defined[name]}")
+    return problems
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--check", action="store_true", help="report status without editing")
@@ -544,6 +701,11 @@ def main() -> int:
     else:
         print("  already applied  full-precision guards work off CUDA")
         applied += 1
+
+    broken = verify_injected_symbols(sp)
+    for line in broken:
+        print(f"  BROKEN PATCH  {line}")
+        missing += 1
 
     print(f"\n{applied} applied, {missing} outstanding  [{sp}]")
     return 1 if missing else 0

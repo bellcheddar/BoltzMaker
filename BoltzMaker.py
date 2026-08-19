@@ -2515,9 +2515,20 @@ def run_boltz(yaml_dir: Path, out_dir: Path, manifest: list, workers: int, accel
 # How long boltz may say nothing before it is treated as wedged rather than busy. The
 # quietest legitimate stretch is model load plus MSA setup at the start of an invocation,
 # a few minutes; a target that is genuinely sampling refreshes its progress bar
-# continuously. 60 minutes is far above the former and far below a wasted night -- the
-# external watchdog this replaces used 75.
-_STALL_TIMEOUT_SECONDS = 3600
+# continuously.
+#
+# Raised to 90 minutes, having been wrong in both directions. 60 was too slow to be
+# useful; 20 was actively destructive and killed four attempts that were working.
+#
+# The measurement that settles it: a steering run on this machine took ~30 minutes from
+# launch to its first diffusion step, because MPSGraph compiles its kernels on the way,
+# and a target then takes ~45 minutes more. Worse, log silence is a poor stall signal
+# for exactly the invocations this ladder produces -- boltz writes its progress bar once
+# for a single-target run and never refreshes it (see the note by fresh_rate below), so
+# a healthy retry is silent by construction. 90 minutes clears a whole target with room
+# to spare, and still catches a genuinely wedged process inside a working day rather
+# than a night.
+_STALL_TIMEOUT_SECONDS = 5400
 
 _RETRY_SETTLE_SECONDS = 15  # pause between attempts so the OS fully reclaims a crashed subprocess's memory
 

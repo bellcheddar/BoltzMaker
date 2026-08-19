@@ -564,7 +564,7 @@ def test_run_boltz_reaches_the_batch_runner(bm, tmp_path, monkeypatch):
 
 def test_stall_timeout_is_between_a_slow_start_and_a_wasted_night(bm):
     """Model load + MSA setup is a few minutes; a wedged run costs the whole night."""
-    assert 15 * 60 < bm._STALL_TIMEOUT_SECONDS <= 90 * 60
+    assert 60 * 60 <= bm._STALL_TIMEOUT_SECONDS <= 3 * 60 * 60
 
 
 def test_patch_check_applies_before_it_verifies(bm, monkeypatch, tmp_path):
