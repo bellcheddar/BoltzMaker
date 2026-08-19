@@ -4350,7 +4350,7 @@ def _build_campaign_summary(campaign: Campaign, campaign_dir: Path) -> list:
                  else "none -- every ligand folded without a site constraint"))
 
     apo = [fam for fam, lig, _code in targets if lig is None]
-    rows.append(("Ligand-free companions", str(len(apo)),
+    rows.append(("Apo structure references", str(len(apo)),
                  ", ".join(f.id for f in apo) if apo
                  else "none -- no apo-vs-holo comparison in this campaign"))
 

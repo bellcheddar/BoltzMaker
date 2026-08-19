@@ -1273,6 +1273,13 @@ example campaigns.
   12. Which pocket a target used is recovered from its own stem, matching the whole of
   `family_ligand_code` rather than the suffix, so a ligand that happens to share a
   pocket's name is not misread as a constrained run.
+- [x] Settle on one user-facing vocabulary -- **proteins, co-folded partners, ligands,
+  pockets, ligand-free companions, predictions** -- and use it everywhere. The summary
+  table headed its receptor column "Target" while the list below it called a prediction
+  a target: one word for two things on one page. Proteins are counted by group, so the
+  5-HT2 panel's nine `Protein:` blocks are its three receptors. The analysis page opens
+  with those six as KPI boxes, in the order the prepare form asks for them, and the
+  campaign summary reports the same six numbers.
 - [ ] Classify the failure before retrying, and escalate along the axis that addresses it:
   a memory ladder (isolation, then `--max-msa-seqs 2048`) and a NaN ladder
   (`--no-potentials`, then fp32). Retrying with identical parameters is already known to be
