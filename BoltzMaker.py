@@ -3042,7 +3042,67 @@ _FLAG_TEMPLATES = {
     "HIGH_CONFIDENCE_POOR_AFFINITY": "high structural confidence but weak predicted affinity -- verify pocket/binding mode.",
     "LOW_CONFIDENCE_STRONG_AFFINITY": "strong predicted affinity but low structural confidence -- verify pose before trusting.",
     "LOW_POCKET_PLDDT": "low pLDDT near the specified pocket (approximate, complex-level proxy).",
+    "BROKEN_LIGAND_GEOMETRY": "the predicted ligand is not a connected molecule -- atoms are "
+                              "flung apart, so its pose, affinity and interactions are "
+                              "meaningless however confident they look. Re-run this target.",
 }
+
+#: A drug-like ligand is a few Angstroms across; nothing legitimate spans this much.
+#: Measured on a real campaign, the intact ligands spanned 11-17A and the diverged ones
+#: 2154-2199A, so anything in between is still comfortably a failure.
+_LIGAND_SPAN_LIMIT_A = 40.0
+#: Longest plausible covalent bond, with room to spare. An atom with no neighbour inside
+#: it is not attached to the molecule at all.
+_LIGAND_BOND_LIMIT_A = 1.9
+
+
+def _ligand_geometry_broken(cif_path: Path) -> bool:
+    """Whether the predicted ligand has come apart.
+
+    Boltz's diffusion can diverge without failing: the numerical guards stop the run
+    aborting, and what comes out is a complex whose protein is fine and whose ligand
+    has atoms thousands of Angstroms away. Every score is then computed on that --
+    and they look excellent. On the GLP1R/GIPR campaign all three GLP1R+orforglipron
+    targets came out this way, spanning ~2150A with 7-9 unattached atoms, and led the
+    binder ranking at 0.78 with a confidence of 0.80 and 625 sanitised NaN gradients
+    behind them. Nothing else in the report would have said so.
+    """
+    points = []
+    try:
+        for line in cif_path.read_text(errors="replace").splitlines():
+            if not line.startswith("HETATM"):
+                continue
+            parts = line.split()
+            if len(parts) < 13:
+                continue
+            try:
+                points.append((float(parts[10]), float(parts[11]), float(parts[12])))
+            except ValueError:
+                continue
+    except OSError:
+        return False                      # unreadable is a different problem, reported elsewhere
+    if len(points) < 2:
+        return False
+
+    limit_sq = _LIGAND_SPAN_LIMIT_A ** 2
+    bond_sq = _LIGAND_BOND_LIMIT_A ** 2
+
+    def sq(a, b):
+        return (a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2 + (a[2] - b[2]) ** 2
+
+    for i, a in enumerate(points):
+        attached = False
+        for j, b in enumerate(points):
+            if i == j:
+                continue
+            d = sq(a, b)
+            if d > limit_sq:
+                return True               # spans further than any real ligand
+            if d <= bond_sq:
+                attached = True
+        if not attached:
+            return True                   # an atom bonded to nothing
+    return False
 
 # `boltz --help` imports the whole torch stack. Warm, that is well under a second;
 # cold, in a just-installed environment that still has to byte-compile it, it has
@@ -3300,6 +3360,11 @@ def analyze(yaml_dir: Path, out_dir: Path, campaign_dir: Path,
         if cif_files:
             shutil.copy2(cif_files[0], cif_dst / cif_files[0].name)
             row["cif_file"] = cif_files[0].name
+            # Before any score is read off it: a diverged ligand still produces a
+            # confidence, a pIC50 and a full interaction profile, all of them
+            # meaningless and none of them saying so.
+            if t.ligand_id is not None and _ligand_geometry_broken(cif_dst / cif_files[0].name):
+                row["flags"] = "BROKEN_LIGAND_GEOMETRY"
 
             if run_plip and t.ligand_id is not None:
                 plip_targets_done += 1
