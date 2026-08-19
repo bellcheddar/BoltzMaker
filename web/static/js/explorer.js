@@ -820,6 +820,69 @@ var BoltzExplorer = (function () {
      haze while contributing nothing to the question the pane asks. In the 15-target
      5-HT2 campaign that is the 12 with a ligand, and the three apo targets are
      left to the Superposed targets pane, which is about backbones. */
+  //: target id -> its checkbox, so a click on the table can drive the same
+  //: controls the reader can drive by hand, rather than a parallel hidden state.
+  var pocketBoxes = {};
+  var pocketRowSelected = null;
+
+  function setPocketRowVisible(id, visible) {
+    var wrapper = viewers.pockets.wrapper;
+    if (!wrapper) return;
+    wrapper.setExtraVisible("lig:" + id, visible);
+    wrapper.setExtraVisible("ca:" + id, visible);
+  }
+
+  function clearPocketTableSelection() {
+    if (!pocketRowSelected) return;
+    pocketRowSelected.classList.remove("md-row-selected");
+    pocketRowSelected = null;
+  }
+
+  function showOnlyPocketTargets(ids) {
+    Object.keys(pocketBoxes).forEach(function (id) {
+      var wanted = !ids || ids.indexOf(id) >= 0;
+      pocketBoxes[id].checked = wanted;
+      setPocketRowVisible(id, wanted);
+    });
+  }
+
+  /* The table above the viewer is a summary of the same targets, one row per
+     pocket and protein, so a row is already the selection a reader wants: "show me
+     just orforglipron and friends in the V6G site of GLP1R". The row carries no
+     ids -- it is markup the report generated and this page only sanitised -- so
+     the match is made on what the row displays: its Pocket and Protein cells
+     against each target's own pocket and family. */
+  function wirePocketTable(rows) {
+    var pane = document.querySelector(".md-pockets-pane");
+    var card = pane && pane.closest(".md-card");
+    var table = card && card.querySelector("table.full-table");
+    if (!table || !table.tBodies.length) return;
+
+    Array.prototype.slice.call(table.tBodies[0].rows).forEach(function (tr) {
+      if (tr.cells.length < 2) return;
+      var pocket = tr.cells[0].textContent.trim();
+      var family = tr.cells[1].textContent.trim();
+      var ids = rows.filter(function (row) {
+        return row.pocket === pocket && row.family === family;
+      }).map(function (row) { return row.id; });
+      if (!ids.length) return;          // a row whose targets produced no structure
+
+      tr.classList.add("md-row-clickable");
+      tr.title = "Show only these " + ids.length + " structure(s)";
+      tr.addEventListener("click", function () {
+        if (pocketRowSelected === tr) {   // clicking the selected row shows everything
+          clearPocketTableSelection();
+          showOnlyPocketTargets(null);
+          return;
+        }
+        clearPocketTableSelection();
+        tr.classList.add("md-row-selected");
+        pocketRowSelected = tr;
+        showOnlyPocketTargets(ids);
+      });
+    });
+  }
+
   function pocketsPane(payload) {
     var note = document.getElementById("pockets-note");
     var list = document.getElementById("pockets-list");
@@ -828,6 +891,8 @@ var BoltzExplorer = (function () {
 
     var rows = payload.targets.filter(function (row) { return row.has_ligand; });
     list.innerHTML = "";
+    pocketBoxes = {};
+    pocketRowSelected = null;
     if (!rows.length) {
       note.textContent = "No target in this campaign has a ligand to place.";
       return;
@@ -839,7 +904,8 @@ var BoltzExplorer = (function () {
     note.textContent = rows.length + " ligand" + (rows.length === 1 ? "" : "s")
       + " across " + groups.length + " pocket" + (groups.length === 1 ? "" : "s")
       + ", every receptor superposed on " + payload.reference
-      + " and drawn in grey. Colours match the table above.";
+      + " and drawn in grey. Colours match the table above, and clicking a row of it "
+      + "shows only that row's structures -- click it again for all of them.";
 
     rows.forEach(function (row) {
       var colour = pocketColour(payload, row.pocket);
@@ -872,13 +938,16 @@ var BoltzExplorer = (function () {
       // prediction, and leaving a backbone behind after its pose has gone
       // misreports which structures are still on screen.
       box.addEventListener("change", function () {
-        var wrapper = viewers.pockets.wrapper;
-        if (!wrapper) return;
-        wrapper.setExtraVisible("lig:" + row.id, box.checked);
-        wrapper.setExtraVisible("ca:" + row.id, box.checked);
+        setPocketRowVisible(row.id, box.checked);
+        // The table highlight claims "you are looking at exactly this row". Once a
+        // single checkbox has been touched that is no longer true, so it goes.
+        clearPocketTableSelection();
       });
+      pocketBoxes[row.id] = box;
       list.appendChild(label);
     });
+
+    wirePocketTable(rows);
 
     ensureViewer("pockets").then(function (wrapper) {
       // In series for the same reason the other panes are: concurrent loads race

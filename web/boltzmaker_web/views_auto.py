@@ -868,9 +868,12 @@ def _overlay_payload(session: Path, loaded: bmz.Results) -> dict:
             "id": target.target_id, "name": target.display_name,
             "ligand": target.ligand_id,
             # Which pocket this target was run against, so the pockets pane can
-            # colour it to match the row of the table above it.
+            # colour it to match the row of the table above it -- and the family, so
+            # clicking a row of that table can select exactly the targets it counts.
+            # The table's Protein column is the family id, so that is what matches.
             "pocket": pocket_finder.group_for(target.target_id, target.family_id,
                                               target.ligand_id, pocket_codes, unnamed_pocket),
+            "family": target.family_id,
             "rmsd": None if shared_rmsd is None else round(shared_rmsd, 2),
             "matched": fit["matched"], "core": len(fit["kept"]),
             "shared": len(mine), "has_ligand": wrote_ligand,

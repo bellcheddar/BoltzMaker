@@ -566,6 +566,16 @@ tr.md-check-na .md-check-fail { color: var(--md-text-muted); }
 .md-pockets-pane .md-overlay-rmsd { font-variant-numeric: normal; font-size: 11px; }
 .md-pockets-pane .md-overlay-list { max-height: 240px; }
 
+/* A row of the pockets table is a selection: click it to show only its structures.
+   The affordance has to live on the row itself because the table is markup the
+   report generated -- this page cannot add a button to it, only behaviour. */
+.full-table tr.md-row-clickable { cursor: pointer; }
+.full-table tr.md-row-clickable:hover > td { background: var(--md-bg-alt); }
+.full-table tr.md-row-selected > td {
+  background: var(--md-bg-alt);
+  box-shadow: inset 3px 0 0 var(--md-primary);
+}
+
 /* A campaign name is an identifier, not prose: upper case everywhere it is
    listed, whatever case it was typed in. Transformed rather than upper-cased at
    the source, so the name the bundle and the results file carry is untouched. */

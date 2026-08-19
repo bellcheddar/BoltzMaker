@@ -135,3 +135,66 @@ def test_they_are_not_raced_against_each_other():
     # the prose instead of the code would make this test pass on the broken version.
     code = "\n".join(l for l in body.splitlines() if not l.strip().startswith("//"))
     assert "Promise.all" not in code, "these two updates are order-dependent, not parallel"
+
+
+# ---------------------------------------------------------------------------
+#  Clicking a row of the pockets table selects its structures
+# ---------------------------------------------------------------------------
+
+def _explorer_js():
+    import pathlib
+    return (pathlib.Path(__file__).resolve().parent.parent
+            / "web" / "static" / "js" / "explorer.js").read_text()
+
+
+def _brand_css():
+    import pathlib
+    return (pathlib.Path(__file__).resolve().parent.parent
+            / "web" / "static" / "css" / "brand.css").read_text()
+
+
+def test_the_payload_carries_what_a_row_is_matched_on():
+    """The table's Pocket and Protein cells are matched against these two fields.
+
+    The row itself carries no ids -- it is markup the report generated and this page
+    only sanitised -- so without both of these there is nothing to match on.
+    """
+    src = (__import__("pathlib").Path(__file__).resolve().parent.parent
+           / "web" / "boltzmaker_web" / "views_auto.py").read_text()
+    assert '"family": target.family_id,' in src
+    assert '"pocket": pocket_finder.group_for(' in src
+
+
+def test_the_table_drives_the_checkboxes_rather_than_a_second_state():
+    """Two sources of truth for "what is on screen" would drift the first time one
+    is changed without the other."""
+    js = _explorer_js()
+    assert "pocketBoxes[row.id] = box;" in js
+    assert "pocketBoxes[id].checked = wanted;" in js
+
+
+def test_touching_a_checkbox_drops_the_row_highlight():
+    """The highlight claims 'you are looking at exactly this row', which stops being
+    true the moment a single structure is toggled by hand."""
+    js = _explorer_js()
+    # Scoped to pocketsPane: the ligand and trace panes have their own change
+    # handler earlier in the file, and matching that one would prove nothing here.
+    pane = js[js.index("function pocketsPane(payload) {"):js.index("// ---- the AlphaFold overlay")]
+    handler = pane[pane.index('box.addEventListener("change"'):]
+    assert "clearPocketTableSelection();" in handler[:400]
+
+
+def test_clicking_the_selected_row_again_restores_everything():
+    js = _explorer_js()
+    assert "showOnlyPocketTargets(null);" in js
+
+
+def test_a_row_whose_targets_produced_nothing_is_not_clickable():
+    js = _explorer_js()
+    assert "if (!ids.length) return;" in js
+
+
+def test_the_row_affordance_is_styled():
+    css = _brand_css()
+    assert ".full-table tr.md-row-clickable { cursor: pointer; }" in css
+    assert "md-row-selected" in css
