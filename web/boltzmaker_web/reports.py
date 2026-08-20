@@ -71,6 +71,11 @@ _DROP_TITLE_PATTERNS = (
     # the granular three and dropping the combined one loses nothing and repeats
     # nothing.
     re.compile(r"^Secondary structure shifts", re.I),
+    # The dashboard's combined coverage+statistics card. This page builds its own
+    # from the compare-sse page's two granular panels (see _merge_coverage_panels),
+    # so the report's version would be a third copy of the same two tables. Renaming
+    # that card is what un-dropped it: the pattern above no longer matched it.
+    re.compile(r"^Family coverage and SSE shifts$", re.I),
 )
 
 # The order panels appear in. Titles not listed keep their original order and fall
@@ -93,11 +98,18 @@ PANEL_ORDER = (
     "Ranked predicted pIC50",
     "Ranked confidence",
     "Interaction counts by type",
-    "Family x ligand selectivity",
-    "Family coverage",
-    "Overall shift statistics",
     "SSE motif shifts (apo vs holo)",
     "Per-motif Ca RMSD",
+    # Both of these summarise what the per-motif chart above shows in detail, so they
+    # read after it rather than before. "Family coverage" is the merged card (see
+    # _merge_coverage_panels); "Family x ligand selectivity" is folded into the
+    # report's own "Selectivity and motif shifts" pair card and is named here only
+    # for campaigns whose report predates it.
+    "Selectivity and motif shifts",
+    "Family x ligand selectivity",
+    "Family coverage and SSE shifts",
+    "Family coverage",
+    "Overall shift statistics",
     "Motif x target RMSD",
 )
 
@@ -561,8 +573,65 @@ POSE_VIEWER_HTML = (
 )
 
 
+def _strip_pose_pane(html: str) -> str:
+    """Remove the report's own `.pose-pane` block, brace-counting rather than regex.
+
+    A regex for `<div class='pose-pane'>.*?</div>` stops at the FIRST closing tag,
+    which is several levels inside, and leaves a tail of orphaned markup that the
+    sanitiser then re-balances into visible fragments. Walking the div nesting is the
+    same approach `_cards` already takes for the same reason.
+    """
+    # The class token exactly, not a substring: this page's own viewer is
+    # `md-pose-pane`, which contains `pose-pane`, so a loose match would delete the
+    # replacement along with the thing it replaces.
+    marker = re.search(r"<div[^>]*\bclass=['\"](?:[^'\"]*\s)?pose-pane(?:\s[^'\"]*)?['\"][^>]*>",
+                       html)
+    if not marker:
+        return html
+    depth, i = 0, marker.start()
+    for tag in re.finditer(r"<(/?)div\b[^>]*>", html[marker.start():]):
+        depth += -1 if tag.group(1) else 1
+        if depth == 0:
+            i = marker.start() + tag.end()
+            break
+    else:
+        return html[:marker.start()]
+    return html[:marker.start()] + html[i:]
+
+
+#: The two panels compare-sse emits separately, in the order they must appear.
+_COVERAGE_TITLES = ("Family coverage", "Overall shift statistics")
+COVERAGE_MERGED_TITLE = "Family coverage and SSE shifts"
+
+
+def _merge_coverage_panels(panels: list) -> list:
+    """Fold "Overall shift statistics" into "Family coverage" as one card.
+
+    They are two short tables describing the same comparison -- which families could
+    be compared, and by how much they moved -- and as separate cards they filled a
+    screen between them while neither had enough in it to earn one.
+
+    Merged here rather than in the report, because the report writes them into its
+    own combined card while the compare-sse page (which this page prefers, for its
+    granularity) keeps them apart.
+    """
+    by_title = {}
+    for panel in panels:
+        by_title.setdefault(_panel_title(panel), panel)
+    first, second = (by_title.get(t) for t in _COVERAGE_TITLES)
+    if not (isinstance(first, dict) and isinstance(second, dict)):
+        return panels
+
+    first["title"] = COVERAGE_MERGED_TITLE
+    first["html"] = (f"{first['html']}"
+                     f"<h3 class=\"md-sub\">{_COVERAGE_TITLES[1]}</h3>"
+                     f"{second['html']}")
+    return [panel for panel in panels if panel is not second]
+
+
 def rebuild_panels(panels: list) -> list:
     """Swap in this page's own markup for the panels it redraws."""
+    panels = _merge_coverage_panels(panels)
     for panel in panels:
         title = _panel_title(panel)
         if title in _REBUILT_PANELS and isinstance(panel, dict):
@@ -573,7 +642,13 @@ def rebuild_panels(panels: list) -> list:
         elif title == "Pockets" and isinstance(panel, dict):
             panel["html"] = panel["html"] + POCKETS_VIEWER_HTML
         elif title == "Ligand pose vs experiment" and isinstance(panel, dict):
-            panel["html"] = panel["html"] + POSE_VIEWER_HTML
+            # The report now draws its own pair grid with 3Dmol, so the uploaded panel
+            # carries a copy of it. Scripts are stripped from an upload, so that copy
+            # arrives as inert text -- headings, RMSDs and Spin/Reset buttons that do
+            # nothing -- immediately above this page's live Mol* version. Strip it
+            # before appending, or the reader sees the same panel twice and only the
+            # lower one works.
+            panel["html"] = _strip_pose_pane(panel["html"]) + POSE_VIEWER_HTML
     return panels
 
 #: Header text the summary table can spare. Every column of that table is a

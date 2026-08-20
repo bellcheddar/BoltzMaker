@@ -107,7 +107,10 @@ var BoltzExplorer = (function () {
       if (family && t.family !== family) return false;
       if (flaggedOnly && !t.flags.length) return false;
       if (text) {
-        var haystack = (t.id + " " + t.name + " " + t.ligand + " " + t.family + " " + t.group).toLowerCase();
+        // Pocket included so "v6g" filters the table to that pocket's runs, which is
+        // the comparison a matrix campaign is read for.
+        var haystack = (t.id + " " + t.name + " " + t.ligand + " " + t.family + " "
+                        + t.group + " " + (t.pocket || "")).toLowerCase();
         if (haystack.indexOf(text) === -1) return false;
       }
       return true;
@@ -144,9 +147,11 @@ var BoltzExplorer = (function () {
         return td;
       }
 
+      cell(t.run === null || t.run === undefined ? "—" : String(t.run), "num");
       cell(t.name || t.id);
       cell(t.family || "—");
       cell(t.ligand || "—");
+      cell(t.pocket || "—");
       cell(fmt(t.confidence, 2), "num");
       cell(t.pic50 === null ? "—" : fmt(t.pic50, 2), "num");
       cell(t.plip_total ? String(t.plip_total) : "—", "num");
@@ -457,7 +462,16 @@ var BoltzExplorer = (function () {
         .then(function (wrapper) {
           if (current !== t.id) return;      // a faster click already moved on
           if (which === "pose") {
-            note.textContent = "Drag to rotate, scroll to zoom. Coloured by chain.";
+            // The receptor upright, ECD on top, rather than whatever orientation the
+            // coordinates happened to arrive in.
+            // `t.family`, not `t.family_id` -- the payload renames it, and the
+            // undefined lookup silently passed null, which orients on the whole
+            // complex (receptor plus three G-protein chains) instead of the
+            // receptor. The axis of that is not the receptor's, so the ECD landed
+            // wherever it happened to fall.
+            wrapper.orientNTerminusUp(t.family || null);
+            note.textContent = "Drag to rotate, scroll to zoom. Coloured by chain. "
+                             + "Opens with the receptor upright.";
             return;
           }
           // The interaction pane opens on the pocket and turns, which is the
@@ -763,10 +777,15 @@ var BoltzExplorer = (function () {
       if (which === "traces") {
         var rmsd = document.createElement("span");
         rmsd.className = "md-overlay-rmsd";
-        rmsd.textContent = row.rmsd === null || row.rmsd === undefined
-          ? "\u2014"
-          : row.rmsd.toFixed(2) + " \u00c5";
-        rmsd.title = row.rmsd === null
+        var isReference = row.id === payload.reference;
+        rmsd.textContent = isReference
+          ? "reference"
+          : (row.rmsd === null || row.rmsd === undefined
+             ? "\u2014" : row.rmsd.toFixed(2) + " \u00c5");
+        if (isReference) rmsd.classList.add("md-overlay-reference");
+        rmsd.title = isReference
+          ? "Every other RMSD in this list is measured against this structure."
+          : row.rmsd === null
           ? "Too little in common with the reference to superpose."
           : "RMSD over the " + (row.shared || 0) + " residues drawn, of "
             + row.matched + " this target pairs with the reference";
@@ -801,6 +820,11 @@ var BoltzExplorer = (function () {
         } else {
           wrapper.frameAll();
         }
+        // Both panes, and with the axis the server computed from the reference's full
+        // chain. Deriving it here would use the drawn traces, which are the shared
+        // core only -- no ECD in them to stand up. The ligand pane gets it too: its
+        // ligands are in the same frame, so the two pictures agree.
+        wrapper.orientUp(payload.up);
       });
     });
   }
@@ -1067,6 +1091,7 @@ var BoltzExplorer = (function () {
     });
 
     pocketSpread = spread;
+    pocketUpAxis = payload.up || null;
     pocketRows = rows;
     wirePocketTable(rows);
 
@@ -1107,6 +1132,33 @@ var BoltzExplorer = (function () {
     var wanted = (spread && spread.strays.length && spread.core.length)
       ? spread.core : rows;
     wrapper.frameExtras(wanted.map(function (r) { return "lig:" + r.id; }));
+    // Upright, like the other panes, using the campaign axis rather than one derived
+    // from the core-only traces this pane draws.
+    wrapper.orientUp(pocketUpAxis);
+  }
+
+  /* Collapsible column groups in the report's summary table.
+
+     The report writes this behaviour into its own markup, and reports.py strips every
+     script from an upload -- so the classes and data attributes arrive here intact and
+     nothing is listening to them. This is that listener. Delegated from the document
+     because the panel is injected after load. */
+  function wireColumnGroups() {
+    document.addEventListener("click", function (event) {
+      var th = event.target.closest ? event.target.closest("th.ft-collapsible") : null;
+      if (!th) return;
+      var table = th.closest("table");
+      if (!table) return;
+      var group = th.getAttribute("data-group");
+      var open = th.classList.toggle("ft-open");
+      var caret = th.querySelector(".ft-caret");
+      if (caret) caret.innerHTML = open ? "\u25be" : "\u25b8";
+      Array.prototype.forEach.call(
+        table.querySelectorAll("[data-group='" + group + "'].ft-collapsed"),
+        function (cell) { cell.classList.toggle("ft-shown", open); });
+      // The span follows the columns, or the header row stops lining up with the body.
+      th.colSpan = open ? parseInt(th.getAttribute("data-full-span"), 10) || 1 : 1;
+    });
   }
 
   // ---- predicted against experimental, one small viewer per pair ----------
@@ -1125,6 +1177,10 @@ var BoltzExplorer = (function () {
      as their tile scrolls into view and disposed least-recently-seen-first. A
      campaign with thirty comparisons costs the same as one with four. */
   var POSE_VIEWER_BUDGET = 4;
+
+  //: The ECD-up axis for this campaign, from overlay.json. Stashed because the
+  //: pockets pane re-frames on every row click and has to re-apply it.
+  var pocketUpAxis = null;
 
   var poseTiles = {};        // stem -> { host, wrapper, promise, note }
   var poseLive = [];         // stems with a live viewer, least recent first
@@ -1722,6 +1778,7 @@ var BoltzExplorer = (function () {
     wireSequence();
 
     trackHeaderHeight();
+    wireColumnGroups();
     loadOverlays();
     posePairsPane();
 
@@ -2177,9 +2234,15 @@ var BoltzExplorer = (function () {
   //: Which motifs belong to which of the two per-motif panels. A GPCR's loops
   //: move on a scale that hides what the helices do -- an ICL2 shifting 18A puts
   //: a 2A change in TM6 flat against the axis -- so they are drawn apart.
+  //: Matches TM6 and tm1, and also 7tm_2 -- Pfam's name for a class B GPCR's whole
+  //: seven-transmembrane bundle, which is what a Pfam-annotated campaign gets instead
+  //: of per-helix motifs. `indexOf("TM") === 0` missed it, so every bar landed in
+  //: Loops and the Transmembrane panel rendered empty with nothing logged anywhere.
+  var TM_MOTIF = /(?:^|[^A-Z])(?:\d*TM\d*(?:$|[^A-Z])|TRANSMEMBRANE)/;
+
   function motifClass(name) {
     var label = String(name || "").toUpperCase();
-    if (label.indexOf("TM") === 0) return "tm";
+    if (TM_MOTIF.test(label)) return "tm";
     return "loop";       // ICL, ECL, H8 and its loop: everything that is not a helix crossing
   }
 
@@ -2190,6 +2253,7 @@ var BoltzExplorer = (function () {
     var loops = document.getElementById("chart-sse-loops");
     var tm = document.getElementById("chart-sse-tm");
     if (!loops || !tm) return false;
+    var drawn = {};
 
     ["loop", "tm"].forEach(function (kind) {
       var host = kind === "loop" ? loops : tm;
@@ -2209,7 +2273,18 @@ var BoltzExplorer = (function () {
         copy.showlegend = kind === "loop";
         return copy;
       }).filter(function (trace) { return trace.x.length; });
-      if (!traces.length) return;
+      if (!traces.length) {
+        // A campaign whose motifs are all one class -- a Pfam-annotated receptor
+        // returns the single `7tm_2` bundle and nothing else -- would otherwise get
+        // a labelled empty box next to a real chart, which reads as a broken plot
+        // rather than as "there are none of these". Hide the empty half and let the
+        // other take the full width.
+        var empty = host.parentNode;
+        if (empty) empty.hidden = true;
+        drawn[kind] = false;
+        return;
+      }
+      drawn[kind] = true;
       var layout = JSON.parse(JSON.stringify(spec.layout || {}));
       layout.showlegend = kind === "loop";
       // The report pins the category list so every chart shares one x ordering.
@@ -2225,6 +2300,21 @@ var BoltzExplorer = (function () {
       drawSpec(clone, host);
       extraSpecs.push(clone);
     });
+
+    // With one half hidden the grid would still reserve its column, leaving the
+    // surviving chart squeezed into half a card next to white space.
+    var grid = loops.closest ? loops.closest(".md-motif-grid") : null;
+    if (grid) grid.classList.toggle("md-motif-grid-single", !(drawn.loop && drawn.tm));
+    // The legend lives on the loops half; if that half is gone it has to move, or
+    // the only chart on screen has no key to its colours.
+    if (!drawn.loop && drawn.tm) {
+      var spec2 = extraSpecs[extraSpecs.length - 1];
+      if (spec2 && spec2.layout) {
+        spec2.layout.showlegend = true;
+        (spec2.data || []).forEach(function (trace) { trace.showlegend = true; });
+        drawSpec(spec2, tm);
+      }
+    }
     return true;
   }
 
@@ -2255,9 +2345,12 @@ var BoltzExplorer = (function () {
     try {
       normaliseSpec(spec, host);
       Plotly.newPlot(host, spec.data, spec.layout, spec.config);
-      // The report's own confidence-against-affinity scatter is the one kept, so
-      // it takes over the job of opening a target.
-      if (spec.id === "chart-scatter") wireScatterClicks(host);
+      // Both scatters open a target: they plot the same points against different
+      // axes, and a point being clickable on one chart and inert on the other is
+      // the kind of inconsistency a reader blames on themselves.
+      if (spec.id === "chart-scatter" || spec.id === "chart-pic50-binder") {
+        wireScatterClicks(host);
+      }
     } catch (err) {
       host.innerHTML = '<p class="md-hint">This chart could not be drawn.</p>';
     }

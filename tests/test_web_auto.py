@@ -923,3 +923,70 @@ def test_a_campaign_with_no_comparisons_serves_an_empty_list(client, tmp_path, p
     token = _pose_token(client, stripped)
     payload = client.get(f"/auto/analysis/{token}/pose-pairs.json").get_json()
     assert payload == {"pairs": []}
+
+
+# ===========================================================================
+#  Run numbers, pockets, and the panel the report now draws for itself
+# ===========================================================================
+
+def test_a_matrix_campaigns_predictions_are_told_apart_by_run_number(client, packed_bmz):
+    """Display names collide without it.
+
+    A pocket-constrained prediction and its unconstrained baseline share protein,
+    partners and ligand, so both render as the same `{protein}_{partners}_{ligand}`
+    string in every chart, legend and picker. The run number is the only thing that
+    separates them, which is why it is a column rather than a decoration.
+    """
+    from boltzmaker_web import results as bmz
+    import io, zipfile
+    response = client.post(
+        "/auto/analysis",
+        data={"results_file": (io.BytesIO(packed_bmz.read_bytes()), "r.bmz")},
+        content_type="multipart/form-data")
+    html = response.data.decode()
+    assert 'data-sort="run"' in html and 'data-sort="pocket"' in html
+
+
+def test_the_reports_own_pose_pane_is_not_shown_twice(client):
+    """The report draws its own pair grid now, and scripts are stripped from an upload.
+
+    Left in place that copy renders as dead text -- headings, RMSDs, and Spin/Reset
+    buttons that do nothing -- directly above this page's live Mol* version, so the
+    reader sees the same panel twice and only the lower one works.
+    """
+    from boltzmaker_web import reports
+
+    panel = {
+        "title": "Ligand pose vs experiment",
+        "html": ("<table><tr><td>real measurement</td></tr></table>"
+                 "<div class='pose-pane'><h3>Predicted against experimental</h3>"
+                 "<div class='pose-row'><div class='pose-tile'>"
+                 "<div class='pose-tile-viewer' id='pose-X'></div>"
+                 "<p class='pose-tile-note'>Grey: 7E14 V6G. Red: predicted.</p>"
+                 "</div></div></div>"
+                 "<p>trailing content that must survive</p>"),
+        "kind": "table",
+    }
+    out = reports.rebuild_panels([panel])[0]["html"]
+    assert "real measurement" in out, "the table is the report's own measurement"
+    assert "trailing content that must survive" in out, "only the pane is removed"
+    # The report's own markup, gone. Not asserted on the heading text: this page's
+    # own viewer uses the same words, which is the point -- it replaces it.
+    for marker in ("pose-tile-note", "pose-tile-viewer", "pose-row"):
+        assert marker not in out, marker
+    assert "md-pose-pane" in out, "this page's own pane survives -- it is not the same class"
+    assert 'id="pose-grid"' in out, "this page's own viewer is appended"
+
+
+def test_stripping_the_pose_pane_counts_nesting_rather_than_matching_a_regex(client):
+    """A lazy `.*?</div>` stops at the first closing tag, several levels inside."""
+    from boltzmaker_web import reports
+    html = ("<div class='pose-pane'><div><div>deep</div></div></div><p>after</p>")
+    assert reports._strip_pose_pane(html) == "<p>after</p>"
+
+
+def test_the_stripper_does_not_eat_this_pages_own_pane(client):
+    """`md-pose-pane` contains `pose-pane`; a substring match would delete both."""
+    from boltzmaker_web import reports
+    html = "<div class='md-detail-pane md-pose-pane'><div>keep me</div></div>"
+    assert reports._strip_pose_pane(html) == html

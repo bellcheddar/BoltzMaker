@@ -164,6 +164,13 @@ class Target:
     ligand_id: str
     ligand_smiles: str
     ligand_role: str
+    #: 1-based generation order, which is the order the campaign ran. Carried as a
+    #: column of its own because a matrix campaign's display names are otherwise
+    #: ambiguous -- the pocket-constrained run and its baseline share a protein,
+    #: partners and ligand, so only the number tells them apart.
+    run: object = None
+    #: The pocket code this prediction was run against, or "Unc" for unconstrained.
+    pocket: str = ""
     flags: list[str] = field(default_factory=list)
     note: str = ""
     confidence: float = None
@@ -477,6 +484,9 @@ def load(root: Path) -> Results:
         targets.append(Target(
             target_id=target_id,
             display_name=(row.get("display_name") or target_id).strip(),
+            # int, not float: this is an ordinal and "Run 3.0" is not a thing.
+            run=(int(_num(row.get("run"))) if _num(row.get("run")) is not None else None),
+            pocket=(row.get("pocket") or "").strip(),
             family_id=(row.get("family_id") or "").strip(),
             family_group=(row.get("family_group") or "").strip(),
             ligand_id=(row.get("ligand_id") or "").strip(),
@@ -624,6 +634,7 @@ def to_json(results: Results) -> str:
         "targets": [
             {
                 "id": t.target_id, "name": t.display_name, "family": t.family_id,
+                "run": t.run, "pocket": t.pocket,
                 "group": t.family_group, "ligand": t.ligand_id, "smiles": t.ligand_smiles,
                 "role": t.ligand_role, "flags": t.flags, "note": t.note,
                 "confidence": t.confidence, "ptm": t.ptm, "iptm": t.iptm,

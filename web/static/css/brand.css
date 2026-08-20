@@ -284,7 +284,94 @@ img, canvas { max-width: 100%; height: auto; }
   color: var(--md-text); font-weight: 700; font-size: 15px; line-height: 1;
 }
 .summary-legend svg { vertical-align: middle; }
-.summary-table-footer { font-size: 12px; color: var(--md-text-muted); }
+/* The table above scrolls horizontally and its scrollbar is drawn at the bottom
+   edge of the scroll box, which is this footer's top edge -- so the bar was laid
+   straight through the "confidence" legend row. The gap is the scrollbar's height
+   plus a little, and it belongs to the footer rather than the table because the
+   table's own padding would move the bar with it. */
+/* The scrollbar is drawn along the bottom edge of the scrolling box and the legend
+   is the last thing inside it, so the bar was laid through the "confidence" row. The
+   gap goes BELOW the legend; padding above it only moved the text into the bar. */
+.summary-table-footer { font-size: 12px; color: var(--md-text-muted); padding-bottom: 18px; }
+
+/* Collapsed columns are hidden outright rather than narrowed: a zero-width cell
+   still draws its borders and leaves a ladder of hairlines across the table. */
+.md-report-panel .ft-collapsed { display: none; }
+.md-report-panel .ft-collapsed.ft-shown { display: table-cell; }
+.md-report-panel .ft-collapsible { cursor: pointer; user-select: none; }
+.md-report-panel .ft-collapsible:hover { background: var(--md-primary); color: #fff; }
+.md-report-panel .ft-caret { font-size: 10px; opacity: 0.8; }
+.md-report-panel .ft-count { font-weight: 400; opacity: 0.7; }
+
+/* The predictions table fits its card instead of scrolling sideways. Nine columns of
+   identifiers and two-decimal numbers do fit; what did not was the Prediction name,
+   a single unbroken token that set the width on its own. It truncates, keeps its
+   full text in a tooltip, and the numeric columns size to their content. */
+#target-table { table-layout: fixed; width: 100%; }
+#target-table th, #target-table td { padding: 5px 6px; font-size: 12px; }
+/* Headers wrap here, unlike every other data table on the page. `nowrap` plus the
+   sort indicator made "Confidence" and "Interactions" wider than their fixed-layout
+   cells, and content that overflows a fixed cell still counts toward scrollWidth --
+   the table box was 100% and the content 8px past it, which is a scrollbar for
+   nothing. Two short lines in a header costs less than a sideways scroll. */
+/* One line per header, arrow included. Letting them wrap put "Confidence" and
+   "Interactions" on one line and their sort arrow alone on the next, which is what
+   made the header row look broken. The columns below are widened to fit instead. */
+#target-table th { white-space: nowrap; }
+#target-table td.num { white-space: nowrap; }
+/* Under `table-layout: fixed` the FIRST ROW decides every column width -- a width on
+   a body cell is ignored. Setting them on the header is the difference between the
+   table fitting and it overflowing by 80px. Prediction is left unsized so it takes
+   whatever is left, and truncates. */
+#target-table thead th:nth-child(1) { width: 52px; }   /* Run        */
+#target-table thead th:nth-child(3) { width: 84px; }   /* Protein    */
+#target-table thead th:nth-child(4) { width: 74px; }   /* Ligand     */
+#target-table thead th:nth-child(5) { width: 74px; }   /* Pocket     */
+#target-table thead th:nth-child(6) { width: 104px; }   /* Confidence */
+#target-table thead th:nth-child(7) { width: 72px; }   /* pIC50      */
+#target-table thead th:nth-child(8) { width: 112px; }   /* Interactions */
+#target-table thead th:nth-child(9) { width: 122px; }  /* Flags      */
+/* Flag pills wrap, both between pills and inside one. "low confidence strong
+   affinity" is a single unbroken pill 78px wider than its column, and one cell
+   overflowing is all it takes to give the whole table a horizontal scrollbar. */
+#target-table td:nth-child(9) { white-space: normal; }
+#target-table td:nth-child(9) .md-flag {
+  display: inline-block; white-space: normal; overflow-wrap: anywhere; max-width: 100%;
+}
+#target-table td:nth-child(2) {
+  max-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.md-table-scroll { overflow-x: auto; }
+
+/* Field and Value hold short scannable strings; only Details is genuinely long.
+   `.md-report-panel td` sets `overflow-wrap: anywhere` for the wide tables, which
+   made these two wrap mid-word in a card with room to spare. */
+.md-report-panel table.campaign-summary { table-layout: auto; }
+.md-report-panel table.campaign-summary th:nth-child(-n+2),
+.md-report-panel table.campaign-summary td:nth-child(-n+2) {
+  white-space: nowrap; overflow-wrap: normal; width: 1%;
+}
+.md-report-panel table.campaign-summary th:nth-child(3),
+.md-report-panel table.campaign-summary td:nth-child(3) {
+  white-space: normal; overflow-wrap: anywhere; width: auto;
+}
+
+/* The campaign's two heatmaps, side by side. Defined here and not only in the
+   report's own stylesheet: that one is stripped from an upload, so a rule that
+   lives solely there styles the offline file and nothing on this page. */
+.heatmap-pair-grid { display: grid; gap: 18px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.heatmap-half { min-width: 0; }
+.heatmap-half .md-sub { margin: 0 0 6px; }
+.heatmap-pair-grid { align-items: start; }
+/* One shared plot box per half, so the two are the same size and start on the same
+   line. The image is contained rather than stretched: a one-family heatmap is a wide
+   letterbox and scaling it to fill would distort the cells. */
+/* Both halves are Plotly now and size themselves, so the box only has to stop being
+   a flex container that would squash them. The fixed 360px here was clipping a chart
+   that asks for more, which is the opposite of the alignment it was added for. */
+.heatmap-half .heatmap-body { min-width: 0; }
+.heatmap-half .heatmap-body > div { width: 100%; }
+.heatmap-half .md-report-plot { min-height: 0; }
 
 /* ---- ligand structures ---- */
 /* The report styles these classes in its own <style>, which is stripped along
@@ -562,7 +649,14 @@ tr.md-check-na .md-check-fail { color: var(--md-text-muted); }
 .md-fingerprint-cell .md-sub { margin: 0 0 4px; }
 
 /* ---- the two campaign-wide overlay panes ---- */
-.md-overlay-grid { margin-top: 16px; }
+.md-overlay-grid { margin-top: 16px; align-items: stretch; }
+/* Both panes the same height and their viewers the same height, so the two pictures
+   are directly comparable and the cards end level. The lists below them differ in
+   length -- one pane lists ligands, the other every target -- so the list scrolls
+   inside its own box rather than making one card taller than the other. */
+.md-overlay-grid .md-detail-pane { display: flex; flex-direction: column; }
+.md-overlay-grid .md-viewer { height: 380px; min-height: 380px; flex: none; }
+.md-overlay-grid .md-overlay-list { flex: 1 1 auto; max-height: 200px; }
 .md-overlay-list {
   margin-top: 10px; max-height: 190px; overflow-y: auto;
   display: flex; flex-direction: column; gap: 2px;
@@ -656,6 +750,8 @@ tr.md-check-na .md-check-fail { color: var(--md-text-muted); }
 
 /* The per-motif RMSD, as two charts sharing one legend. */
 .md-motif-grid { display: grid; gap: 12px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+/* Only one motif class present: the surviving chart takes the whole card. */
+.md-motif-grid.md-motif-grid-single { grid-template-columns: 1fr; }
 .md-motif-grid .md-sub { margin: 0 0 4px; }
 
 /* The header is sticky, so scrolling a panel to the top of the viewport parks it
@@ -707,6 +803,7 @@ tr.md-check-na .md-check-fail { color: var(--md-text-muted); }
   .md-viewer { min-height: 260px; }
   .md-detail-select { font-size: 15px; }
   .md-fingerprint-grid, .md-motif-grid { grid-template-columns: 1fr; }
+  .heatmap-pair-grid { grid-template-columns: 1fr; }
   .md-pose-row { grid-template-columns: 1fr; }
   .md-seq-tooltip { white-space: normal; max-width: 240px; }
   .md-mode-card { padding: 18px; }

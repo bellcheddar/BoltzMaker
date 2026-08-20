@@ -487,6 +487,130 @@
      axes cross is a fifth of the frame and sits over the molecule the tile exists to
      show. Set through canvas3d props because it is drawn into the WebGL scene, not
      into the DOM, so no amount of CSS reaches it. */
+  /* Point the receptor's N-terminal end up the screen.
+
+     For a class B GPCR that puts the extracellular domain on top and the
+     transmembrane bundle below it, which is how these receptors are always drawn and
+     how the membrane would sit. Mol* otherwise frames whatever orientation the
+     coordinates happened to arrive in, so the same receptor faced a different way in
+     every campaign and the two overlay panes disagreed with each other.
+
+     Defined from the structure rather than as a fixed rotation, because a prediction
+     has no canonical frame: "up" is the direction from the centroid of the C-terminal
+     bulk to the centroid of the N-terminal quarter. That is the ECD for a class B
+     GPCR and is at worst arbitrary-but-stable for anything else.
+  */
+  function chainSpan(structure, chainId) {
+    // Residue numbers and CA-ish positions for one chain, in sequence order.
+    var points = [];
+    structure.units.forEach(function (unit) {
+      var hierarchy = unit.model.atomicHierarchy;
+      if (!hierarchy || !hierarchy.residueAtomSegments) return;
+      var conformation = unit.conformation;
+      for (var i = 0; i < unit.elements.length; i++) {
+        var element = unit.elements[i];
+        if (chainId) {
+          var chainIndex = hierarchy.chainAtomSegments.index[element];
+          if (hierarchy.chains.auth_asym_id.value(chainIndex) !== chainId) continue;
+        }
+        var residueIndex = hierarchy.residueAtomSegments.index[element];
+        points.push({
+          seq: hierarchy.residues.auth_seq_id.value(residueIndex),
+          x: conformation.x(element), y: conformation.y(element), z: conformation.z(element),
+        });
+      }
+    });
+    return points;
+  }
+
+  function centroidOf(points) {
+    var n = points.length, x = 0, y = 0, z = 0;
+    for (var i = 0; i < n; i++) { x += points[i].x; y += points[i].y; z += points[i].z; }
+    return n ? [x / n, y / n, z / n] : null;
+  }
+
+  /* Point a given world-space vector up the screen.
+
+     Split out of orientNTerminusUp because the overlay panes cannot derive the axis
+     from what they draw: their traces are the shared core the targets agree on, which
+     on a class B GPCR excludes the extracellular domain entirely (measured: residues
+     148-420, nothing below 140). The server sends the axis computed from the
+     reference's full chain instead, and every overlay file is already in that frame.
+  */
+  Wrapper.prototype.orientUp = function (up) {
+    if (!up || up.length !== 3 || !this.plugin.canvas3d) return this;
+    var length = Math.sqrt(up[0] * up[0] + up[1] * up[1] + up[2] * up[2]);
+    if (!length || !isFinite(length)) return this;
+    return this._applyUp([up[0] / length, up[1] / length, up[2] / length]);
+  };
+
+  Wrapper.prototype.orientNTerminusUp = function (chainId) {
+    var data = this.data();
+    if (!data) {
+      // The overlay panes hold only extras, so there is no "the" structure; the first
+      // one loaded stands in, and they are superposed on each other anyway.
+      var names = Object.keys(this.extras);
+      for (var i = 0; i < names.length && !data; i++) {
+        var entry = this.extras[names[i]];
+        data = entry && entry.cell && entry.cell.obj && entry.cell.obj.data;
+      }
+    }
+    if (!data || !data.units || !this.plugin.canvas3d) return this;
+
+    var points = chainSpan(data, chainId);
+    if (points.length < 20 && chainId) points = chainSpan(data, null);
+    if (points.length < 20) return this;
+    points.sort(function (a, b) { return a.seq - b.seq; });
+
+    var head = centroidOf(points.slice(0, Math.max(1, Math.floor(points.length * 0.25))));
+    var tail = centroidOf(points.slice(Math.floor(points.length * 0.5)));
+    if (!head || !tail) return this;
+    var up = [head[0] - tail[0], head[1] - tail[1], head[2] - tail[2]];
+    var length = Math.sqrt(up[0] * up[0] + up[1] * up[1] + up[2] * up[2]);
+    if (!length || !isFinite(length)) return this;
+    up = [up[0] / length, up[1] / length, up[2] / length];
+
+    return this._applyUp(up);
+  };
+
+  Wrapper.prototype._applyUp = function (up) {
+    var camera = this.plugin.canvas3d.camera;
+    var snapshot = camera.getSnapshot ? camera.getSnapshot() : camera.state;
+    var target = snapshot.target, position = snapshot.position;
+    var view = [position[0] - target[0], position[1] - target[1], position[2] - target[2]];
+    var distance = Math.sqrt(view[0] * view[0] + view[1] * view[1] + view[2] * view[2]) || 1;
+
+    // Look at the molecule side-on: strip the up component out of the current view
+    // direction so the camera sits level with the axis rather than down it, which
+    // would show the receptor end-on with the ECD hidden behind the bundle.
+    var dot = view[0] * up[0] + view[1] * up[1] + view[2] * up[2];
+    var side = [view[0] - dot * up[0], view[1] - dot * up[1], view[2] - dot * up[2]];
+    var sideLength = Math.sqrt(side[0] * side[0] + side[1] * side[1] + side[2] * side[2]);
+    if (sideLength < 1e-3) {
+      // The view was straight down the axis, so any perpendicular will do.
+      side = Math.abs(up[0]) < 0.9 ? [1, 0, 0] : [0, 1, 0];
+      dot = side[0] * up[0] + side[1] * up[1] + side[2] * up[2];
+      side = [side[0] - dot * up[0], side[1] - dot * up[1], side[2] - dot * up[2]];
+      sideLength = Math.sqrt(side[0] * side[0] + side[1] * side[1] + side[2] * side[2]);
+    }
+    side = [side[0] / sideLength * distance, side[1] / sideLength * distance,
+            side[2] / sideLength * distance];
+
+    // `camera.setState`, not `managers.camera.setSnapshot`: the manager applies
+    // position and target and silently drops `up`, so the molecule moved and the
+    // camera stayed level -- measured, up came back [0,1,0] against a computed axis
+    // of [0.759, 0.538, 0.367]. Vec3s here are Float32Array, and gl-matrix writes
+    // through them component-wise, so the arrays are converted rather than passed raw.
+    var vec = function (a) { return new Float32Array([a[0], a[1], a[2]]); };
+    camera.setState({
+      target: vec(target),
+      position: vec([target[0] + side[0], target[1] + side[1], target[2] + side[2]]),
+      up: vec(up),
+    }, 0);
+    this.plugin.canvas3d.requestDraw();
+    return this;
+  };
+
   Wrapper.prototype.hideAxes = function () {
     if (!this.plugin.canvas3d) return this;
     this.plugin.canvas3d.setProps({

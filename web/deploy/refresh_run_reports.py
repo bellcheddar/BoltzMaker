@@ -154,8 +154,13 @@ def refresh(html: str, bm, campaign, df) -> tuple:
         # Only the <table> is regenerated. The card also holds the CSV download links
         # and the affinity/confidence legend, which are not derived from the CSV and
         # would be lost by rebuilding the card.
-        new_card, n = re.subn(r"<table class='full-table'>.*?</table>",
-                              bm._build_full_table_html(df), card, count=1, flags=re.S)
+        # The trailing <script> is part of what _build_full_table_html returns (the
+        # column-group collapse handler), so it has to be part of what gets replaced.
+        # Matching the table alone appended a second copy of the script on every
+        # refresh, and made this step report a change every time it ran.
+        new_card, n = re.subn(
+            r"<table class='full-table'>.*?</table>(?:\s*<script>.*?</script>)?",
+            lambda _m: bm._build_full_table_html(df), card, count=1, flags=re.S)
         if n:
             html = html[:span[0]] + new_card + html[span[1]:]
             changed.append("summary table re-ranked and regrouped")

@@ -284,9 +284,27 @@ def test_the_overlay_structures_load_one_at_a_time():
 # --- the charts this page rebuilds --------------------------------------------
 
 def test_the_motif_split_puts_only_helices_in_the_transmembrane_panel():
+    """Asserts what the classifier DOES, not how it is written.
+
+    The previous version of this test pinned the implementation string
+    `indexOf("TM") === 0`, which is precisely the bug: a Pfam-annotated campaign
+    names its whole transmembrane bundle `7tm_2`, that test passed, and the
+    Transmembrane panel rendered empty on real data with nothing logged anywhere.
+    """
+    import re as _re
     js = _explorer_js()
-    fn = js[js.index("function motifClass"):js.index("/* The per-motif chart")]
-    assert 'indexOf("TM") === 0' in fn and '"tm"' in fn
+    fn = js[js.index("var TM_MOTIF"):js.index("/* The per-motif chart")]
+    pattern = _re.search(r"var TM_MOTIF = /(.+)/;", fn).group(1)
+    matcher = _re.compile(pattern)
+
+    def classify(name):
+        return "tm" if matcher.search(str(name).upper()) else "loop"
+
+    # 7tm_2 is Pfam's class B GPCR seven-transmembrane bundle -- the case that was wrong.
+    for name in ("7tm_2", "7TM_1", "TM6", "tm1", "Transmembrane_region"):
+        assert classify(name) == "tm", name
+    for name in ("ICL2", "ECL3", "H8", "Phage_lysozyme", "Rhodopsin"):
+        assert classify(name) == "loop", name
 
 
 def test_the_split_also_narrows_the_pinned_category_list():
@@ -587,3 +605,34 @@ def test_a_validation_error_names_the_section_it_is_about():
     assert "error_field=getattr(exc, 'field', '')" in src
     js = _wizard_js()
     assert "SECTIONS" in js and 'ligands: "ligand-rows"' in js
+
+
+def test_the_viewer_orients_with_the_cameras_own_state_not_the_manager():
+    """`managers.camera.setSnapshot` applies position and target and drops `up`.
+
+    Measured: against a computed receptor axis of [0.759, 0.538, 0.367] the camera
+    came back with up [0, 1, 0], so the molecule moved and the view stayed level --
+    which looks exactly like the orientation code never ran. `camera.setState` keeps
+    it, and the same probe then returned dot(axis, up) = 1.0000.
+    """
+    js = (WEB / "static" / "js" / "viewer.js").read_text()
+    fn = js[js.index("Wrapper.prototype.orientNTerminusUp"):js.index("Wrapper.prototype.hideAxes")]
+    import re as _re
+    # Comments stripped first: the one explaining this fix names the broken call, and
+    # a bare substring check would fail on the explanation rather than on the code.
+    code = _re.sub(r"//[^\n]*", "", fn)
+    assert "camera.setState(" in code
+    assert "managers.camera.setSnapshot" not in code
+    assert "Float32Array" in fn, "gl-matrix Vec3 is a Float32Array, not a plain array"
+
+
+def test_the_overall_structure_viewer_orients_on_the_receptor_chain():
+    """`t.family_id` is undefined in the payload -- the field is `t.family`.
+
+    The undefined lookup passed null, which orients on the whole complex (receptor
+    plus three G-protein chains) rather than the receptor, so the axis was not the
+    receptor's and the ECD landed wherever it fell.
+    """
+    js = (WEB / "static" / "js" / "explorer.js").read_text()
+    assert "orientNTerminusUp(t.family || null)" in js
+    assert "orientNTerminusUp(t.family_id" not in js

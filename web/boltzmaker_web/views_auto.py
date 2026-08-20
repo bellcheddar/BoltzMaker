@@ -933,7 +933,15 @@ def _overlay_payload(session: Path, loaded: bmz.Results) -> dict:
     # 1400A out sets the camera's bounding box and leaves every real pose sub-pixel,
     # which is what made two panes look empty on the first campaign it happened to.
     broken = {t.target_id for t in loaded.targets if "BROKEN_LIGAND_GEOMETRY" in (t.flags or [])}
-    for target in loaded.targets:
+
+    # A ligand-free (apo) companion first, then anything. The reference was simply the
+    # first target that had a structure, which is a holo prediction -- so the panel
+    # measured every prediction against one arbitrary prediction, and the row that
+    # happened to be first read 0.00 A against itself. Against the apo companion each
+    # number means "how far this holo pose moved the receptor from ligand-free", which
+    # is the comparison the panel is read for.
+    ordered_targets = sorted(loaded.targets, key=lambda t: bool(t.ligand_id))
+    for target in ordered_targets:
         path = structures / f"{target.target_id}.cif"
         if not path.is_file():
             continue
@@ -1051,12 +1059,51 @@ def _overlay_payload(session: Path, loaded: bmz.Results) -> dict:
     groups += [g for g in (pocket_finder.UNNAMED, pocket_finder.UNCONSTRAINED)
                if any(r["pocket"] == g for r in rows)]
     payload = {"reference": reference["id"] if reference else "",
-               "shared": len(core), "targets": rows, "pocket_order": groups}
+               "shared": len(core), "targets": rows, "pocket_order": groups,
+               "up": _ecd_up_axis(reference)}
     try:
         cache.write_text(json.dumps(payload))
     except OSError:
         pass
     return payload
+
+
+def _ecd_up_axis(reference: object) -> object:
+    """Which way is up for the overlay panes, in the reference structure's frame.
+
+    Computed from the reference's FULL receptor chain, not from the traces the panes
+    draw. Those traces are the shared core the targets agree on -- measured on this
+    campaign, residues 148 to 420 with nothing below 140 -- so the extracellular
+    domain is not in them at all, and an axis taken from what is drawn points along
+    the transmembrane bundle instead of standing the receptor up.
+
+    Every overlay file is transformed into the reference's frame, so one axis serves
+    all of them. Returns None when there is no reference, and the panes then leave
+    the camera alone.
+    """
+    if not reference:
+        return None
+    chain = reference.get("chain") or {}
+    # `chains_from_cif` returns parallel lists, not residue records: `numbers` and
+    # `ca`, where a residue with no coordinates has None in `ca`.
+    residues = [(number, point)
+                for number, point in zip(chain.get("numbers") or [], chain.get("ca") or [])
+                if number is not None and point]
+    if len(residues) < 40:
+        return None
+    residues.sort(key=lambda item: item[0])
+
+    def centroid(points):
+        n = len(points)
+        return [sum(p[i] for _, p in points) / n for i in range(3)]
+
+    head = centroid(residues[:max(1, len(residues) // 4)])
+    tail = centroid(residues[len(residues) // 2:])
+    axis = [head[i] - tail[i] for i in range(3)]
+    length = math.sqrt(sum(v * v for v in axis))
+    if not length:
+        return None
+    return [v / length for v in axis]
 
 
 def _package_bytes(session: Path, token: str, loaded: bmz.Results) -> bytes:
