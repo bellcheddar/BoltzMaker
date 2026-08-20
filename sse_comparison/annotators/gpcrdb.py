@@ -91,6 +91,48 @@ class GPCRdbClient:
         return {int(k): tuple(v) for k, v in result.items()} if result else None
 
 
+#: Kyte-Doolittle hydropathy. Used for a crude span count, not for a real topology
+#: prediction -- the question here is only "is this a polytopic membrane protein",
+#: and the answer is checked properly by GPCRdb straight afterwards.
+_KD = {"A": 1.8, "R": -4.5, "N": -3.5, "D": -3.5, "C": 2.5, "Q": -3.5, "E": -3.5,
+       "G": -0.4, "H": -3.2, "I": 4.5, "L": 3.8, "K": -3.9, "M": 1.9, "F": 2.8,
+       "P": -1.6, "S": -0.8, "T": -0.7, "W": -0.9, "Y": -1.3, "V": 4.2}
+
+#: A 19-residue window is about the length of a membrane-spanning helix.
+_TM_WINDOW = 19
+#: Mean hydropathy a window must reach to count. Tuned on the sequences these
+#: campaigns actually contain, where 1.4 separates cleanly with a wide margin:
+#: GLP1R 9 spans, GIPR 7, ADRB2 6, against 0 for GNAS, GNB1, GNG2 and T4 lysozyme.
+#: At 1.6 -- the first value tried -- GIPR scored 4 and would still have been
+#: excluded, which is the whole failure this replaces.
+_TM_HYDROPATHY = 1.4
+#: Seven for a GPCR, with two spare: a predicted receptor can bury one helix badly
+#: enough to miss the threshold, and this filter should not be the thing that
+#: decides. Below five it is not a 7TM protein at all.
+_MIN_TM_SPANS = 5
+
+
+def _count_membrane_spans(sequence: str) -> int:
+    """Non-overlapping hydrophobic windows long enough to cross a membrane."""
+    scores = [_KD.get(residue, 0.0) for residue in sequence.upper()]
+    if len(scores) < _TM_WINDOW:
+        return 0
+    spans, index = 0, 0
+    total = sum(scores[:_TM_WINDOW])
+    while index + _TM_WINDOW <= len(scores):
+        if total / _TM_WINDOW >= _TM_HYDROPATHY:
+            spans += 1
+            # Skip past this helix so one long hydrophobic stretch counts once.
+            index += _TM_WINDOW
+            if index + _TM_WINDOW > len(scores):
+                break
+            total = sum(scores[index:index + _TM_WINDOW])
+            continue
+        total += scores[index + _TM_WINDOW] - scores[index] if index + _TM_WINDOW < len(scores) else 0
+        index += 1
+    return spans
+
+
 class GPCRdbAnnotator(MotifAnnotator):
     family_type = "gpcr"
 
@@ -98,13 +140,26 @@ class GPCRdbAnnotator(MotifAnnotator):
         self.client = client or GPCRdbClient()
 
     def applies_to(self, sequence: str) -> bool:
-        # Cheap, network-free plausibility pre-filter for Family type: auto -- the real
-        # check happens in annotate(), which actually calls GPCRdb against a structure.
-        # Class-A GPCRs: ~250-600 residues, carry the DRY/ERY (end of TM3) and NPxxY
-        # (end of TM7) motifs.
-        if not (250 <= len(sequence) <= 600):
+        """Cheap, network-free plausibility pre-filter for `Family type: auto`.
+
+        Counts membrane-spanning stretches rather than looking for DRY and NPxxY.
+        Those two are **class A** signatures, and gating on them quietly excluded
+        every other class GPCRdb covers: GLP1R and GIPR are class B, have no NPxxY,
+        and so never reached the real check at all. The campaign fell through to the
+        Pfam fallback, which returns the single `7tm_2` domain -- one motif for the
+        whole seven-helix bundle, no loops, and nothing anywhere saying the receptor
+        had been annotated as a featureless blob.
+
+        The authoritative test is `annotate()`, which asks GPCRdb to assign generic
+        numbers to the actual structure and yields TM1-TM7, ICL1-3, ECL1-3 and H8.
+        This only has to be cheap and to reject soluble proteins, so a false positive
+        costs one request that returns nothing.
+        """
+        # Class B and C carry large extracellular domains (GLP1R 463, mGluR ~900), so
+        # the old 600-residue ceiling excluded them on length alone as well.
+        if not (250 <= len(sequence) <= 1200):
             return False
-        return bool(re.search(r"[DE]R[YFW]", sequence)) and bool(re.search(r"NP..Y", sequence))
+        return _count_membrane_spans(sequence) >= _MIN_TM_SPANS
 
     def annotate(self, sequence: str, pdb_id: object = None, structure_path: object = None,
                  name_hint: object = None) -> list:

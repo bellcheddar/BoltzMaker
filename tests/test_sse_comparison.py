@@ -596,3 +596,48 @@ def test_a_null_boundary_does_not_discard_the_usable_domains(adrb2_apo_path, adr
     names = {m.name for m in motifs}
     assert "7tm_2" in names, f"the usable domain was lost; got {names}"
     assert "G-gamma" not in names and "WD40_Gbeta" not in names
+
+
+# --- which annotator a receptor gets -------------------------------------------
+
+def test_a_class_b_receptor_reaches_the_gpcr_annotator():
+    """GLP1R and GIPR are class B: no NPxxY, so the old class-A gate excluded them.
+
+    The consequence was silent and total. `Family type: auto` fell through to the
+    Pfam fallback, which returns the single `7tm_2` domain -- one motif covering the
+    whole seven-helix bundle, no loops at all -- and the report then drew a per-motif
+    panel with one bar in it and called the bundle a loop. GPCRdb, asked properly,
+    returns TM1-TM7, H8, ICL1 and ECL2 for the same receptor.
+    """
+    from sse_comparison.annotators.gpcrdb import GPCRdbAnnotator
+
+    annotator = GPCRdbAnnotator.__new__(GPCRdbAnnotator)
+    glp1r = (
+        "MAGAPGPLRLALLLLGMVGRAGPRPQGATVSLWETVQKWREYRRQCQRSLTEDPPPATDLFCNRTFDEYACWPDGEPGS"
+        "FVNVSCPWYLPWASSVPQGHVYRFCTAEGLWLQKDNSSLPWRDLSECEESKRGERSSPEEQLLFLYIIYTVGYALSFSA"
+        "LVIASAILLGFRHLHCTRNYIHLNLFASFILRALSVFIKDAALKWMYSTAAQQHQWDGLLSYQDSLSCRLVFLLMQYCV"
+        "AANYYWLLVEGVYLYTLLAFSVLSEQWIFRLYVSIGWGVPLLFVVPWGIVKYLYEDEGCWTRNSNMNYWLIIRLPILFA"
+        "IGVNFLIFVRVICIVVSKLKANLMCKTDIKCRLAKSTLTLIPLLGTHEVIFAFVMDEHARGTLRFIKLFTELSFTSFQG"
+        "LMVAILYCFVNNEVQLEFRKSWERWRLEHLHIQRDSSMKPLKCPTSSLSSGATAGSSMYTATCQASCS")
+    assert "NP" not in glp1r or not __import__("re").search(r"NP..Y", glp1r), \
+        "the point of this test is that class B lacks the class-A signature"
+    assert GPCRdbAnnotator.applies_to(annotator, glp1r) is True
+
+
+def test_the_soluble_partners_alongside_a_receptor_are_still_rejected():
+    """A permissive filter is only safe if it still says no to the obvious cases.
+
+    These three are co-folded in the same campaigns as the receptors above, so if
+    the probe passed them the auto-detector would send a G-protein subunit to GPCRdb.
+    """
+    from sse_comparison.annotators.gpcrdb import GPCRdbAnnotator, _count_membrane_spans
+
+    annotator = GPCRdbAnnotator.__new__(GPCRdbAnnotator)
+    gnas = (
+        "MGCLGNSKTEDQRNEEKAQREANKKIEKQLQKDKQVYRATHRLLLLGAGESGKSTIVKQMRILHVNGFNGEGGEEDPQA"
+        "ARSNSDGEKATKVQDIKNNLKEAIETIVAAMSNLVPPVELANPENQFRVDYILSVMNVPDFDFPPEFYEHAKALWEDEG"
+        "VRACYERSNEYQLIDCAQYFLDKIDVIKQADYVPSDQDLLRCRVLTSGIFETKFQVDKVNFHMFDVGGQRDERRKWIQC"
+        "FNDVTAIIFVVASSSYNMVIREDNQTNRLQEALNLFKSIWNNRWLRTISVILFLNKQDLLAEKVLAGKSKIEDYFPEFA"
+        "RYTTPEDATPEPGEDPRVTRAKYFIRDEFLRISTASGDGRHYCYPHFTCAVDTENIRRVFNDCRDIIQRMHLRQYELL")
+    assert _count_membrane_spans(gnas) == 0
+    assert GPCRdbAnnotator.applies_to(annotator, gnas) is False

@@ -1277,3 +1277,37 @@ SMILES: CCO
             sweep = pocket
     assert named["max_distance"] == 4.0, "the named pocket honours the setting"
     assert sweep["max_distance"] == bm.CONFINE_DISTANCE_A == 8.0
+
+
+def test_the_two_widest_column_groups_start_collapsed(bm):
+    """Confidence and Interactions are most of the table's width and neither is what
+    it is opened to answer. Each keeps one column showing so the group is still
+    readable at a glance, and the header says how many are hidden."""
+    assert bm._COLLAPSED_GROUPS == {"Confidence": "confidence_score",
+                                    "Interactions": "plip_total_count"}
+
+
+def test_an_apo_row_says_apo_rather_than_not_applicable(bm):
+    """"Apo" says what the row is; "N/A" said only that a ligand id could not be
+    shown, which is the least interesting true thing about it."""
+    import pandas as _pd
+    df = _pd.DataFrame([
+        {"run": 1, "family_group": "RECP", "ligand_id": "LIG1", "pocket": "V6G",
+         "confidence_score": 0.8, "flags": ""},
+        {"run": 2, "family_group": "RECP", "ligand_id": None, "pocket": None,
+         "confidence_score": 0.7, "flags": ""},
+    ])
+    html = bm._build_full_table_html(df)
+    assert ">Apo<" in html, "the ligand cell names the row"
+    assert "no pocket applies" in html, "and the pocket cell says why it is empty"
+
+
+def test_the_pic50_cell_carries_no_ensemble_spread(bm):
+    """The spread of two ensemble sub-models is not a confidence interval, and it
+    doubled the width of the column. It stays a column of its own in the CSV."""
+    import pandas as _pd
+    df = _pd.DataFrame([{"run": 1, "family_group": "RECP", "ligand_id": "LIG1",
+                         "pocket": "Unc", "pIC50": 8.5, "pIC50_ensemble_std": 0.42,
+                         "flags": ""}])
+    html = bm._build_full_table_html(df)
+    assert "8.50" in html and "±" not in html and "0.42" not in html
