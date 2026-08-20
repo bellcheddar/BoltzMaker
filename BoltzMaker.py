@@ -1508,12 +1508,23 @@ def _build_yaml_doc(fam: ProteinFamily, lig: object, campaign: Campaign,
         # this protein" without choosing a site. Boltz's own semantics sum a penalty
         # over all contacts, which a whole chain could never satisfy -- see the
         # pocket-any patches.
+        # A sparse sweep of the receptor, using Boltz's own semantics: every contact
+        # contributes a penalty and they sum, so the pull is toward the receptor as a
+        # whole. Deliberately NOT `any` -- that unions the contacts into a soft-min,
+        # which is the right meaning ("be near the nearest one") and the wrong force:
+        # measured, it returned one contact's worth of gradient, 0.18-1.07, and a
+        # ligand fifty angstroms away on a G protein did not move at all.
+        #
+        # Every eighth residue gives ~58 contacts, the same order as the V6G pocket's
+        # 59, so the restraint sits in a force regime Boltz already handles well. It
+        # is not satisfiable in the sense of being within 8A of all of them -- it is
+        # directional, and the direction is "onto this protein".
+        stride = max(1, len(fam.sequence) // 58)
         constraints.append({"pocket": {
             "binder": lig.id,
-            "contacts": [[fam.id, i + 1] for i in range(len(fam.sequence))],
+            "contacts": [[fam.id, i + 1] for i in range(0, len(fam.sequence), stride)],
             "max_distance": campaign.settings.pocket_distance,
             "force": True,
-            "any": True,
         }})
     for atom1, atom2 in (fam.bond_constraints or []):
         constraints.append({"bond": {"atom1": atom1, "atom2": atom2}})
@@ -4245,6 +4256,36 @@ img, canvas { max-width: 100%; height: auto; }
 .md-side-viewer .md-3dmol-viewer, .md-side-image img { flex-shrink: 0; }
 .md-side-viewer p, .md-side-image p, .md-side-table-col p { margin-top: auto; }
 .md-3dmol-viewer { width: 100%; height: 260px; position: relative; background: #fff; border-radius: var(--md-radius); }
+/* ---- predicted against experimental, one small viewer per pair ---- */
+.pose-pane { margin-top: 18px; border-top: 1px solid var(--md-border); padding-top: 14px; }
+.pose-pane-title { font-size: 13px; margin: 0 0 4px; }
+.pose-group { font-size: 11px; font-weight: 600; letter-spacing: 0.05em; text-transform: uppercase;
+  color: var(--md-text-muted); margin: 16px 0 8px; }
+/* auto-fit rather than a fixed count: a pocket with one pair should not leave empty
+   columns, and one with six should wrap rather than shrink each frame to a stamp. */
+.pose-row { display: grid; gap: 14px; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); }
+.pose-tile { border: 1px solid var(--md-border); border-radius: var(--md-radius);
+  padding: 10px; background: var(--md-bg-alt); min-width: 0; }
+.pose-tile-head { display: flex; align-items: baseline; gap: 8px; margin-bottom: 6px; }
+.pose-tile-name { flex: 1; min-width: 0; font-size: 12px; font-weight: 600;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pose-tile-score { font-size: 12px; font-weight: 600; font-variant-numeric: tabular-nums; }
+/* An explicit height, not a min-height: these are grid cells with nothing to stretch
+   them, and a WebGL canvas in a zero-height box initialises to 0x0 and never resizes
+   when the box later grows. */
+.pose-tile-viewer { width: 100%; height: 220px; position: relative; background: #fff;
+  border: 1px dashed var(--md-border); border-radius: var(--md-radius);
+  display: flex; align-items: center; justify-content: center; }
+.pose-tile-viewer.pose-tile-drawn { border-style: solid; }
+.pose-tile-controls { display: flex; gap: 6px; margin-top: 8px; }
+.pose-tile-controls button, .pose-tile-draw { font: inherit; font-size: 11px; cursor: pointer;
+  padding: 3px 10px; border: 1px solid var(--md-primary); border-radius: 20px;
+  background: transparent; color: var(--md-primary); }
+.pose-tile-controls button:hover, .pose-tile-draw:hover { background: var(--md-primary); color: #fff; }
+.pose-tile-note { font-size: 11px; color: var(--md-text-muted); margin: 6px 0 0; }
+/* The one-column phone rule for .pose-row is in the mobile block at the END of this
+   stylesheet, not here: a media query carries no extra specificity, so any plain
+   rule written below it wins at every width. */
 table { border-collapse: collapse; font-family: 'Roboto Mono', monospace; font-size: 12px; width: 100%; max-width: 100%; }
 th, td { border: 1px solid var(--md-border); padding: 5px 9px; text-align: left; white-space: nowrap; }
 th { background: var(--md-bg-alt); font-weight: 600; position: sticky; top: 0; }
@@ -4317,6 +4358,7 @@ tr:nth-child(even) { background: var(--md-bg-alt); }
   .md-card { padding: 14px; }
   .md-chart-grid, .md-side-by-side, .md-side-by-side.md-side-3col { grid-template-columns: 1fr; }
   .lig-page { grid-template-columns: repeat(2, 1fr); }
+  .pose-row { grid-template-columns: 1fr; }
 }
 """
 
@@ -4587,6 +4629,20 @@ _SHIELD_SVG = ("<svg width='14' height='14' viewBox='0 0 24 24' fill='currentCol
                "xmlns='http://www.w3.org/2000/svg' aria-hidden='true'>"
                "<path d='M12 2 L20 5 V11 C20 16.5 16.5 20.8 12 22 C7.5 20.8 4 16.5 4 11 V5 Z'/></svg>")
 
+#: The pose panel's own mark: a molecule sitting inside a site. Distinct in shape
+#: from the shield (confidence) and the bullseye (affinity), because the three sit
+#: in the same table and a reader should be able to tell them apart at a glance
+#: without consulting the legend.
+_POSE_SVG = ("<svg width='14' height='14' viewBox='0 0 24 24' fill='none' "
+             "xmlns='http://www.w3.org/2000/svg' aria-hidden='true'>"
+             "<path d='M4 8 A8 8 0 0 0 4 16' stroke='currentColor' stroke-width='2' "
+             "stroke-linecap='round'/>"
+             "<path d='M20 8 A8 8 0 0 1 20 16' stroke='currentColor' stroke-width='2' "
+             "stroke-linecap='round'/>"
+             "<circle cx='9' cy='12' r='2.2' fill='currentColor'/>"
+             "<circle cx='15' cy='12' r='2.2' fill='currentColor'/>"
+             "<path d='M11.2 12 H12.8' stroke='currentColor' stroke-width='2'/></svg>")
+
 _TIER_GREEN = "#00d084"
 _TIER_AMBER = "#fcb900"
 _TIER_RED = "#d62728"
@@ -4756,6 +4812,260 @@ def write_summary_csv(df: pd.DataFrame, path: Path) -> None:
     export_df.to_csv(path, index=False)
 
 
+#: Pose agreement with an experimental ligand, in angstroms of symmetry-corrected
+#: RMSD after superposing on the receptor. 2A is the long-standing convention for
+#: "this reproduces the crystal pose"; beyond 5A the ligand is somewhere else in the
+#: site or the wrong way round. Measured on GLP1R+orforglipron against 7E14: 9.50A,
+#: which is the right pocket and the wrong orientation, and scored ligand_iptm 0.940
+#: while it was wrong -- which is exactly why this panel exists and why confidence
+#: cannot be used in its place.
+POSE_GOOD_RMSD = 2.0
+POSE_FAIR_RMSD = 5.0
+
+
+def _mmcif_atom_rows(path: Path):
+    """Yield atom_site rows as dicts, keyed by their mmCIF column names.
+
+    Columns are read from the loop header rather than assumed, because Boltz's
+    output and an RCSB download agree on the names and not on the order. Record
+    type comes from the first whitespace token: an mmCIF is not fixed-width, and
+    `line[:6]` yields "ATOM 2", which silently drops every protein atom while
+    HETATM matches by luck of being exactly six characters long.
+    """
+    try:
+        lines = path.read_text(errors="replace").splitlines()
+    except OSError:
+        return
+    cols = {}
+    for line in lines:
+        if line.startswith("_atom_site."):
+            cols[line.strip().split(".", 1)[1]] = len(cols)
+    if not cols:
+        return
+    width = max(cols.values())
+    for line in lines:
+        head = line.split(maxsplit=1)
+        if not head or head[0] not in ("ATOM", "HETATM"):
+            continue
+        parts = line.split()
+        if len(parts) <= width:
+            continue
+        row = {name: parts[i] for name, i in cols.items()}
+        row["_record"] = parts[0]
+        yield row
+
+
+def _reference_structures(campaign_dir: Path) -> dict:
+    """Ligand code -> the experimental file containing it.
+
+    Found by looking rather than by being told: a pocket is named after the ligand
+    it was derived from, so a reference file containing that ligand is the structure
+    the pocket came from. That saves threading a PDB id through the spec, and a
+    campaign whose references were fetched by hand still works.
+    """
+    found: dict = {}
+    root = campaign_dir / "reference"
+    if not root.is_dir():
+        return found
+    for path in sorted(root.glob("*.cif")):
+        for row in _mmcif_atom_rows(path):
+            if row["_record"] == "HETATM":
+                found.setdefault(row.get("label_comp_id", ""), path)
+    found.pop("HOH", None)
+    return found
+
+
+def _ligand_atoms(path: Path, chain: str = None, comp: str = None) -> list:
+    """(element, xyz) for a single ligand copy.
+
+    Restricted to one chain even when the caller only named a component, because a
+    crystal form with two copies in the asymmetric unit would otherwise return
+    double the atoms and be rejected downstream as an atom-count mismatch.
+    """
+    out, picked = [], None
+    for row in _mmcif_atom_rows(path):
+        if row["_record"] != "HETATM":
+            continue
+        if chain and row.get("auth_asym_id") != chain:
+            continue
+        if comp and row.get("label_comp_id") != comp:
+            continue
+        if picked is None:
+            picked = row.get("auth_asym_id")
+        elif row.get("auth_asym_id") != picked:
+            continue
+        try:
+            out.append((row["type_symbol"].capitalize(),
+                        [float(row["Cartn_x"]), float(row["Cartn_y"]),
+                         float(row["Cartn_z"])]))
+        except (KeyError, ValueError):
+            continue
+    return out
+
+
+#: How much of the numbering overlap must be the same residue before a reference is
+#: accepted as being of this protein. Measured on the GLP1R/GIPR campaign against
+#: 7E14 (a GLP1R structure): 0.90 for GLP1R, 0.11 for GIPR. The gap is wide enough
+#: that the exact cut hardly matters, and without one the panel cheerfully reports a
+#: GIPR prediction as disagreeing with a crystal structure of a different receptor.
+POSE_MIN_RECEPTOR_IDENTITY = 0.7
+
+
+def _receptor_superposition(pred_path: Path, ref_path: Path, receptor_id: str):
+    """Kabsch rotation putting the predicted receptor onto the experimental one.
+
+    Residues are matched on number, with the residue type required to agree, rather
+    than by aligning sequences: these are the same protein, so the numbering is the
+    reliable correspondence and an alignment is only a chance to be subtly wrong.
+
+    Each reference chain is tried separately and the best-matching one wins. Pooling
+    them would be quietly destructive -- a complex numbers its G-protein chains from 1
+    as well, so the receptor's own residues get overwritten by whichever chain is read
+    last, and the fit is then made partly against the wrong protein.
+
+    Returns (rotation, predicted centroid, reference centroid, residues matched,
+    identity), or None when nothing in the reference is this protein.
+    """
+    import numpy as np
+
+    def alpha_carbons(path, chain):
+        out: dict = {}
+        for row in _mmcif_atom_rows(path):
+            if row["_record"] != "ATOM" or row.get("label_atom_id") != "CA":
+                continue
+            if chain is not None and row.get("auth_asym_id") != chain:
+                continue
+            try:
+                out[int(row["auth_seq_id"])] = (
+                    row["label_comp_id"],
+                    [float(row["Cartn_x"]), float(row["Cartn_y"]),
+                     float(row["Cartn_z"])])
+            except (KeyError, ValueError):
+                continue
+        return out
+
+    pred = alpha_carbons(pred_path, receptor_id)
+    if not pred:
+        return None
+    chains = {row.get("auth_asym_id") for row in _mmcif_atom_rows(ref_path)
+              if row["_record"] == "ATOM"}
+
+    best = None
+    for chain in sorted(c for c in chains if c):
+        ref = alpha_carbons(ref_path, chain)
+        overlap = set(pred) & set(ref)
+        if not overlap:
+            continue
+        shared = [r for r in sorted(overlap) if pred[r][0] == ref[r][0]]
+        identity = len(shared) / len(overlap)
+        if len(shared) >= 30 and identity >= POSE_MIN_RECEPTOR_IDENTITY:
+            if best is None or len(shared) > len(best[2]):
+                best = (ref, identity, shared)
+    if best is None:
+        return None
+    ref, identity, shared = best
+
+    P = np.array([pred[r][1] for r in shared])
+    Q = np.array([ref[r][1] for r in shared])
+    pc, qc = P.mean(0), Q.mean(0)
+    U, _, Vt = np.linalg.svd((P - pc).T @ (Q - qc))
+    d = float(np.sign(np.linalg.det(Vt.T @ U.T)))
+    return Vt.T @ np.diag([1.0, 1.0, d]) @ U.T, pc, qc, len(shared), identity
+
+
+def _pose_vs_experimental(pred_path: Path, ref_path: Path, ref_comp: str,
+                          smiles: str, receptor_id: str, ligand_id: str) -> dict:
+    """Compare a docked ligand with the experimental one, graph-aware.
+
+    Two numbers, because they answer different questions. `pose` superposes on the
+    receptor and then measures the ligand where it sits -- did we reproduce the
+    binding mode. `shape` lets the two ligands be superposed onto each other freely
+    -- is the molecule's own conformation right, independently of where it ended up.
+    Measured on GLP1R+orforglipron against 7E14: 9.50A pose against 3.08A shape, so
+    the conformation was broadly right and the orientation was not. Reporting only
+    the first would have read as a broken ligand.
+
+    RDKit does the atom matching because a 65-atom drug has symmetry -- equivalent
+    methyls, flippable rings -- and pairing atoms by proximity instead silently
+    flatters a wrong pose.
+    """
+    try:
+        import numpy as np
+        from rdkit import Chem, RDLogger
+        from rdkit.Chem import AllChem, rdMolAlign
+        RDLogger.DisableLog("rdApp.*")
+    except ImportError:
+        return {"error": "RDKit is not installed"}
+
+    predicted = _ligand_atoms(pred_path, chain=ligand_id)
+    experimental = _ligand_atoms(ref_path, comp=ref_comp)
+    if not predicted:
+        return {"error": f"no ligand chain {ligand_id} in the prediction"}
+    if not experimental:
+        return {"error": f"no {ref_comp} in {ref_path.name}"}
+    if len(predicted) != len(experimental):
+        return {"error": f"{len(predicted)} predicted atoms vs "
+                         f"{len(experimental)} experimental"}
+
+    fit = _receptor_superposition(pred_path, ref_path, receptor_id)
+    if fit is None:
+        return {"error": f"{ref_path.stem.upper()} is not a structure of "
+                         f"{receptor_id}"}
+    rotation, pred_centre, ref_centre, matched, identity = fit
+
+    def pdb_block(atoms, transform=None):
+        rows = []
+        for i, (element, xyz) in enumerate(atoms, 1):
+            v = np.array(xyz)
+            if transform is not None:
+                v = (v - pred_centre) @ rotation.T + ref_centre
+            name = f"{element}{i}"[:4]
+            rows.append(f"HETATM{i:5d} {name:<4s} LIG A   1    "
+                        f"{v[0]:8.3f}{v[1]:8.3f}{v[2]:8.3f}  1.00  0.00"
+                        f"          {element:>2s}")
+        return "\n".join(rows) + "\nEND\n"
+
+    template = Chem.MolFromSmiles(smiles) if smiles else None
+    if template is None:
+        return {"error": "no usable SMILES for the ligand"}
+
+    def as_molecule(atoms, transform):
+        mol = Chem.MolFromPDBBlock(pdb_block(atoms, transform), removeHs=False,
+                                   sanitize=False, proximityBonding=True)
+        if mol is None:
+            return None
+        try:
+            return AllChem.AssignBondOrdersFromTemplate(template, mol)
+        except Exception:      # noqa: BLE001 -- a SMILES that will not map is not fatal
+            return None
+
+    pred_mol = as_molecule(predicted, rotation)
+    ref_mol = as_molecule(experimental, None)
+    if pred_mol is None or ref_mol is None:
+        return {"error": "could not match the ligand onto its SMILES"}
+    moved = (np.array([xyz for _e, xyz in predicted]) - pred_centre) @ rotation.T + ref_centre
+    centroid = float(np.linalg.norm(
+        moved.mean(0) - np.array([xyz for _e, xyz in experimental]).mean(0)))
+    try:
+        return {
+            "coordinates": {
+                "predicted": [(e, list(map(float, xyz)))
+                              for (e, _o), xyz in zip(predicted, moved)],
+                "experimental": [(e, list(xyz)) for e, xyz in experimental],
+            },
+            "site": centroid,
+            "pose": rdMolAlign.CalcRMS(pred_mol, ref_mol),
+            "shape": rdMolAlign.GetBestRMS(Chem.Mol(pred_mol), Chem.Mol(ref_mol)),
+            "reference": ref_path.stem.upper(),
+            "ligand_code": ref_comp,
+            "residues": matched,
+            "identity": identity,
+            "atoms": len(predicted),
+        }
+    except Exception as exc:   # noqa: BLE001
+        return {"error": f"RMSD failed: {exc}"}
+
+
 def _build_pockets_panel_html(campaign: Campaign) -> str:
     """What each pocket constraint was, and which ligands were run against it.
 
@@ -4810,6 +5120,417 @@ def _build_pockets_panel_html(campaign: Campaign) -> str:
     return (f"<div class='md-card table-card'><h2>Pockets</h2><p>{intro}</p>"
             f"<table class='full-table'><thead>{head}</thead>"
             f"<tbody>{''.join(rows)}</tbody></table></div>")
+
+
+def _pose_tier(value):
+    """Colour and wording for an angstrom distance, or None when unmeasured.
+
+    Same two thresholds for the site and the pose because 2 A is the convention for
+    "this reproduces the experiment" in both readings, and using different numbers
+    for two icons sitting side by side would invite the reader to compare them.
+    """
+    if value is None:
+        return None, "not measured"
+    if value < POSE_GOOD_RMSD:
+        return _TIER_GREEN, f"{value:.2f} A -- matches the experimental structure"
+    if value < POSE_FAIR_RMSD:
+        return _TIER_AMBER, f"{value:.2f} A -- close, but not reproduced"
+    return _TIER_RED, f"{value:.2f} A -- disagrees with the experimental structure"
+
+
+def _elements_of(smiles: str) -> dict:
+    """Heavy-atom element counts for a SMILES, or {} if RDKit cannot read it."""
+    try:
+        from rdkit import Chem, RDLogger
+        RDLogger.DisableLog("rdApp.*")
+    except ImportError:
+        return {}
+    mol = Chem.MolFromSmiles(smiles) if smiles else None
+    if mol is None:
+        return {}
+    counts: dict = {}
+    for atom in mol.GetAtoms():
+        counts[atom.GetSymbol()] = counts.get(atom.GetSymbol(), 0) + 1
+    return counts
+
+
+def _reference_ligand_for(lig, code, references: dict, campaign_dir: Path):
+    """Which experimental ligand this docked one should be compared against.
+
+    A pocket code names its own ligand, so when the target was constrained the answer
+    is already written down. Unconstrained targets are the interesting case -- the
+    baseline is exactly what you want to compare -- so the same molecule is found by
+    matching heavy-atom element composition against every ligand in the reference
+    files. Composition is used rather than atom count alone because C33H31FN6O2 and an
+    unrelated compound of the same size would otherwise be declared the same molecule,
+    and the bond-order match downstream would then fail with a confusing message
+    instead of this returning nothing.
+    """
+    wanted = _elements_of(getattr(lig, "smiles", "") or "")
+    if not wanted:
+        return None, None
+
+    def matches(comp, path):
+        seen: dict = {}
+        for element, _xyz in _ligand_atoms(path, comp=comp):
+            seen[element] = seen.get(element, 0) + 1
+        seen.pop("H", None)
+        return seen == wanted
+
+    # The code is checked, not trusted. In a matrix campaign every ligand is run
+    # against every named pocket, so `GLP1R_LSN1_V6G` is LSN1 placed in the site V6G
+    # was found in -- and comparing LSN1's pose with V6G's would be meaningless. The
+    # code only wins when the target's ligand really is that reference ligand.
+    if code and code in references and matches(code, references[code]):
+        return code, references[code]
+    for comp, path in references.items():
+        if matches(comp, path):
+            return comp, path
+    return None, None
+
+
+def _pose_comparisons(campaign: Campaign, campaign_dir: Path) -> tuple:
+    """Measure every target that has an experimental twin. Returns (results, errors).
+
+    Split out of the panel so the same measurement feeds the table, the pair files
+    the viewer draws, and the tests, rather than being recomputed three ways that
+    can disagree. Each result carries the superposed coordinates it was computed
+    from, so what is drawn is what was measured.
+    """
+    references = _reference_structures(campaign_dir)
+    if not references:
+        return [], set()
+
+    cif_dir = campaign_dir / "boltz_cif"
+    measured, errors = [], set()
+    for fam, lig, code in _expand_targets(campaign):
+        if lig is None:
+            continue                      # apo targets have no ligand to compare
+        stem = _target_stem(fam, lig, code)
+        predicted = cif_dir / f"{stem}_model_0.cif"
+        if not predicted.exists():
+            continue
+        comp, ref_path = _reference_ligand_for(lig, code, references, campaign_dir)
+        if not comp:
+            continue                      # no experimental copy of this molecule
+        result = _pose_vs_experimental(predicted, ref_path, comp,
+                                       lig.smiles or "", fam.id, lig.id)
+        if "error" in result:
+            errors.add(result["error"])
+            continue
+        result.update(stem=stem, family=fam.id, ligand=lig.id,
+                      pocket=code or "unconstrained")
+        measured.append(result)
+    # Best pose first: the panel is read to find out whether anything reproduced the
+    # experiment, and that answer should not be below the fold.
+    measured.sort(key=lambda r: r["pose"])
+    return measured, errors
+
+
+def _ligand_cif(atoms: list, name: str, chain: str) -> str:
+    """One ligand as a minimal mmCIF, for a viewer to load.
+
+    mmCIF rather than PDB because every viewer in this project already reads it, and
+    a PDB atom name column is four characters -- too narrow for the two-digit atom
+    numbering a 65-atom drug needs.
+    """
+    lines = [f"data_{name}", "loop_"]
+    lines += ["_atom_site." + column for column in
+              ("group_PDB", "id", "type_symbol", "label_atom_id", "label_alt_id",
+               "label_comp_id", "label_asym_id", "label_entity_id", "label_seq_id",
+               "pdbx_PDB_ins_code", "Cartn_x", "Cartn_y", "Cartn_z", "occupancy",
+               "B_iso_or_equiv", "auth_seq_id", "auth_comp_id", "auth_asym_id",
+               "auth_atom_id", "pdbx_PDB_model_num")]
+    # Atom names are numbered per element (C1, C2, N1) rather than serially, because
+    # a viewer that infers bonds from distance also sanity-checks the name against
+    # the element, and "C17" for a nitrogen makes it discard the atom.
+    seen: dict = {}
+    for i, (element, xyz) in enumerate(atoms, 1):
+        seen[element] = seen.get(element, 0) + 1
+        name = f"{element}{seen[element]}"
+        lines.append(f"HETATM {i} {element} {name} . LIG {chain} 1 1 ? "
+                     f"{xyz[0]:.3f} {xyz[1]:.3f} {xyz[2]:.3f} 1.00 0.00 "
+                     f"1 LIG {chain} {name} 1")
+    return "\n".join(lines) + "\n"
+
+
+def write_pose_pairs(measured: list, campaign_dir: Path) -> int:
+    """One predicted/experimental ligand pair per comparison, on disk for a viewer.
+
+    Two files rather than one two-chain file: the viewer colours and toggles them
+    separately, and Mol* colours a structure, not a chain, so a single file would
+    have to be split again in the browser.
+
+    Written even though the numbers are already in the table, because the table says
+    a pose is 9.4A wrong and cannot show *how* -- and "rotated end for end" is the
+    kind of wrong that is obvious in one glance at two overlaid ligands and invisible
+    in a column of angstroms.
+    """
+    if not measured:
+        return 0
+    out = campaign_dir / "boltz_pose_pairs"
+    out.mkdir(exist_ok=True)
+    index = []
+    for r in measured:
+        coordinates = r.get("coordinates") or {}
+        if not coordinates.get("predicted") or not coordinates.get("experimental"):
+            continue
+        (out / f"{r['stem']}_pred.cif").write_text(
+            _ligand_cif(coordinates["predicted"], f"{r['stem']}_predicted", "P"))
+        (out / f"{r['stem']}_ref.cif").write_text(
+            _ligand_cif(coordinates["experimental"], f"{r['stem']}_experimental", "X"))
+        index.append({k: r[k] for k in
+                      ("stem", "family", "ligand", "pocket", "reference",
+                       "ligand_code", "site", "pose", "shape", "atoms", "residues")})
+    (out / "index.json").write_text(json.dumps({"pairs": index}, indent=2))
+    return len(index)
+
+
+#: How many pair viewers this report will create without being asked. Every 3Dmol
+#: viewer costs a WebGL context; a browser allows a limited number (commonly sixteen)
+#: and silently kills the oldest rather than refusing a new one, so an uncapped grid
+#: turns the earliest frames black while the last ones look fine. This report already
+#: spends one context per target on the binding-site panels, so the pair grid takes a
+#: deliberately small share and hands the rest to a button.
+POSE_VIEWER_BUDGET = 6
+
+
+def _pose_pair_viewers_html(measured: list, campaign_dir: Path) -> tuple:
+    """The pair grid for the offline report: markup, and the script that draws it.
+
+    Coordinates are inlined rather than fetched. `boltz_dashboard.html` is meant to
+    survive being emailed on its own, and a viewer that reads two files beside it is
+    a viewer that shows nothing the moment the file is moved. Two ligands are five
+    kilobytes; a receptor would not be, which is the other reason this panel draws
+    only the ligands.
+
+    Returns ("", "") when there is nothing to draw, so the caller adds neither an
+    empty grid nor a script tag with no work in it.
+    """
+    pairs = []
+    for r in measured:
+        pred = campaign_dir / "boltz_pose_pairs" / f"{r['stem']}_pred.cif"
+        ref = campaign_dir / "boltz_pose_pairs" / f"{r['stem']}_ref.cif"
+        if pred.is_file() and ref.is_file():
+            pairs.append((r, pred.read_text(), ref.read_text()))
+    if not pairs:
+        return "", ""
+
+    groups: dict = {}
+    for r, pred, ref in pairs:
+        groups.setdefault(r["pocket"], []).append((r, pred, ref))
+
+    def group_key(name):
+        # Unconstrained last: it is the baseline the named pockets are compared with.
+        return (name == "unconstrained", name)
+
+    blocks, scripts = [], []
+    for pocket in sorted(groups, key=group_key):
+        tiles = []
+        for r, pred, ref in sorted(groups[pocket], key=lambda item: item[0]["pose"]):
+            div_id = "pose-" + re.sub(r"[^a-zA-Z0-9_-]", "_", r["stem"])
+            colour, _note = _pose_tier(r["pose"])
+            title = html.escape(
+                f"Symmetry-corrected RMSD in place, after superposing the receptor on "
+                f"{r['reference']} over {r['residues']} residues. "
+                f"Site {r['site']:.2f} A, conformer {r['shape']:.2f} A.", quote=True)
+            tiles.append(
+                f"<div class='pose-tile'>"
+                f"<div class='pose-tile-head'>"
+                f"<span class='pose-tile-name'>{html.escape(r['stem'])}</span>"
+                f"<span class='pose-tile-score' style='color:{colour}' title='{title}'>"
+                f"{r['pose']:.2f} &#8491;</span></div>"
+                f"<div class='pose-tile-viewer' id='{div_id}'></div>"
+                f"<div class='pose-tile-controls'>"
+                f"<button type='button' data-pose-spin='{div_id}'>Spin</button>"
+                f"<button type='button' data-pose-reset='{div_id}'>Reset</button></div>"
+                f"<p class='pose-tile-note'>Grey: {html.escape(r['reference'])} "
+                f"{html.escape(r['ligand_code'])}. Red: predicted.</p></div>")
+            scripts.append("  " + json.dumps({
+                "id": div_id, "pred": pred, "ref": ref}) + ",")
+        label = "Unconstrained" if pocket == "unconstrained" else f"Pocket {pocket}"
+        blocks.append(f"<h3 class='pose-group'>{html.escape(label)}</h3>"
+                      f"<div class='pose-row'>{''.join(tiles)}</div>")
+
+    markup = (f"<div class='pose-pane'><h3 class='pose-pane-title'>Predicted against "
+              f"experimental</h3><p>{len(pairs)} pair(s) across {len(groups)} pocket(s). "
+              f"Each frame holds exactly two ligands, superposed through their receptors: "
+              f"the prediction in red, the experimental one in grey.</p>"
+              f"{''.join(blocks)}</div>")
+
+    script = """
+(function () {
+  var PAIRS = [
+%s
+  ];
+  if (typeof $3Dmol === 'undefined') return;
+  var drawn = {}, spinning = {}, budget = %d;
+
+  function draw(pair) {
+    var el = document.getElementById(pair.id);
+    if (!el || drawn[pair.id]) return;
+    drawn[pair.id] = true;
+    el.classList.add('pose-tile-drawn');
+    el.innerHTML = '';
+    var viewer = $3Dmol.createViewer(el, {backgroundColor: 'white'});
+    // Grey for the experiment, red for the prediction: the same language the rest of
+    // this report uses, where grey is context you did not compute.
+    viewer.addModel(pair.ref, 'cif');
+    viewer.setStyle({model: 0}, {stick: {color: '0x8a8a8a', radius: 0.14}});
+    viewer.addModel(pair.pred, 'cif');
+    viewer.setStyle({model: 1}, {stick: {color: '0xd81b60', radius: 0.14}});
+    viewer.zoomTo();
+    viewer.render();
+    drawn[pair.id] = viewer;
+  }
+
+  function offer(pair) {
+    var el = document.getElementById(pair.id);
+    if (!el) return;
+    var button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'pose-tile-draw';
+    button.textContent = 'Draw this pair';
+    button.addEventListener('click', function () { draw(pair); });
+    el.appendChild(button);
+  }
+
+  // Drawn when scrolled to, and only so many: see POSE_VIEWER_BUDGET. The ones past
+  // the budget get a button rather than being drawn anyway and taking a context from
+  // a frame already on screen.
+  var pending = PAIRS.slice();
+  function take(pair) {
+    if (budget <= 0) { offer(pair); return; }
+    budget -= 1;
+    draw(pair);
+  }
+  if (typeof IntersectionObserver !== 'function') {
+    pending.forEach(take);
+  } else {
+    var observer = new IntersectionObserver(function (entries) {
+      entries.forEach(function (entry) {
+        if (!entry.isIntersecting) return;
+        observer.unobserve(entry.target);
+        var pair = PAIRS.filter(function (p) { return p.id === entry.target.id; })[0];
+        if (pair) take(pair);
+      });
+    }, {rootMargin: '200px'});
+    PAIRS.forEach(function (pair) {
+      var el = document.getElementById(pair.id);
+      if (el) observer.observe(el);
+    });
+  }
+
+  document.addEventListener('click', function (event) {
+    var spin = event.target.getAttribute && event.target.getAttribute('data-pose-spin');
+    var reset = event.target.getAttribute && event.target.getAttribute('data-pose-reset');
+    var id = spin || reset;
+    if (!id) return;
+    var viewer = drawn[id];
+    if (!viewer || viewer === true) return;
+    // The spin state is tracked here rather than read back off the viewer: 3Dmol
+    // exposes no getter for it, and calling spin('y') twice does not toggle.
+    if (spin) {
+      spinning[id] = !spinning[id];
+      viewer.spin(spinning[id] ? 'y' : false, 0.5);
+    } else {
+      viewer.zoomTo();
+      viewer.render();
+    }
+  });
+})();""" % ("\n".join(scripts).rstrip(","), POSE_VIEWER_BUDGET)
+    return markup, script
+
+
+def _build_ligand_pose_panel_html(campaign: Campaign, campaign_dir: Path,
+                                  measured: list = None, errors: set = None,
+                                  viewer_html: str = "") -> str:
+    """Docked ligand against the experimental one, where an experiment exists.
+
+    The panel this campaign most needed. A GLP1R/orforglipron prediction scored
+    ligand_iptm 0.940 and confidence 0.836 while sitting 9.4 A from where the crystal
+    structure puts the same molecule in the same pocket -- right site, right
+    conformation, wrong way round. No score Boltz emits noticed, because none of them
+    is a comparison with an experiment. This is, so it is the only thing on the
+    dashboard that can catch that failure.
+
+    Three numbers rather than one, because they fail independently: the site says
+    whether the ligand found the pocket, the pose says whether it found the binding
+    mode, and the conformer says whether the molecule's own shape is right at all. The
+    orforglipron case reads 3.05 / 9.43 / 3.08 -- which is legible as "correct pocket,
+    correct shape, wrong orientation" and would be illegible as a single figure.
+
+    Silent when the campaign ships no `reference/` structures, since then there is
+    nothing to compare against and an empty card would only ask a question.
+    """
+    if measured is None:
+        measured, errors = _pose_comparisons(campaign, campaign_dir)
+    errors = errors or set()
+    rows = []
+
+    if not measured:
+        if errors:
+            note = "; ".join(sorted(errors))
+            return (f"<div class='md-card table-card'><h2>Ligand pose vs experiment</h2>"
+                    f"<p>No pose could be compared with an experimental structure "
+                    f"({html.escape(note)}).</p></div>")
+        return ""
+
+    for r in measured:
+        site_colour, site_note = _pose_tier(r["site"])
+        pose_colour, pose_note = _pose_tier(r["pose"])
+        detail = (f"{r['atoms']} ligand atoms, superposed on {r['residues']} "
+                  f"receptor residues of {r['reference']}")
+
+        def icon(svg, colour, note):
+            title = html.escape(f"{note} ({detail})", quote=True)
+            return f"<span style='color:{colour}' title='{title}'>{svg}</span>"
+
+        icons = (f"{icon(_BULLSEYE_SVG, site_colour, 'Site: ' + site_note)} "
+                 f"{icon(_POSE_SVG, pose_colour, 'Pose: ' + pose_note)}")
+        rows.append(
+            f"<tr><td>{html.escape(r['stem'])}</td>"
+            f"<td>{html.escape(r['family'])}</td>"
+            f"<td>{html.escape(r['ligand'])}</td>"
+            f"<td>{html.escape(r['pocket'])}</td>"
+            f"<td>{html.escape(r['reference'])} ({html.escape(r['ligand_code'])})</td>"
+            f"<td class='ft-num'>{r['site']:.2f}</td>"
+            f"<td class='ft-num'>{r['pose']:.2f}</td>"
+            f"<td class='ft-num'>{r['shape']:.2f}</td>"
+            f"<td>{icons}</td></tr>")
+
+    def swatch(svg, colour, label):
+        return (f"<span class='legend-item'><span style='color:{colour}'>{svg}</span> "
+                f"{label}</span>")
+
+    legend = "".join([
+        swatch(_BULLSEYE_SVG, _TIER_GREEN, f"Same site (&lt; {POSE_GOOD_RMSD:g} A)"),
+        swatch(_BULLSEYE_SVG, _TIER_AMBER, f"Nearby ({POSE_GOOD_RMSD:g}-{POSE_FAIR_RMSD:g} A)"),
+        swatch(_BULLSEYE_SVG, _TIER_RED, f"Elsewhere (&ge; {POSE_FAIR_RMSD:g} A)"),
+        swatch(_POSE_SVG, _TIER_GREEN, f"Pose reproduced (&lt; {POSE_GOOD_RMSD:g} A)"),
+        swatch(_POSE_SVG, _TIER_AMBER, f"Approximate ({POSE_GOOD_RMSD:g}-{POSE_FAIR_RMSD:g} A)"),
+        swatch(_POSE_SVG, _TIER_RED, f"Different pose (&ge; {POSE_FAIR_RMSD:g} A)"),
+    ])
+    intro = (f"{len(measured)} target(s) compared against experimental structures in "
+             f"<code>reference/</code>. Atoms are paired by molecular graph, so the "
+             f"symmetry of the ligand is respected rather than being resolved by "
+             f"whichever atom happened to be nearest.")
+    if errors:
+        intro += (" Not compared: " + html.escape("; ".join(sorted(errors))) + ".")
+    head = ("<tr><th>Target</th><th>Protein</th><th>Ligand</th><th>Pocket</th>"
+            "<th>Reference</th><th class='ft-num' title='Distance between the two "
+            "ligand centroids after superposing the receptor'>Site (A)</th>"
+            "<th class='ft-num' title='Symmetry-corrected RMSD in place, after "
+            "superposing the receptor -- the binding mode'>Pose (A)</th>"
+            "<th class='ft-num' title='Symmetry-corrected RMSD with the two ligands "
+            "superposed on each other -- the conformer alone'>Conformer (A)</th>"
+            "<th>&nbsp;</th></tr>")
+    return (f"<div class='md-card table-card'><h2>Ligand pose vs experiment</h2><p>{intro}</p>"
+            f"<table class='full-table'><thead>{head}</thead>"
+            f"<tbody>{''.join(rows)}</tbody></table>"
+            f"<div class='summary-table-footer'><div class='summary-legend'>"
+            f"<span class='legend-title'>&#127919; site &middot; pose:</span>"
+            f"{legend}</div></div>{viewer_html}</div>")
 
 
 def _summary_table_order(df: "pd.DataFrame"):
@@ -4940,6 +5661,26 @@ def write_html(df: pd.DataFrame, path: Path, campaign_dir: Path, campaign: Campa
     if pockets_html:
         parts.append(pockets_html)
 
+    # Measured once and used twice: the table below and the pair files the web
+    # explorer's viewer loads. Recomputing for the viewer would let a number on the
+    # page and the structure beside it come from two different superpositions.
+    pose_results, pose_errors = _pose_comparisons(campaign, campaign_dir)
+    write_pose_pairs(pose_results, campaign_dir)
+    pose_viewers_html, pose_viewers_js = _pose_pair_viewers_html(pose_results, campaign_dir)
+    pose_html = _build_ligand_pose_panel_html(campaign, campaign_dir,
+                                              pose_results, pose_errors,
+                                              pose_viewers_html)
+    if pose_html:
+        parts.append(pose_html)
+    if pose_viewers_js:
+        # Straight after the panel, not pooled with the per-target viewer scripts
+        # further down: those are written inside the PLIP branch and a campaign with
+        # no interaction analysis never reaches them.
+        parts.append(f"<script>{pose_viewers_js}</script>")
+        need_pose_3dmol = True
+    else:
+        need_pose_3dmol = False
+
     lig_notes = _ligand_chemistry_notes(campaign)
     if lig_notes:
         lig_rows = [{"Ligand": lig_id, "Chemistry notes": "; ".join(info["notes"])} for lig_id, info in lig_notes.items()]
@@ -4990,7 +5731,7 @@ def write_html(df: pd.DataFrame, path: Path, campaign_dir: Path, campaign: Campa
     if chart_cards:
         parts.append(f"<div class='md-chart-grid'>{''.join(chart_cards)}</div>")
 
-    need_3dmol = False
+    need_3dmol = need_pose_3dmol
     if "plip_png_path" in df.columns:
         sessions_dir = campaign_dir / "boltz_dashboard_sessions"
         session_cards, total_bytes = [], 0

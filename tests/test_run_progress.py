@@ -454,9 +454,8 @@ def test_each_matrix_target_carries_its_own_pocket(bm, tmp_path):
     for stem, receptor in (("RECA_orfo", "RECA"), ("RECB_orfo", "RECB")):
         baseline = pocket_of(stem)
         assert baseline is not None, f"{stem} could dock anywhere in the complex"
-        assert baseline["any"] is True and baseline["force"] is True
+        assert baseline["force"] is True
         assert {c[0] for c in baseline["contacts"]} == {receptor}
-        assert len(baseline["contacts"]) > 2, "a site, not a whole chain"
 
 
 def test_a_campaign_without_named_pockets_is_unchanged(bm, tmp_path):
@@ -959,10 +958,13 @@ def test_an_unpocketed_target_is_held_to_its_receptor(bm, tmp_path):
     campaign = bm.parse_md(md)
     pk = _pocket_of(bm, campaign, "RECP_LIG")
     assert pk is not None, "no constraint at all -- the ligand could dock on the partner"
-    assert pk["any"] is True, "must be satisfied by the nearest residue, not all of them"
     assert pk["force"] is True, "boltz skips a pocket constraint that is not forced"
-    assert len(pk["contacts"]) == 22, "every receptor residue, and only the receptor"
     assert {c[0] for c in pk["contacts"]} == {"RECP"}, "the partner must not be listed"
+    # Boltz's own summing semantics, deliberately NOT `any`. Unioning the contacts
+    # into a soft-min is the right meaning and the wrong force: measured live, it
+    # returned one contact's worth of gradient (max 0.18-1.07) and a ligand fifty
+    # angstroms away on a G protein did not move at all.
+    assert not pk.get("any"), "union semantics make the restraint far too weak to act"
 
 
 def test_turning_it_off_restores_free_placement(bm, tmp_path):
@@ -970,6 +972,21 @@ def test_turning_it_off_restores_free_placement(bm, tmp_path):
     md.write_text(CONFINE_MD.replace("Predict affinity: yes",
                                      "Predict affinity: yes\nConfine to receptor: no"))
     assert _pocket_of(bm, bm.parse_md(md), "RECP_LIG") is None
+
+
+def test_the_restraint_has_a_workable_number_of_contacts(bm, tmp_path):
+    """Sized to the force regime that demonstrably works on this system.
+
+    The V6G pocket that reliably holds a ligand in its site has 62 contacts, and
+    Boltz sums a penalty over each, so contact count is force. A sparse sweep of the
+    receptor at the same count puts the whole-protein restraint in the same regime;
+    listing every residue instead would be several times stronger and pull the ligand
+    to the centroid rather than onto the surface.
+    """
+    md = tmp_path / "c.md"
+    md.write_text(CONFINE_MD.replace("MKTAYIAKQRQISFVKSHFSRQ", "M" * 463))
+    pk = _pocket_of(bm, bm.parse_md(md), "RECP_LIG")
+    assert 40 <= len(pk["contacts"]) <= 80, f"{len(pk['contacts'])} contacts is out of regime"
 
 
 def test_a_named_pocket_is_now_actually_enforced(bm, tmp_path):
@@ -980,3 +997,247 @@ def test_a_named_pocket_is_now_actually_enforced(bm, tmp_path):
     pk = _pocket_of(bm, bm.parse_md(md), "RECP_LIG_SITE")
     assert pk["force"] is True
     assert not pk.get("any"), "a named site keeps boltz's all-contacts semantics"
+
+
+# --- Ligand pose: the docked ligand against an experimental one -------------
+#
+# The panel exists because of a measured failure: a GLP1R/orforglipron prediction
+# scored ligand_iptm 0.940 and confidence 0.836 while sitting 9.4 A from where the
+# crystal structure puts the same molecule in the same pocket. Nothing Boltz emits
+# noticed. So the case these tests protect hardest is "right site, wrong pose" --
+# a comparison that reports one number, or that pairs atoms by proximity, calls
+# that a success.
+
+_POSE_RESIDUES = ["ALA", "GLY", "SER", "VAL", "LEU"]
+
+
+def _write_cif(path, receptor_chain, ligand, ligand_chain="LIG",
+               ligand_comp="ETH", residues=None, offset=0.0):
+    """A minimal mmCIF: one receptor chain of 40 CAs plus one ligand copy.
+
+    The receptor is a helix-ish spiral rather than a straight line so the Kabsch fit
+    is determined in all three axes -- collinear points leave a rotation free, and a
+    test that superposes them would pass for the wrong reason.
+    """
+    import math
+    residues = residues or _POSE_RESIDUES
+    lines = ["data_test", "loop_"]
+    columns = ["group_PDB", "id", "type_symbol", "label_atom_id", "label_comp_id",
+               "auth_seq_id", "auth_asym_id", "Cartn_x", "Cartn_y", "Cartn_z"]
+    lines += [f"_atom_site.{c}" for c in columns]
+    n = 1
+    for i in range(40):
+        angle = i * 1.75
+        x = 2.3 * math.cos(angle) + offset
+        y = 2.3 * math.sin(angle)
+        z = 1.5 * i
+        lines.append(f"ATOM {n} C CA {residues[i % len(residues)]} {i + 1} "
+                     f"{receptor_chain} {x:.3f} {y:.3f} {z:.3f}")
+        n += 1
+    for element, (x, y, z) in ligand:
+        lines.append(f"HETATM {n} {element} {element}{n} {ligand_comp} 1 "
+                     f"{ligand_chain} {x:.3f} {y:.3f} {z:.3f}")
+        n += 1
+    path.write_text("\n".join(lines) + "\n")
+    return path
+
+
+#: Ethanol, at real bond lengths. Small enough to read, and asymmetric, so a flipped
+#: copy is genuinely a different pose rather than the same one relabelled.
+_ETHANOL = [("C", (0.0, 0.0, 30.0)), ("C", (1.50, 0.0, 30.0)), ("O", (2.14, 1.28, 30.0))]
+_ETHANOL_SMILES = "CCO"
+
+
+def _flipped(atoms):
+    """The same molecule inverted through its own centroid: same site, wrong pose."""
+    cx = sum(a[1][0] for a in atoms) / len(atoms)
+    cy = sum(a[1][1] for a in atoms) / len(atoms)
+    cz = sum(a[1][2] for a in atoms) / len(atoms)
+    return [(e, (2 * cx - x, 2 * cy - y, 2 * cz - z)) for e, (x, y, z) in atoms]
+
+
+def test_mmcif_record_type_comes_from_the_token_not_a_fixed_slice(bm, tmp_path):
+    """`line[:6]` reads "ATOM 2" and drops every protein atom, silently.
+
+    HETATM survives that bug by being exactly six characters, so the failure looks
+    like "the reference has no receptor" rather than like a parsing mistake.
+    """
+    path = _write_cif(tmp_path / "s.cif", "R", _ETHANOL)
+    rows = list(bm._mmcif_atom_rows(path))
+    assert sum(1 for r in rows if r["_record"] == "ATOM") == 40
+    assert sum(1 for r in rows if r["_record"] == "HETATM") == 3
+
+
+def test_a_reproduced_pose_measures_as_reproduced(bm, tmp_path):
+    reference = _write_cif(tmp_path / "ref.cif", "A", _ETHANOL)
+    predicted = _write_cif(tmp_path / "pred.cif", "RECP", _ETHANOL, ligand_chain="LIG1")
+    result = bm._pose_vs_experimental(predicted, reference, "ETH", _ETHANOL_SMILES,
+                                      "RECP", "LIG1")
+    assert "error" not in result, result
+    assert result["site"] < 0.01 and result["pose"] < 0.01
+    assert result["residues"] == 40
+
+
+def test_right_site_wrong_orientation_is_visible_in_the_pose_not_the_site(bm, tmp_path):
+    """The exact failure mode that got past every confidence score Boltz emits."""
+    reference = _write_cif(tmp_path / "ref.cif", "A", _ETHANOL)
+    predicted = _write_cif(tmp_path / "pred.cif", "RECP", _flipped(_ETHANOL),
+                           ligand_chain="LIG1")
+    result = bm._pose_vs_experimental(predicted, reference, "ETH", _ETHANOL_SMILES,
+                                      "RECP", "LIG1")
+    assert "error" not in result, result
+    assert result["site"] < 0.01, "inverted through its own centroid -- same site"
+    assert result["pose"] > 1.0, "and a different pose, which is the whole point"
+    assert result["shape"] < 0.01, "the molecule's own conformation is unchanged"
+
+
+def test_a_reference_of_a_different_protein_is_refused(bm, tmp_path):
+    """Measured: 7E14 matched GIPR's numbering at 0.11 identity and was reported on.
+
+    Without this gate the panel compares a GIPR prediction against a GLP1R crystal
+    structure and calls the disagreement a result.
+    """
+    reference = _write_cif(tmp_path / "7XYZ.cif", "A", _ETHANOL,
+                           residues=["TRP", "PHE", "TYR", "HIS", "ARG"])
+    predicted = _write_cif(tmp_path / "pred.cif", "RECP", _ETHANOL, ligand_chain="LIG1")
+    result = bm._pose_vs_experimental(predicted, reference, "ETH", _ETHANOL_SMILES,
+                                      "RECP", "LIG1")
+    assert result.get("error") == "7XYZ is not a structure of RECP"
+
+
+def test_the_receptors_own_chain_is_not_pooled_with_the_rest_of_the_complex(bm, tmp_path):
+    """A complex numbers its G-protein chains from 1 too.
+
+    Reading every reference chain into one dict lets the last one read overwrite the
+    receptor, and the fit is then made partly against the wrong protein -- which
+    still returns a plausible number.
+    """
+    import math
+    reference = _write_cif(tmp_path / "ref.cif", "A", _ETHANOL)
+    decoy = ["data_x"] + reference.read_text().splitlines()[1:]
+    extra = []
+    for i in range(40):
+        extra.append(f"ATOM {900 + i} C CA TRP {i + 1} B "
+                     f"{80.0 + i:.3f} {90.0:.3f} {100.0:.3f}")
+    reference.write_text("\n".join(decoy + extra) + "\n")
+    predicted = _write_cif(tmp_path / "pred.cif", "RECP", _ETHANOL, ligand_chain="LIG1")
+    result = bm._pose_vs_experimental(predicted, reference, "ETH", _ETHANOL_SMILES,
+                                      "RECP", "LIG1")
+    assert "error" not in result, result
+    assert result["residues"] == 40 and result["pose"] < 0.01
+
+
+def test_an_unconstrained_target_still_finds_its_experimental_twin(bm, tmp_path):
+    """The baseline is the comparison worth having, and it carries no pocket code."""
+    (tmp_path / "reference").mkdir()
+    _write_cif(tmp_path / "reference" / "1ABC.cif", "A", _ETHANOL)
+    references = bm._reference_structures(tmp_path)
+    assert set(references) == {"ETH"}
+    ligand = types.SimpleNamespace(id="LIG1", smiles=_ETHANOL_SMILES)
+    comp, path = bm._reference_ligand_for(ligand, None, references, tmp_path)
+    assert comp == "ETH" and path.name == "1ABC.cif"
+
+
+def test_a_different_molecule_of_the_same_size_is_not_mistaken_for_the_twin(bm, tmp_path):
+    (tmp_path / "reference").mkdir()
+    _write_cif(tmp_path / "reference" / "1ABC.cif", "A", _ETHANOL)
+    references = bm._reference_structures(tmp_path)
+    propane = types.SimpleNamespace(id="LIG1", smiles="CCC")   # C3 against ethanol's C2O
+    comp, _path = bm._reference_ligand_for(propane, None, references, tmp_path)
+    assert comp is None
+
+
+def test_the_pose_panel_is_silent_without_reference_structures(bm, tmp_path):
+    """An empty card would only pose a question the campaign cannot answer."""
+    md = tmp_path / "c.md"
+    md.write_text(POCKET_MD)
+    assert bm._build_ligand_pose_panel_html(bm.parse_md(md), tmp_path) == ""
+
+
+# --- the same pairs, drawn in the offline report ----------------------------
+#
+# The dashboard is the artefact that travels on its own, so the pair viewer is built
+# twice: fetched + Mol* in the hosted explorer, inlined + 3Dmol here. Both read the
+# same measured coordinates out of boltz_pose_pairs/, because a picture computed
+# separately from the number beside it can disagree with it.
+
+def _pose_pair_files(tmp_path, stem="T1", pocket="SITE1"):
+    import json
+    out = tmp_path / "boltz_pose_pairs"
+    out.mkdir(exist_ok=True)
+    for which in ("pred", "ref"):
+        (out / f"{stem}_{which}.cif").write_text(f"data_{which}\nHETATM 1 C\n")
+    (out / "index.json").write_text(json.dumps({"pairs": [{"stem": stem}]}))
+    return [{"stem": stem, "family": "RECP", "ligand": "LIG1", "pocket": pocket,
+             "reference": "1ABC", "ligand_code": "ETH", "site": 0.5, "pose": 1.2,
+             "shape": 0.4, "atoms": 3, "residues": 40}]
+
+
+def test_the_offline_report_draws_the_pairs_too(bm, tmp_path):
+    measured = _pose_pair_files(tmp_path)
+    markup, script = bm._pose_pair_viewers_html(measured, tmp_path)
+    assert "pose-tile-viewer" in markup and "Pocket SITE1" in markup
+    assert "$3Dmol" in script and "createViewer" in script
+
+
+def test_the_offline_pair_coordinates_are_inlined_not_fetched(bm, tmp_path):
+    """boltz_dashboard.html is meant to survive being emailed on its own.
+
+    A viewer that reads two files beside it shows nothing the moment the report is
+    moved, which is the failure the vendored Plotly and 3Dmol already exist to avoid.
+    """
+    measured = _pose_pair_files(tmp_path)
+    _markup, script = bm._pose_pair_viewers_html(measured, tmp_path)
+    assert "data_pred" in script and "data_ref" in script
+    assert "fetch(" not in script
+
+
+def test_a_pair_with_no_coordinates_on_disk_is_not_given_a_frame(bm, tmp_path):
+    """An index entry can outlive its files -- a campaign re-analysed after its
+    references changed measures fewer pairs than its last index names."""
+    measured = _pose_pair_files(tmp_path)
+    (tmp_path / "boltz_pose_pairs" / "T1_pred.cif").unlink()
+    assert bm._pose_pair_viewers_html(measured, tmp_path) == ("", "")
+
+
+def test_the_offline_report_does_not_draw_every_pair_at_once(bm, tmp_path):
+    """A browser silently kills the oldest WebGL context rather than refusing a new
+    one, so an uncapped grid blacks out the earliest frames while the last look fine.
+    This report already spends one context per target on the binding-site panels."""
+    measured = _pose_pair_files(tmp_path)
+    _markup, script = bm._pose_pair_viewers_html(measured, tmp_path)
+    assert "IntersectionObserver" in script, "frames are drawn on scroll"
+    assert f"budget = {bm.POSE_VIEWER_BUDGET}" in script
+    assert "pose-tile-draw" in script, "past the budget, a button rather than a black frame"
+
+
+def test_the_viewer_grid_lands_inside_the_pose_card(bm, tmp_path):
+    """Inside the card, not after it: a viewer in a card of its own reads as a
+    separate finding rather than as the picture of the table above it."""
+    md = tmp_path / "c.md"
+    md.write_text(POCKET_MD)
+    panel = bm._build_ligand_pose_panel_html(
+        bm.parse_md(md), tmp_path,
+        measured=_pose_pair_files(tmp_path), errors=set(),
+        viewer_html="<div class='pose-pane'>MARKER</div>")
+    assert panel.count("md-card") == 1
+    assert panel.index("MARKER") < panel.rindex("</div>")
+    assert panel.index("</table>") < panel.index("MARKER")
+
+
+def test_the_dashboards_mobile_rules_come_last_in_its_stylesheet(bm):
+    """The same trap brand.css has a test for, in BoltzMaker's own stylesheet.
+
+    A media query carries no extra specificity, so a plain rule written below it
+    beats it at every width -- and the pose grid's phone rule was written beside its
+    section, above every rule that follows.
+    """
+    import re as _re
+    css = bm._DASHBOARD_CSS if hasattr(bm, "_DASHBOARD_CSS") else None
+    if css is None:                       # the stylesheet is an unnamed literal
+        source = pathlib.Path(bm.__file__).read_text()
+        css = source[source.index(".md-3dmol-viewer {"):source.index("_BRAND_HEADER")]
+    first_media = css.index("@media (max-width: 768px)")
+    for rule in _re.finditer(r"^\.[a-zA-Z][\w.-]*\s*(,|\{)", css[first_media:], _re.M):
+        raise AssertionError(
+            f"a plain rule ({rule.group(0).strip()}) is defined after the mobile block")
