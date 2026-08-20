@@ -3401,6 +3401,7 @@ def analyze(yaml_dir: Path, out_dir: Path, campaign_dir: Path,
 
     ligand_by_id = {l.id: l for l in campaign.ligands}
     family_by_id = {f.id: f for f in campaign.families}
+    run_index = _run_index(campaign)
 
     rows = []
     for t in manifest:
@@ -3409,9 +3410,14 @@ def analyze(yaml_dir: Path, out_dir: Path, campaign_dir: Path,
         fam = family_by_id.get(t.family_id)
         family_group = (fam.group if fam and fam.group else None) or t.family_id
         partner_ids = ", ".join(_partner_display_id(p) for p in fam.partners) if fam and fam.partners else ""
+        run_number, pocket_code = run_index.get(t.stem, (None, None))
         display_name = _target_display_name(fam, t.ligand_id)
-        row = {"target_id": t.stem, "family_id": t.family_id, "family_group": family_group,
+        if run_number is not None:
+            display_name = f"{run_number}_{display_name}"
+        row = {"run": run_number,
+               "target_id": t.stem, "family_id": t.family_id, "family_group": family_group,
                "partner_ids": partner_ids, "display_name": display_name, "ligand_id": t.ligand_id,
+               "pocket": (pocket_code or UNCONSTRAINED_LABEL) if t.ligand_id is not None else None,
                "ligand_smiles": ligand_smiles, "ligand_role": lig.role if lig else None, "flags": ""}
         d = pred_dir / t.stem if pred_dir else None
         if not d or not d.is_dir():
@@ -3461,6 +3467,13 @@ def analyze(yaml_dir: Path, out_dir: Path, campaign_dir: Path,
     if any(c.startswith("plip_") and c.endswith("_count") for c in df.columns):
         count_cols = [c for c in df.columns if c.startswith("plip_") and c.endswith("_count")]
         df[count_cols] = df[count_cols].fillna(0).astype(int)
+        # The one interaction number most readers want, so it leads the group and is
+        # what stays visible when the group is collapsed. Summed here rather than in
+        # the table so the CSV carries it too.
+        df["plip_total_count"] = df[count_cols].sum(axis=1)
+        # Apo rows have no ligand and therefore no contacts; a 0 would read as "we
+        # looked and found none".
+        df.loc[df["ligand_id"].isna(), "plip_total_count"] = pd.NA
     df = apply_confidence_flags(df)
     df = apply_pocket_plddt_flag(df, manifest)
 
@@ -3537,16 +3550,31 @@ def _plotly_font() -> dict:
     return dict(family="Inter, -apple-system, BlinkMacSystemFont, sans-serif", size=_TICK_FONTSIZE)
 
 
+#: Room above the plot for the modebar. Plotly always draws it at the container's
+#: top-right; with a 10px top margin it landed on top of the axes and, on the charts
+#: with an inset legend, on the legend as well. Reserving the strip moves the plot
+#: down instead of the toolbar out, which is the only lever Plotly gives.
+_MODEBAR_MARGIN_PX = 46
+
+
 def _plotly_to_div(fig, div_id: str) -> str:
-    fig.update_layout(margin=dict(l=60, r=20, t=10, b=100), height=_CHART_HEIGHT_PX,
-                       paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", font=_plotly_font())
+    fig.update_layout(margin=dict(l=60, r=20, t=_MODEBAR_MARGIN_PX, b=100),
+                       height=_CHART_HEIGHT_PX + _MODEBAR_MARGIN_PX,
+                       paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", font=_plotly_font(),
+                       # Always visible and always in the same place. The default
+                       # reveals it on hover, so it appears over whatever is beneath
+                       # it and moves from chart to chart.
+                       modebar=dict(orientation="h", bgcolor="rgba(0,0,0,0)",
+                                    color="#6b7c93", activecolor="#1e73be"))
     # Matplotlib draws a full rectangular border (all four spines) by default -- Plotly
     # doesn't unless told to, so mirror the axis line to the opposite side to match the
     # look of the charts these replaced.
     fig.update_xaxes(showline=True, linewidth=1, linecolor="black", mirror=True)
     fig.update_yaxes(showline=True, linewidth=1, linecolor="black", mirror=True)
     return pio.to_html(fig, full_html=False, include_plotlyjs=False, div_id=div_id,
-                        config={"responsive": True, "displaylogo": False})
+                        config={"responsive": True, "displaylogo": False,
+                                "displayModeBar": True,
+                                "modeBarButtonsToRemove": ["select2d", "lasso2d"]})
 
 
 def _make_bar_chart(df: pd.DataFrame, col: str, div_id: str):
@@ -3576,28 +3604,34 @@ def _family_label_map(df: pd.DataFrame) -> dict:
     return df.drop_duplicates("family_id").set_index("family_id").apply(label, axis=1).to_dict()
 
 
-def _make_selectivity_heatmap(df: pd.DataFrame):
+def _make_selectivity_heatmap(df: pd.DataFrame, div_id: str = "chart-selectivity"):
+    """Ligand x protein mean pIC50, as Plotly.
+
+    Was a matplotlib PNG, which is why it never matched the chart it sits beside: a
+    rendered image has its own fonts, its own colourbar and its own aspect, and no
+    amount of CSS makes a picture agree with a live plot. Both halves of the card are
+    now the same kind of object with the same font sizes, so they line up because they
+    are built the same, not because they have been forced into boxes of equal size.
+    """
     if "pIC50" not in df.columns or df["family_id"].nunique() < 2:
         return None
     pivot = df.pivot_table(index="ligand_id", columns="family_id", values="pIC50", aggfunc="mean")
+    if pivot.empty:
+        return None
     fam_label = _family_label_map(df)
-    fig, ax = plt.subplots(figsize=(1.2 * len(pivot.columns) + 2, 0.4 * len(pivot.index) + 2))
-    im = ax.imshow(pivot.values, cmap="viridis", aspect="auto")
-    ax.set_xticks(range(len(pivot.columns)))
-    ax.set_xticklabels([fam_label.get(c, c) for c in pivot.columns], rotation=45, ha="right",
-                        fontsize=_TICK_FONTSIZE)
-    ax.set_yticks(range(len(pivot.index)))
-    ax.set_yticklabels(pivot.index, fontsize=_TICK_FONTSIZE)
-    for i in range(len(pivot.index)):
-        for j in range(len(pivot.columns)):
-            v = pivot.values[i, j]
-            if pd.notna(v):
-                ax.text(j, i, f"{v:.1f}", ha="center", va="center", color="white", fontsize=_ANNOTATION_FONTSIZE)
-    cbar = fig.colorbar(im)
-    cbar.set_label("pIC50", fontsize=_AXIS_LABEL_FONTSIZE)
-    cbar.ax.tick_params(labelsize=_TICK_FONTSIZE)
-    fig.tight_layout()
-    return _fig_to_base64(fig)
+    columns = [fam_label.get(c, c) for c in pivot.columns]
+    fig = go.Figure(go.Heatmap(
+        z=pivot.values, x=columns, y=list(pivot.index), colorscale="Viridis",
+        colorbar=dict(title=dict(text="pIC50", font=dict(size=_AXIS_LABEL_FONTSIZE)),
+                      tickfont=dict(size=_TICK_FONTSIZE)),
+        hovertemplate="%{y} on %{x}<br>pIC50 %{z:.2f}<extra></extra>",
+        # The value in the cell, as the PNG had it: a heatmap of six cells is read as
+        # a table with colour, not as a colour field.
+        text=[[("" if pd.isna(v) else f"{v:.1f}") for v in row] for row in pivot.values],
+        texttemplate="%{text}", textfont=dict(size=_ANNOTATION_FONTSIZE, color="white")))
+    fig.update_xaxes(tickangle=-45, tickfont=dict(size=_TICK_FONTSIZE))
+    fig.update_yaxes(tickfont=dict(size=_TICK_FONTSIZE), autorange="reversed")
+    return _plotly_to_div(fig, div_id)
 
 
 _ROLE_MARKER_SYMBOL = {"agonist": "circle", "antagonist": "diamond"}
@@ -3661,9 +3695,32 @@ def _make_scatter(df: pd.DataFrame, div_id: str):
             name=label or "Target", showlegend=label is not None,
         ))
     fig.update_layout(legend=_INSET_LEGEND)
+    _pad_scatter_for_labels(fig, d[conf_col], d["pIC50"])
     fig.update_xaxes(title_text=conf_col, title_font=dict(size=_AXIS_LABEL_FONTSIZE), tickfont=dict(size=_TICK_FONTSIZE))
     fig.update_yaxes(title_text="pIC50", title_font=dict(size=_AXIS_LABEL_FONTSIZE), tickfont=dict(size=_TICK_FONTSIZE))
     return _plotly_to_div(fig, div_id)
+
+
+def _pad_scatter_for_labels(fig, x_values, y_values) -> None:
+    """Give the point labels room, so they are not sliced by the plot edge.
+
+    Every point carries its full display name above it -- now with a run number in
+    front, which made them longer -- and Plotly clips text at the axis by default and
+    autoranges on the markers alone. A name on a point at the right-hand edge is cut
+    off mid-word (`10_GLP1R_GNAS+GNB1+GN`) and one at the left loses its beginning.
+
+    Two changes, because either alone is not enough: `cliponaxis=False` lets a label
+    overflow the axis rather than being cut, and the padded range keeps it inside the
+    card the axis sits in. 12% horizontal is sized to the longest label these names
+    reach; 8% vertical clears the "top center" offset for the highest point.
+    """
+    for trace in fig.data:
+        trace.cliponaxis = False
+    for values, setter, pad in ((x_values, fig.update_xaxes, 0.12),
+                                (y_values, fig.update_yaxes, 0.08)):
+        low, high = float(min(values)), float(max(values))
+        span = (high - low) or (abs(high) or 1.0)
+        setter(range=[low - span * pad, high + span * pad])
 
 
 def _make_pic50_vs_binder_chart(df: pd.DataFrame, div_id: str):
@@ -3685,6 +3742,7 @@ def _make_pic50_vs_binder_chart(df: pd.DataFrame, div_id: str):
             name=label or "Target", showlegend=label is not None,
         ))
     fig.update_layout(legend=_INSET_LEGEND)
+    _pad_scatter_for_labels(fig, d["affinity_probability_binary"], d["pIC50"])
     fig.update_xaxes(title_text="Binder probability", title_font=dict(size=_AXIS_LABEL_FONTSIZE), tickfont=dict(size=_TICK_FONTSIZE))
     fig.update_yaxes(title_text="pIC50", title_font=dict(size=_AXIS_LABEL_FONTSIZE), tickfont=dict(size=_TICK_FONTSIZE))
     return _plotly_to_div(fig, div_id)
@@ -4270,6 +4328,42 @@ img, canvas { max-width: 100%; height: auto; }
 .md-side-viewer .md-3dmol-viewer, .md-side-image img { flex-shrink: 0; }
 .md-side-viewer p, .md-side-image p, .md-side-table-col p { margin-top: auto; }
 .md-3dmol-viewer { width: 100%; height: 260px; position: relative; background: #fff; border-radius: var(--md-radius); }
+/* Collapsed columns are hidden outright rather than narrowed: a 0-width cell still
+   draws its borders and leaves a ladder of hairlines across the table. */
+.ft-collapsed { display: none; }
+.ft-collapsed.ft-shown { display: table-cell; }
+.ft-collapsible { cursor: pointer; user-select: none; }
+.ft-collapsible:hover { background: var(--md-primary-light); color: #fff; }
+.ft-caret { font-size: 10px; opacity: 0.8; }
+.ft-count { font-weight: 400; opacity: 0.7; }
+
+/* ---- the two campaign heatmaps, side by side ---- */
+.heatmap-pair-grid { display: grid; gap: 18px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.heatmap-half { min-width: 0; }
+.heatmap-half .md-sub { margin: 0 0 6px; }
+.heatmap-pair-grid { align-items: start; }
+/* Both halves are Plotly, and Plotly sizes itself. The box only has to stop being a
+   flex container that would squash it. */
+.heatmap-half .heatmap-body { min-width: 0; }
+.heatmap-half .heatmap-body > div { width: 100%; }
+
+/* The scrollbar is drawn along the bottom edge of the scrolling box, and the legend
+   is the last thing inside it, so the bar was laid straight through the "confidence"
+   row. The gap goes BELOW the legend -- padding above it only moves the text further
+   into the bar. */
+.summary-table-footer { padding-bottom: 18px; }
+
+/* Field and Value hold short scannable strings and were wrapping to two and three
+   lines while Details -- which is genuinely long -- had room to spare. Only Details
+   wraps now; the other two size to their content. */
+.md-card table.campaign-summary { table-layout: auto; }
+.md-card table.campaign-summary td:nth-child(1),
+.md-card table.campaign-summary th:nth-child(1),
+.md-card table.campaign-summary td:nth-child(2),
+.md-card table.campaign-summary th:nth-child(2) { white-space: nowrap; width: 1%; }
+.md-card table.campaign-summary td:nth-child(3),
+.md-card table.campaign-summary th:nth-child(3) { white-space: normal; width: auto; }
+
 /* ---- predicted against experimental, one small viewer per pair ---- */
 .pose-pane { margin-top: 18px; border-top: 1px solid var(--md-border); padding-top: 14px; }
 .pose-pane-title { font-size: 13px; margin: 0 0 4px; }
@@ -4277,7 +4371,9 @@ img, canvas { max-width: 100%; height: auto; }
   color: var(--md-text-muted); margin: 16px 0 8px; }
 /* auto-fit rather than a fixed count: a pocket with one pair should not leave empty
    columns, and one with six should wrap rather than shrink each frame to a stamp. */
-.pose-row { display: grid; gap: 14px; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); }
+/* Exactly two per row, not auto-fit: these are compared in pairs (a pocket against
+   its baseline), and a row of four makes that comparison a horizontal scan. */
+.pose-row { display: grid; gap: 14px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .pose-tile { border: 1px solid var(--md-border); border-radius: var(--md-radius);
   padding: 10px; background: var(--md-bg-alt); min-width: 0; }
 .pose-tile-head { display: flex; align-items: baseline; gap: 8px; margin-bottom: 6px; }
@@ -4471,6 +4567,32 @@ def _family_display_name(fam: object) -> str:
     return group
 
 
+def _run_index(campaign: Campaign) -> dict:
+    """stem -> (run number, pocket code). Run number is 1-based generation order.
+
+    Derived by re-expanding the campaign rather than read from the manifest, because
+    `generate_yamls` walks `_expand_targets` in exactly this order and appends as it
+    goes -- so the two cannot disagree -- and because deriving it means a campaign
+    analysed before run numbers existed gets them too, with no manifest migration.
+
+    The number is load-bearing, not decoration: without it a matrix campaign's display
+    names collide. `GLP1R_ORFO` and `GLP1R_ORFO_V6G` are the same protein, partners and
+    ligand, so both render as `GLP1R_GNAS+GNB1+GNG2_ORFO` and a reader cannot tell the
+    constrained run from the baseline in any chart, legend or picker.
+    """
+    index = {}
+    for number, (fam, lig, code) in enumerate(_expand_targets(campaign), 1):
+        index[_target_stem(fam, lig, code)] = (number, code)
+    return index
+
+
+#: What the Pocket column shows for a target run without a site constraint. Short
+#: because it shares a narrow column with three-character ligand codes, and a word
+#: rather than a blank because unconstrained is a choice the campaign made, not
+#: missing data.
+UNCONSTRAINED_LABEL = "Unc"
+
+
 def _target_display_name(fam: object, ligand_id: object) -> str:
     """Human-readable, still-unique-per-target label: {group}_{partners}_{ligand-or-apo}
     -- e.g. "5HT2A_GNAQ+GNB1+GNG2_RISP", "5HT2A_RISP" (no partner), "5HT2A_apo" (no
@@ -4599,13 +4721,16 @@ _FULL_TABLE_RENAME = {
     # the summary table's "Target" was a protein while the targets list's was a run.
     # The user-facing vocabulary is the one the prepare form uses: proteins, co-folded
     # partners, ligands, pockets, ligand-free companions, and predictions.
+    "run": "Run", "pocket": "Pocket",
     "family_id": "Protein", "family_group": "Protein", "partner_ids": "Partner", "ligand_id": "Ligand",
     "flags": "Summary", "confidence_score": "Score", "ptm": "pTM", "iptm": "ipTM",
     "ligand_iptm": "Lig ipTM", "protein_iptm": "PPI ipTM",
     "complex_plddt": "pLDDT", "pIC50": "pIC50", "pIC50_ensemble_std": "pIC50 SD",
     "affinity_probability_binary": "Binder p", "cif_file": "CIF",
+    "plip_total_count": "Total",
 }
 _FULL_TABLE_GROUPS = {
+    "run": "Identity", "pocket": "Identity",
     "family_id": "Identity", "family_group": "Identity", "partner_ids": "Identity",
     "ligand_id": "Identity", "flags": "Identity",
     "confidence_score": "Confidence", "ptm": "Confidence", "iptm": "Confidence",
@@ -4615,8 +4740,15 @@ _FULL_TABLE_GROUPS = {
 }
 # Affinity before Confidence: the question the table is read to answer is "does it
 # bind", and confidence qualifies that answer rather than preceding it.
+#: Column groups that start collapsed, and the single column each keeps showing.
+#: Confidence is six near-identical 0.7-0.9 numbers and Interactions is one column
+#: per contact type; between them they are most of the table's width and neither is
+#: what the table is opened to answer. Both stay one click away.
+_COLLAPSED_GROUPS = {"Confidence": "confidence_score", "Interactions": "plip_total_count"}
+
+
 _FULL_TABLE_GROUP_ORDER = ["Identity", "Affinity", "Confidence", "Interactions", "Structure", "Other"]
-_FULL_TABLE_TEXT_COLS = {"family_id", "family_group", "partner_ids", "ligand_id", "flags"}
+_FULL_TABLE_TEXT_COLS = {"family_id", "family_group", "partner_ids", "ligand_id", "flags", "pocket"}
 _PLIP_COUNT_LABELS = {
     "hydrogen_bonds": "H-bond", "hydrophobic": "Phobic", "pi_stacks": "π-stack",
     "salt_bridges": "Salt", "pi_cation": "π-cation", "halogen_bonds": "Halogen",
@@ -4809,7 +4941,9 @@ def _resolve_summary_table_columns(df: pd.DataFrame) -> list:
     # internal per-variant family id (e.g. "H2ANG", "H2AAP") BoltzMaker uses to keep
     # with/without-partner and apo variants as distinct targets under the hood.
     cols = ["family_group" if c == "family_id" else c for c in cols]
-    cols.sort(key=lambda c: _FULL_TABLE_GROUP_ORDER.index(_full_table_group(c)))
+    cols.sort(key=lambda c: (_FULL_TABLE_GROUP_ORDER.index(_full_table_group(c)),
+                            # Total leads its group; everything else keeps df order.
+                            0 if c == "plip_total_count" else 1))
     return cols
 
 
@@ -5094,6 +5228,7 @@ def _build_pockets_panel_html(campaign: Campaign) -> str:
     finished structure is still listed. A group with no targets would be a
     campaign-definition bug, and silently omitting it would hide exactly that.
     """
+    run_index = _run_index(campaign)
     groups: dict = {}
     for fam, lig, code in _expand_targets(campaign):
         if lig is None:
@@ -5103,8 +5238,11 @@ def _build_pockets_panel_html(campaign: Campaign) -> str:
         # constrained -- by the ligand's own `Pocket contact:` or the protein's unnamed
         # one -- and calling that "unconstrained" would be wrong.
         name = code or ("Unnamed pocket" if contacts else "Unconstrained")
-        entry = groups.setdefault((name, fam.id), {"ligands": [], "contacts": contacts})
+        entry = groups.setdefault((name, fam.id), {"ligands": [], "contacts": contacts, "runs": []})
         entry["ligands"].append(lig.id)
+        number, _code = run_index.get(_target_stem(fam, lig, code), (None, None))
+        if number is not None:
+            entry["runs"].append(number)
 
     if not groups:
         return ""
@@ -5120,8 +5258,10 @@ def _build_pockets_panel_html(campaign: Campaign) -> str:
         detail = ", ".join(str(c) for c in contacts)
         cell = (f"<span title='{html.escape(detail, quote=True)}'>{len(contacts)} residue(s)</span>"
                 if contacts else "<span class='cell-na'>none -- ligand placed freely</span>")
+        runs = ", ".join(str(n) for n in sorted(info.get("runs") or []))
         rows.append(f"<tr><td>{html.escape(str(name))}</td><td>{html.escape(str(fam_id))}</td>"
                     f"<td>{html.escape(', '.join(info['ligands']))}</td>"
+                    f"<td>{html.escape(runs)}</td>"
                     f"<td class='ft-num'>{len(info['ligands'])}</td><td>{cell}</td></tr>")
 
     named = sorted({n for (n, _f) in groups if n not in ("Unconstrained", "Unnamed pocket")})
@@ -5129,7 +5269,7 @@ def _build_pockets_panel_html(campaign: Campaign) -> str:
              f"contacts are enforced within {campaign.settings.pocket_distance:g} A."
              if named else
              "No named pockets in this campaign -- every ligand was placed without a site constraint.")
-    head = ("<tr><th>Pocket</th><th>Protein</th><th>Ligands</th>"
+    head = ("<tr><th>Pocket</th><th>Protein</th><th>Ligands</th><th>Runs</th>"
             "<th class='ft-num'>Targets</th><th>Contacts</th></tr>")
     return (f"<div class='md-card table-card'><h2>Pockets</h2><p>{intro}</p>"
             f"<table class='full-table'><thead>{head}</thead>"
@@ -5582,13 +5722,37 @@ def _summary_table_order(df: "pd.DataFrame"):
     return df.sort_values(col, ascending=False, na_position="last", kind="stable"), True
 
 
+#: Click a collapsible group header to show or hide the rest of its columns.
+#: Written into the table's own markup rather than added to the page's script block
+#: so the offline report keeps working when opened on its own. The hosted explorer
+#: strips scripts from an upload and carries its own copy of this behaviour.
+_FULL_TABLE_COLLAPSE_JS = """
+<script>
+(function () {
+  var table = document.currentScript && document.currentScript.previousElementSibling;
+  if (!table || table.tagName !== "TABLE") return;
+  table.addEventListener("click", function (event) {
+    var th = event.target.closest ? event.target.closest("th.ft-collapsible") : null;
+    if (!th) return;
+    var group = th.getAttribute("data-group");
+    var open = th.classList.toggle("ft-open");
+    var caret = th.querySelector(".ft-caret");
+    if (caret) caret.innerHTML = open ? "&#9662;" : "&#9656;";
+    table.querySelectorAll("[data-group='" + group + "'].ft-collapsed")
+      .forEach(function (cell) { cell.classList.toggle("ft-shown", open); });
+    // The span follows the columns, or the header row stops lining up with the body.
+    th.colSpan = open ? parseInt(th.getAttribute("data-full-span"), 10) || 1 : 1;
+  });
+})();
+</script>"""
+
+
 def _build_full_table_html(df: pd.DataFrame) -> str:
     cols = _resolve_summary_table_columns(df)
     if not cols:
         return "<p>No columns to display.</p>"
 
     groups = [_full_table_group(c) for c in cols]
-    has_sd = "pIC50" in cols and "pIC50_ensemble_std" in df.columns
 
     def group_header_row() -> str:
         cells, i = [], 0
@@ -5596,16 +5760,42 @@ def _build_full_table_html(df: pd.DataFrame) -> str:
             j = i
             while j < len(groups) and groups[j] == groups[i]:
                 j += 1
-            cells.append(f"<th colspan='{j - i}' class='ft-group'>{groups[i]}</th>")
+            name = groups[i]
+            collapsible = name in _COLLAPSED_GROUPS and (j - i) > 1
+            classes = "ft-group" + (" ft-collapsible" if collapsible else "")
+            label = html.escape(name)
+            # A group header must span the columns actually on screen. Spanning all
+            # six while five are hidden pushed every group to its right out of line
+            # with the columns beneath it -- the header row and the body disagreed
+            # about where each group started.
+            span = 1 if collapsible else (j - i)
+            if collapsible:
+                # The caret is the affordance; the title says what a click does,
+                # because a column group that hides columns on load has to explain
+                # itself or it reads as missing data.
+                label = (f"<span class='ft-caret'>&#9656;</span> {label} "
+                         f"<span class='ft-count'>({j - i})</span>")
+            cells.append(f"<th colspan='{span}' class='{classes}' "
+                         f"data-full-span='{j - i}' "
+                         f"data-group='{html.escape(name)}'"
+                         + (" title='Click to show every column in this group'"
+                            if collapsible else "")
+                         + f">{label}</th>")
             i = j
         return f"<tr>{''.join(cells)}</tr>"
+
+    def cell_classes(c: str, g: str, prev: object) -> str:
+        classes = ([] if g == prev else ["ft-group-start"])
+        classes += ["ft-flags"] if c == "flags" else ([] if c in _FULL_TABLE_TEXT_COLS else ["ft-num"])
+        if g in _COLLAPSED_GROUPS and c != _COLLAPSED_GROUPS[g]:
+            classes.append("ft-collapsed")
+        return " ".join(classes)
 
     def column_header_row() -> str:
         cells, prev = [], None
         for c, g in zip(cols, groups):
-            classes = ([] if g == prev else ["ft-group-start"])
-            classes += ["ft-flags"] if c == "flags" else ([] if c in _FULL_TABLE_TEXT_COLS else ["ft-num"])
-            cells.append(f"<th class='{' '.join(classes)}'>{_full_table_label(c)}</th>")
+            cells.append(f"<th class='{cell_classes(c, g, prev)}' "
+                         f"data-group='{html.escape(g)}'>{_full_table_label(c)}</th>")
             prev = g
         return f"<tr>{''.join(cells)}</tr>"
 
@@ -5616,24 +5806,31 @@ def _build_full_table_html(df: pd.DataFrame) -> str:
         if c == "flags":
             return _summary_cell_html(row)
         is_apo = pd.isna(row.get("ligand_id"))
+        if is_apo and c == "ligand_id":
+            # "Apo" says what the row IS. "N/A" said only that a ligand id could not
+            # be shown, which is the least interesting true thing about it.
+            return "<span class='cell-na' title='ligand-free (apo) target'>Apo</span>"
+        if c == "pocket" and (is_apo or pd.isna(v) or not str(v).strip()):
+            return ("<span class='cell-na' title='no pocket applies -- ligand-free "
+                    "(apo) target'>N/A</span>")
         if is_apo and (c in _APO_NA_COLS or _full_table_group(c) == "Affinity"
+                       or c == "plip_total_count"
                        or (c.startswith("plip_") and c.endswith("_count"))):
             return "<span class='cell-na' title='not applicable -- ligand-free (apo) target'>N/A</span>"
         if c in _FULL_TABLE_TEXT_COLS:
             return "" if pd.isna(v) else str(v)
         if pd.isna(v):
             return ""
-        text = f"{v:.2f}" if isinstance(v, float) else str(v)
-        if c == "pIC50" and has_sd and not pd.isna(row.get("pIC50_ensemble_std")):
-            text += f" ± {row['pIC50_ensemble_std']:.2f}"
-        return text
+        # No "± SD" here. It doubled the width of the column for a number that is the
+        # spread of two ensemble sub-models rather than a confidence interval, and it
+        # is still its own column in the downloadable CSV for anyone who wants it.
+        return f"{v:.2f}" if isinstance(v, float) else str(v)
 
     def body_row(row, is_new_family_group: bool) -> str:
         cells, prev = [], None
         for c, g in zip(cols, groups):
-            classes = ([] if g == prev else ["ft-group-start"])
-            classes += ["ft-flags"] if c == "flags" else ([] if c in _FULL_TABLE_TEXT_COLS else ["ft-num"])
-            cells.append(f"<td class='{' '.join(classes)}'>{cell_html(row, c)}</td>")
+            cells.append(f"<td class='{cell_classes(c, g, prev)}' "
+                         f"data-group='{html.escape(g)}'>{cell_html(row, c)}</td>")
             prev = g
         tr_class = " class='row-group-start'" if is_new_family_group else ""
         return f"<tr{tr_class}>{''.join(cells)}</tr>"
@@ -5654,13 +5851,38 @@ def _build_full_table_html(df: pd.DataFrame) -> str:
         prev_group = group
     body = "".join(body_parts)
     return (f"<table class='full-table'><thead>{group_header_row()}{column_header_row()}</thead>"
-            f"<tbody>{body}</tbody></table>")
+            f"<tbody>{body}</tbody></table>{_FULL_TABLE_COLLAPSE_JS}")
+
+
+def _build_heatmap_pair_card(selectivity_html: str, motif_chart_html: str) -> str:
+    """The campaign's two heatmaps in one card, side by side.
+
+    Both halves are Plotly now, built through the same `_plotly_to_div`, so they share
+    a height, a font and a modebar position and line up without being coerced. The
+    earlier version paired a matplotlib PNG with a Plotly chart and tried to make them
+    match with CSS, which never worked -- an image scales as a block and a chart lays
+    itself out, so the two disagreed at every width.
+
+    Returns "" when neither half exists, so a one-protein campaign with no apo
+    reference gets no empty card.
+    """
+    halves = []
+    if selectivity_html:
+        halves.append("<div class='heatmap-half'><h3 class='md-sub'>Family x ligand selectivity</h3>"
+                      f"<div class='heatmap-body'>{selectivity_html}</div></div>")
+    if motif_chart_html:
+        halves.append("<div class='heatmap-half'><h3 class='md-sub'>Motif x target RMSD</h3>"
+                      f"<div class='heatmap-body'>{motif_chart_html}</div></div>")
+    if not halves:
+        return ""
+    return (f"<div class='md-card md-card-span2 heatmap-pair'><h2>Selectivity and motif shifts</h2>"
+            f"<div class='heatmap-pair-grid'>{''.join(halves)}</div></div>")
 
 
 def write_html(df: pd.DataFrame, path: Path, campaign_dir: Path, campaign: Campaign) -> None:
     summary_rows = _build_campaign_summary(campaign, campaign_dir)
     summary_html = pd.DataFrame(summary_rows, columns=["Field", "Value", "Details"]).to_html(
-        index=False, na_rep="", escape=False)
+        index=False, na_rep="", escape=False, classes="campaign-summary")
     parts = [f"<div class='md-card table-card'><h2>Campaign summary</h2>{summary_html}</div>"]
 
     summary_view_path = campaign_dir / "boltz_summary_view.csv"
@@ -5712,23 +5934,20 @@ def write_html(df: pd.DataFrame, path: Path, campaign_dir: Path, campaign: Campa
     if ligand_grid_html:
         parts.append(ligand_grid_html)
 
+    # Order: the two scatters compare metrics against each other and answer "is any of
+    # this trustworthy", which is read before "what ranked where". The ranked bars are
+    # a long tail of one bar per prediction, so they sit below the comparisons rather
+    # than pushing them off the first screen.
     chart_cards = []
-    for col, title, div_id in (("pIC50", "Ranked predicted pIC50", "chart-pic50"),
-                               ("confidence_score", "Ranked confidence", "chart-confidence")):
-        chart_html = _make_bar_chart(df, col, div_id)
-        if chart_html:
-            chart_cards.append(f"<div class='md-card'><h2>{title}</h2>{chart_html}</div>")
-
-    heat = _make_selectivity_heatmap(df)
-    if heat:
-        chart_cards.append(f"<div class='md-card'><h2>Family x ligand selectivity</h2><img src='data:image/png;base64,{heat}'></div>")
+    # Held back rather than appended here: it is one half of the "two heatmaps" card
+    # built in the secondary-structure section below, where its partner is computed.
+    selectivity_heatmap = _make_selectivity_heatmap(df)
+    interactions_csv = campaign_dir / "boltz_interactions.csv"
+    interactions_df = pd.read_csv(interactions_csv) if interactions_csv.exists() else None
 
     scatter = _make_scatter(df, "chart-scatter")
     if scatter:
         chart_cards.append(f"<div class='md-card'><h2>pIC50 vs confidence score</h2>{scatter}</div>")
-
-    interactions_csv = campaign_dir / "boltz_interactions.csv"
-    interactions_df = pd.read_csv(interactions_csv) if interactions_csv.exists() else None
 
     ichart = _make_interaction_count_chart(df, "chart-interactions")
     if ichart:
@@ -5737,6 +5956,12 @@ def write_html(df: pd.DataFrame, path: Path, campaign_dir: Path, campaign: Campa
     pic50_binder = _make_pic50_vs_binder_chart(df, "chart-pic50-binder")
     if pic50_binder:
         chart_cards.append(f"<div class='md-card'><h2>pIC50 vs binder probability</h2>{pic50_binder}</div>")
+
+    for col, title, div_id in (("pIC50", "Ranked predicted pIC50", "chart-pic50"),
+                               ("confidence_score", "Ranked confidence", "chart-confidence")):
+        chart_html = _make_bar_chart(df, col, div_id)
+        if chart_html:
+            chart_cards.append(f"<div class='md-card'><h2>{title}</h2>{chart_html}</div>")
 
     for family_id, chart_html in _make_fingerprint_heatmaps(df, interactions_df):
         chart_cards.append(f"<div class='md-card md-card-span2'><h2>{family_id}: residue interaction fingerprint</h2>"
@@ -5856,7 +6081,8 @@ def write_html(df: pd.DataFrame, path: Path, campaign_dir: Path, campaign: Campa
         family_status = json.loads(sse_status_path.read_text()) if sse_status_path.exists() else {}
 
         sse_intro = build_family_status_html(family_status) + build_summary_stats_html(compute_summary_stats(sse_df))
-        card_html = f"<div class='md-card table-card'><h2>Secondary structure shifts (apo vs holo)</h2>{sse_intro}"
+        card_html = (f"<div class='md-card table-card'>"
+                     f"<h2>Family coverage and SSE shifts</h2>{sse_intro}")
         if not sse_df.empty:
             card_html += (f"{build_sse_table_html(sse_df)}"
                           f"<p><a href='boltz_sse_comparison.csv'>Download CSV</a></p>")
@@ -5868,11 +6094,15 @@ def write_html(df: pd.DataFrame, path: Path, campaign_dir: Path, campaign: Campa
             sse_bar = _make_sse_shift_chart(sse_df, "chart-sse-shift")
             if sse_bar:
                 sse_charts.append(f"<div class='md-card'><h2>Per-motif Ca RMSD</h2>{sse_bar}</div>")
-            sse_heat = _make_sse_heatmap(sse_df, "chart-sse-heatmap")
-            if sse_heat:
-                sse_charts.append(f"<div class='md-card'><h2>Motif x target RMSD</h2>{sse_heat}</div>")
             if sse_charts:
                 parts.append(f"<div class='md-chart-grid'>{''.join(sse_charts)}</div>")
+            sse_heat = _make_sse_heatmap(sse_df, "chart-sse-heatmap")
+        else:
+            sse_heat = ""
+        parts.append(_build_heatmap_pair_card(selectivity_heatmap, sse_heat))
+
+    if not any("heatmap-pair" in part for part in parts):
+        parts.append(_build_heatmap_pair_card(selectivity_heatmap, ""))
 
     if PLOTLY_JS_PATH.exists():
         plotly_script = f"<script>{PLOTLY_JS_PATH.read_text()}</script>"
