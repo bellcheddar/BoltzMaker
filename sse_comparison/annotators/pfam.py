@@ -80,6 +80,25 @@ class PDBeClient:
         return [d for d in domains if chain_id is None or d[3] == chain_id] if chain_id else domains
 
 
+#: Pfam domain names that describe a membrane-spanning bundle. Everything a Pfam
+#: lookup returns used to be labelled "loop", which is wrong for most of them and
+#: wrong in a way that hides a whole panel: the dashboard splits per-motif RMSD into
+#: Loops and Transmembrane because a loop moving 18A flattens a 2A change in a helix,
+#: and it splits on this kind. On a class B GPCR campaign Pfam returns exactly one
+#: domain, `7tm_2` -- the seven-transmembrane bundle -- so every bar landed in Loops
+#: and the Transmembrane panel rendered empty with no error anywhere.
+_PFAM_TM_PATTERN = re.compile(r"(?:^|[^a-z])(?:\d*tm\d*(?:$|[^a-z])|transmembrane)", re.I)
+
+
+def _pfam_kind(label: str) -> str:
+    """"helix" for a transmembrane bundle, "loop" otherwise.
+
+    Named from the domain label because that is all a Pfam hit carries -- there is no
+    topology in the response to consult.
+    """
+    return "helix" if _PFAM_TM_PATTERN.search(str(label or "")) else "loop"
+
+
 class PfamFallbackAnnotator(MotifAnnotator):
     family_type = "pfam"
 
@@ -131,6 +150,6 @@ class PfamFallbackAnnotator(MotifAnnotator):
                                      for r in range(start_resnum, end_resnum + 1)
                                      if r in apo_resnum_to_pos and apo_resnum_to_pos[r] in apo_to_fam})
             if fam_positions:
-                motifs.append(Motif(name=label, kind="loop", residues=fam_positions,
+                motifs.append(Motif(name=label, kind=_pfam_kind(label), residues=fam_positions,
                                      is_binding_site_adjacent=False))
         return motifs
