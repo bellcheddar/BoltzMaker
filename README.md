@@ -2,7 +2,7 @@
 
 > **BoltzMaker: Boltz2 campaign-scale structure and affinity prediction, binding analysis, and run control, orchestrated end to end from a single spec file.**
 
-[![live](https://img.shields.io/badge/live-boltzmaker.mdeller.com-00d084?logo=icloud&logoColor=white)](https://boltzmaker.mdeller.com) ![python](https://img.shields.io/badge/python-3.12.3-3776AB?logo=python&logoColor=white) ![flask](https://img.shields.io/badge/flask-3.1.3-000000?logo=flask&logoColor=white) ![gunicorn](https://img.shields.io/badge/gunicorn-26.0.0-499848?logo=gunicorn&logoColor=white) ![nginx](https://img.shields.io/badge/nginx-1.24.0-009639?logo=nginx&logoColor=white) ![boltz](https://img.shields.io/badge/boltz-2-00897B) ![rdkit](https://img.shields.io/badge/RDKit-2026.03-00d084) ![gemmi](https://img.shields.io/badge/gemmi-0.6.5-8a3ffc) ![biopython](https://img.shields.io/badge/Biopython-1.84-1a6b8f) ![plip](https://img.shields.io/badge/PLIP-2025-9b51e0) ![pymol](https://img.shields.io/badge/PyMOL-3.1-ff6900) ![plotly](https://img.shields.io/badge/Plotly.js-2.35.2-3F4F75?logo=plotly&logoColor=white) ![3dmoljs](https://img.shields.io/badge/3Dmol.js-3D%20viewer-fcb900) ![molstar](https://img.shields.io/badge/Mol*-4.9.0-1a6b8f) ![pytest](https://img.shields.io/badge/pytest-379%20passing-0A9EDC?logo=pytest&logoColor=white) ![data](https://img.shields.io/badge/data-GPCRdb%20%C2%B7%20KLIFS%20%C2%B7%20PDBe-467FF7) ![licence](https://img.shields.io/badge/licence-MIT-467FF7) ![author](https://img.shields.io/badge/author-Marc%20C.%20Deller%2C%20D.Phil.-1C244B)
+[![live](https://img.shields.io/badge/live-boltzmaker.mdeller.com-00d084?logo=icloud&logoColor=white)](https://boltzmaker.mdeller.com) ![python](https://img.shields.io/badge/python-3.12.3-3776AB?logo=python&logoColor=white) ![flask](https://img.shields.io/badge/flask-3.1.3-000000?logo=flask&logoColor=white) ![gunicorn](https://img.shields.io/badge/gunicorn-26.0.0-499848?logo=gunicorn&logoColor=white) ![nginx](https://img.shields.io/badge/nginx-1.24.0-009639?logo=nginx&logoColor=white) ![boltz](https://img.shields.io/badge/boltz-2-00897B) ![rdkit](https://img.shields.io/badge/RDKit-2026.03-00d084) ![gemmi](https://img.shields.io/badge/gemmi-0.6.5-8a3ffc) ![biopython](https://img.shields.io/badge/Biopython-1.84-1a6b8f) ![plip](https://img.shields.io/badge/PLIP-2025-9b51e0) ![pymol](https://img.shields.io/badge/PyMOL-3.1-ff6900) ![plotly](https://img.shields.io/badge/Plotly.js-2.35.2-3F4F75?logo=plotly&logoColor=white) ![3dmoljs](https://img.shields.io/badge/3Dmol.js-3D%20viewer-fcb900) ![molstar](https://img.shields.io/badge/Mol*-4.9.0-1a6b8f) ![pytest](https://img.shields.io/badge/pytest-410%20passing-0A9EDC?logo=pytest&logoColor=white) ![data](https://img.shields.io/badge/data-GPCRdb%20%C2%B7%20KLIFS%20%C2%B7%20PDBe-467FF7) ![licence](https://img.shields.io/badge/licence-MIT-467FF7) ![author](https://img.shields.io/badge/author-Marc%20C.%20Deller%2C%20D.Phil.-1C244B)
 
 <table>
 <tr>
@@ -769,6 +769,8 @@ Written next to `boltz_input.md`:
 | `boltz_interactions.csv` (optional) | Long format, one row per detected contact across every target: interaction type, residue, distance -- the raw data behind the dashboard's fingerprint heatmap and per-target contact tables |
 | `boltz_dashboard_sessions/` (optional) | Each target's PyMOL `.pse` session, copied here and linked from the dashboard -- this is the one thing that makes `boltz_dashboard.html` no longer a single self-contained file once interaction analysis has run; without `setup-plip`, the dashboard stays exactly as self-contained as before |
 | `boltz_dashboard.html` | Posts its own real content height to any parent window via `postMessage` on load and resize, so a page embedding it in an iframe (e.g. `findings.md`'s "Interactive dashboard" section) can size the iframe to fit the actual content instead of guessing a fixed height -- a cross-origin iframe can't otherwise be measured/resized from the embedding page's own JS. A campaign summary table with a third "Details" column alongside Field/Value -- a linked path to the input file, each protein/partner's id and sequence length, each ligand's id and SMILES-vs-CCD source, the full list of target stems, which specific ligands got flagged in ligand-chemistry review (linking to the card below), and a plain-English gloss for each of the more cryptic run parameters (accelerator, MPS watermark, recycling/sampling steps, etc.) -- tracked across every `run` invocation in a small hidden sidecar file. Then a "Summary table" directly below it: grouped into named column bands (Identity, Confidence, Affinity, Interactions, Structure) with short human headers instead of raw JSON field names, redundant/granular columns (per-chain and per-chain-pair confidence breakdowns, individual ensemble sub-model values) hidden by regex pattern rather than a fixed list -- so it scales correctly to campaigns with more than two chains -- and two download links, one for the full underlying CSV and one for a CSV matching just this trimmed/renamed view. The "Target" column shows a `{group}_{partners}_{ligand}` display name (e.g. `5HT2A_GNAQ+GNB1+GNG2_RISP`, partners omitted when there are none, `apo` in place of a ligand for a ligand-free target) rather than the internal per-variant family id/stem (`H2ANG_RISP`, `H2AAP`) -- and this isn't just a table label: the same display name (or its family-level `{group}_{partners}` form, with no ligand, for whole-family contexts) replaces the internal id in every chart tick/legend/point label (ranked pIC50, ranked confidence, the pIC50-vs-confidence-score and pIC50-vs-binder-probability scatters, interaction counts, the residue-interaction fingerprint heatmap), every per-target/per-family card title, the campaign-summary target list, and the selectivity pivot's columns (both the dashboard heatmap and the XLSX `selectivity` sheet) -- see **compare-sse** below for the same treatment there. The raw per-variant ids stay alongside the display name in every underlying CSV/XLSX `targets` sheet, for cross-referencing against real output filenames. A "Partner" column lists each target's co-folded partner chain(s) (hidden when the campaign has none), and rows are grouped by `Group:`/family id with a blue top border marking each new group -- the same blue used for column-group boundaries, just rotated. The "Flags" column is renamed "Summary" and icon-based: a bullseye (affinity) and a shield (confidence) icon per row, each tinted green/amber/red by tier (exact value and interpretation on hover), reusing the existing `LOW_CONFIDENCE_THRESHOLD` and a symmetric buffer around Boltz's documented 0.5 binder decision boundary -- Boltz's own docs define these metrics' [0, 1] range but publish no official tri-colour bands. A `MISSING_OUTPUTS` failure collapses the cell to a single red cross; a legend to the right of the download links spells out all six tier/icon combinations. Always shown now (previously hidden entirely when nothing was flagged), so a clean campaign reads as a row of green icons rather than a column that silently disappears. A ligand-free (apo) target's ligand/affinity/interface/interaction columns (including the bullseye) show an explicit `N/A` rather than a blank cell or a misleading `0.00`, since there's no ligand or inter-chain interface for those to describe. Then a "Ligand preparation" card (the same stereocentre/protonation-state/disconnected-fragment checks as `preflight`'s `ligand_preparation` check, shown per-ligand rather than as a single summary line), then a "Ligand structures" card: a paginated 5x5 grid of every ligand's rendered 2D structure (building on [smiles2grid](https://github.com/bellcheddar/smiles2grid)'s design, adapted for a single campaign's scale), with stereocentre/ionizable-group findings highlighted directly on each structure, ligands sharing a Bemis-Murcko scaffold (or, failing that, a verified whole-group maximum-common-substructure) grouped and colour-highlighted together with their depictions aligned to a common orientation, and a captioned legend (badge-by-badge: what S/A/N/Ph/SO3/salt each mean, plus the cluster colour key) stating exactly what was found and on how many ligands -- never an unexplained highlight -- plus "Download PDF" (the same grid as a print/share-friendly file, `boltz_ligand_grid.pdf`) and "Download SMILES" (`boltz_ligands.csv`: ID, SMILES, stereocentre/ionizable-group/fragment findings, MW, cLogP, TPSA) links side by side on one line, matching the Summary table's own download-links style. Then interactive [Plotly](https://plotly.com/javascript/) charts in a grid (ranked pIC50, ranked confidence, a "pIC50 vs confidence score" scatter, interaction counts by type, then a "pIC50 vs binder probability" scatter (binder probability on x, pIC50 on y) -- hover/zoom/pan; plotly.js itself is vendored and inlined into the file rather than CDN-loaded, so the dashboard has no runtime dependency on an external script host). The two scatter charts colour each point by tier via a continuous colourscale + colorbar legend (the same style as the Family x ligand selectivity heatmap's own colorbar) -- confidence tier (matching the Summary table's shield icon) for pIC50-vs-confidence-score, affinity tier (matching the bullseye icon) for pIC50-vs-binder-probability -- and, when a `Ligand:` block sets the optional `Role: agonist`/`Role: antagonist` field, shape-code points by pharmacology (circle = agonist, diamond = antagonist) with a legend positioned inside the plot area's top-left corner (not Plotly's default outside-right position, which would otherwise collide with the colorbar); campaigns that don't set `Role:` see a single unshaped trace, unchanged from before. When `setup-plip` has run: a per-family residue-interaction fingerprint heatmap (also interactive Plotly -- shown for every family with interaction data, even a single ligand, though the similarity-based reordering that helps SAR ranking within a series only kicks in from 3+ ligands) and, per target, its binding-site image (residues labelled and interaction distances shown -- PLIP's own images have neither, so these are re-rendered from its PyMOL session with both added, with a "Download image" link of its own) next to an interactive, auto-rotating [3Dmol.js](https://3dmol.org) view of the same predicted structure (built directly from the mmCIF, ligand highlighted), side by side with a table of that target's contacts (with its own "Download CSV" link) plus a download link for the full PyMOL session. Finally, a "Secondary structure shifts" card (see **compare-sse** below): a "Family coverage" table (every protein family in the campaign, with its status -- `OK` and a target/motif count, or a plain-English reason it was skipped, e.g. "No apo structure configured"), an "Overall shift statistics" summary, and, when there's data, the full per-motif table plus its own Plotly charts. |
+| `reference/` (optional, yours) | Experimental mmCIF structures you drop in yourself. Their presence is what turns on the dashboard's **Ligand pose vs experiment** panel (see below); the same files already serve `Pocket contact:` and `Apo structure:` |
+| `boltz_pose_pairs/` | Two single-ligand mmCIFs per comparison (predicted, superposed into the experimental frame; and experimental) plus an `index.json` of the distances -- what the dashboard's pair viewer draws, carried in the `.bmz` |
 | `boltz_sse_comparison.csv` / `.html` | Written automatically by `analyze`/`all` whenever any family has `Apo structure:` set (or on demand via the standalone `compare-sse` command). One row per family/target/motif: Ca RMSD, centroid shift, helix-axis rotation/kink angles, SSE boundary shift, flagged phi/psi residues, and (kinases) DFG-in/out and alphaC-in/out states -- a metric that genuinely wasn't computed for a motif shows as `N/A`, not a blank cell. The Family/Target columns, chart legends, and family-coverage table all show the same `{group}_{partners}` / `{group}_{partners}_{ligand}` display names used throughout the main dashboard; the CSV also keeps the raw `family_id`/`target_stem` columns alongside for cross-referencing. The HTML is a standalone dashboard (family coverage, overall shift statistics, Plotly bar chart + motif x target heatmap); the same content is also embedded directly into `boltz_dashboard.html` (see below) |
 | `boltz_sse_family_status.json` | One entry per protein family: `ok` (with a target/motif count) / `no_apo_structure` / `apo_not_found` / `annotation_failed` / `no_predicted_structures` -- the machine-readable form of the dashboard's "Family coverage" table, so a family with no `Apo structure:` configured reads as "not configured" rather than silently missing |
 | `boltz_sse_comparison_sessions/` (optional) | A plain-text PyMOL `.pml` script per target -- colours/labels each motif, highlights the ones with a significant shift |
@@ -845,6 +847,87 @@ signal. If no ligand shares a real scaffold with any other, the panel says so pl
 ("no shared scaffold or substructure detected") rather than forcing a highlight onto
 something coincidental. CCD-code ligands have no SMILES to render and show a plain
 placeholder instead of an empty cell.
+
+## 🎯 Ligand pose vs experiment: the prediction against reality
+
+Every other score on the dashboard is Boltz grading its own work. This one is not: it
+compares the docked ligand with the same molecule in an experimentally determined
+structure, and it is the only panel that can tell you the prediction is wrong.
+
+**Why this exists.** On a real GLP1R campaign, orforglipron was predicted into the
+receptor's own transmembrane site with `ligand_iptm` 0.940 and a confidence score of
+0.836 -- comfortably green on both icons. Superposed on 7E14, the crystal structure of
+that same complex, the predicted ligand sat **9.4 A** from where the experiment puts it:
+correct pocket, correct conformation, rotated end for end. No metric Boltz emits noticed,
+because none of them is a comparison with reality. A campaign scoring itself has no way
+to find that class of error.
+
+**How to use it.** Drop experimental mmCIF files into a `reference/` folder next to
+`boltz_input.md`. The panel appears in `boltz_dashboard.html` (and in the hosted Analysis
+view) whenever a campaign has one; without `reference/` it stays silent rather than
+showing an empty card. Nothing else to configure: the same files you already downloaded
+for `Pocket contact:` and `Apo structure:` are the ones it reads.
+
+**Three numbers, because they fail independently:**
+
+| Column | What it measures | Reads as |
+|---|---|---|
+| **Site (A)** | Distance between the two ligand centroids, after superposing the receptor | Did it find the pocket at all |
+| **Pose (A)** | Symmetry-corrected RMSD in place, after superposing the receptor | Did it find the binding mode |
+| **Conformer (A)** | Symmetry-corrected RMSD with the two ligands superposed on each other | Is the molecule's own shape right |
+
+The orforglipron case reads 3.05 / 9.43 / 3.08, which is legible at a glance as "right
+pocket, right shape, wrong orientation". Collapsed into one figure it would be legible as
+nothing. Two icons carry the summary in the same visual language as the rest of the
+dashboard: a **bullseye** for the site and a **pose mark** for the binding mode, each
+tinted green under 2 A, amber to 5 A, red beyond -- 2 A being the long-standing
+convention for "this reproduces the crystal structure".
+
+**Atoms are paired by molecular graph, not by proximity.** A 65-atom drug has equivalent
+methyls and flippable rings; pairing each predicted atom with whichever experimental atom
+happens to be nearest quietly flatters a wrong pose by matching it to itself. RDKit
+assigns bond orders from the campaign's own SMILES and enumerates the substructure
+matches, so a symmetry-equivalent placement scores as correct and a genuinely different
+one does not.
+
+**Which experimental ligand a target is compared against** is worked out rather than
+configured. A constrained target names its pocket after the ligand it was derived from
+(`GLP1R_ORFO_V6G` -> V6G), so that is the answer. An unconstrained target -- the baseline,
+and the comparison most worth having -- is matched by heavy-atom element composition
+against every ligand in `reference/`, so the same molecule is found wherever it sits.
+
+**One small viewer per pair, grouped by pocket.** The table says a pose is 9.4 A
+wrong; it cannot say *how*. "Rotated end for end" is obvious in one glance at two
+overlaid ligands and invisible in a column of angstroms, so the hosted Analysis view
+draws each comparison as its own frame holding exactly two ligands as sticks -- the
+prediction in red, the experimental one in grey -- superposed through their receptors
+and zoomed to fit, with spin and reset. Tiles are grouped under the pocket they were
+run against, unconstrained last, so the comparison the matrix exists for reads down a
+single column. On the GLP1R campaign the V6G tiles show two molecules interleaved in
+one volume pointing different ways, and the unconstrained tiles show them in different
+places entirely: the two failure modes, told apart without reading a number.
+
+BoltzMaker writes each pair as two single-ligand mmCIFs (`boltz_pose_pairs/`,
+carried in the `.bmz`), because the superposition needs RDKit, the reference files and
+the predicted complex -- all of which live on the machine that ran the prediction, and
+none of which are on the server. So the viewer draws exactly the coordinates the
+numbers were measured from, rather than a second superposition that could disagree
+with the table above it.
+
+**Viewers are pooled, not one per tile.** A browser allows a limited number of live
+WebGL contexts and exceeding it does not raise -- it silently kills the oldest, so
+early frames turn black while later ones look fine. Frames are created as they scroll
+into view and disposed least-recently-seen-first, so a campaign with thirty
+comparisons costs the same as one with four.
+
+**A reference of a different protein is refused, not reported on.** Receptor residues are
+matched on number with the residue type required to agree, and a reference must match at
+least 70% of the numbering overlap before it is accepted as being of this protein.
+Measured against 7E14: GLP1R matched at 0.90, GIPR at 0.11. Without that gate the panel
+compares a GIPR prediction to a GLP1R crystal structure and presents the disagreement as
+a finding. Each reference chain is also tried separately rather than pooled, because a
+complex numbers its G-protein chains from 1 as well, and pooling lets the last chain read
+overwrite the receptor's own residues.
 
 ## 🧬 compare-sse: apo vs holo secondary-structure shifts
 
@@ -1233,6 +1316,24 @@ example campaigns.
 
 ## 📋 To do
 
+- [x] Give the dashboard one number that is not Boltz grading its own work: a
+  **Ligand pose vs experiment** panel comparing the docked ligand with the same molecule in an
+  experimental structure. Measured motivation: a GLP1R/orforglipron prediction scored
+  `ligand_iptm` 0.940 and confidence 0.836 while sitting 9.4 A from where 7E14 puts the
+  same ligand in the same pocket, rotated end for end, and nothing on the dashboard could
+  say so. Reports site, pose and conformer separately, because they fail independently
+  (3.05 / 9.43 / 3.08 reads as "right pocket, right shape, wrong orientation"; one figure
+  reads as nothing). Atoms are paired by molecular graph via RDKit rather than by
+  proximity, which would match a wrong pose to itself; and a reference is refused unless
+  it is genuinely a structure of that protein -- 7E14 matched GIPR's residue numbering at
+  0.11 identity and would otherwise have been reported on. See **Ligand pose vs experiment** above.
+- [x] Give each comparison its own frame: **one pair viewer per predicted/experimental
+  ligand pair**, exactly two ligands as sticks, superposed through their receptors and
+  zoomed to fit, grouped by the pocket each target was run against. Fed by two
+  single-ligand mmCIFs BoltzMaker writes at analyze time, so the picture is the same
+  superposition the numbers came from and the server needs no RDKit. Frames are pooled
+  and drawn on scroll, because a browser silently kills the oldest WebGL context rather
+  than refusing a new one, which turns early tiles black while later ones look fine.
 - [x] Let a private campaign be shown to someone without publishing it: **share links**.
   The same self-contained HTML package the Download button produces is hosted at an
   unguessable URL behind a generated password, shown once and stored only as a PBKDF2
