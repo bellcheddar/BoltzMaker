@@ -929,6 +929,68 @@ a finding. Each reference chain is also tried separately rather than pooled, bec
 complex numbers its G-protein chains from 1 as well, and pooling lets the last chain read
 overwrite the receptor's own residues.
 
+## 🔭 How tight should a pocket be? What the measurements say
+
+The panel above exists to catch a wrong pose. This is what it found when pointed at a
+real question: **`Pocket distance:` is the setting that decides whether a constrained
+prediction reproduces the crystal pose, and 8 A is too loose.**
+
+Six conditions, all GLP1R + orforglipron scored against 7E14, one diffusion sample
+each, no templates. "Contacts" is the number of receptor residues named in the
+constraint; "shell" is the distance from the experimental ligand they were derived at.
+
+| Pocket | Shell | Contacts | `Pocket distance` | Site (Å) | Pose (Å) | Conformer (Å) | Confidence | Ligand ipTM |
+|---|---|---|---|---|---|---|---|---|
+| P60 | 6 Å | 38 | 4 Å | 1.36 | **2.04** | 1.34 | 0.849 | 0.987 |
+| P80 | 8 Å | 62 | 4 Å | 1.64 | 2.56 | 1.46 | 0.844 | 0.976 |
+| P35 | 3.5 Å | 13 | 4 Å | 2.83 | 3.70 | 1.66 | 0.841 | 0.939 |
+| P45 | 4.5 Å | 25 | 4 Å | 2.45 | 8.96 | 3.38 | 0.834 | 0.952 |
+| V6G | 8 Å | 62 | 8 Å | 3.08 | 9.51 | 3.08 | 0.836 | 0.940 |
+| unconstrained | -- | sparse sweep | 8 Å | 11.02 | 13.41 | 3.43 | 0.765 | 0.754 |
+
+**The distance is the lever, and P80 isolates it.** P80 and V6G name the *identical 62
+residues*. Nothing differs between them but 4 Å against 8 Å, and the pose goes from
+9.51 Å -- the right pocket, the wrong way round -- to 2.56 Å, a reproduction of the
+experiment. That is a single-variable result, which none of the other comparisons are.
+
+**Do not tune the residue count.** At a fixed 4 Å it does not order the outcome: 13
+contacts gives 3.70 Å, 25 gives 8.96 Å, 38 gives 2.04 Å, 62 gives 2.56 Å. Outcomes are
+bimodal -- a run either lands (2.0-3.7 Å, conformer 1.3-1.7) or it does not (9-9.5 Å,
+conformer 3.1-3.4) -- and P45 fails the same way V6G does, getting the ligand's own
+conformation wrong as well as its placement. With one sample per condition there is no
+separating "25 contacts is bad" from "P45 was a bad draw", so the honest summary is
+that **at 4 Å three of four pocket definitions reproduced the crystal pose, and at 8 Å
+none did.**
+
+**The confidence columns are the argument for this panel.** Across poses spanning 2.04
+to 9.51 Å, `confidence_score` moves 0.834 to 0.849 -- a spread of 0.015 that does not
+even put the worst pose last. Ligand ipTM orders the three good runs correctly (0.939 <
+0.976 < 0.987 for 3.70 > 2.56 > 2.04 Å) and then hands P45's 8.96 Å a 0.952, placing a
+failure mid-pack. Both scores do drop sharply for the unconstrained run (0.765 / 0.754),
+so they can tell "on the receptor but not in the site" from "in the site" -- they simply
+cannot tell a right pose from a wrong one once the ligand is in the pocket. Only the
+comparison with an experiment can.
+
+**Affinity is not in this table**, because the pose series was run with
+`Predict affinity: no` -- it was a geometry test. The one row that has it is the
+unconstrained baseline (binder p 0.496, pIC50 8.98), and the campaign it came from
+already measured binder probability at r = +0.07 against pIC50 across 24 targets, moving
+with the pocket condition rather than the chemistry.
+
+### What to set
+
+Use **`Pocket distance: 4`** for a named pocket. Leave the contact list as whatever your
+reference structure gives you; deriving it at a 6-8 Å shell is fine and the difference
+between those two was within the noise of this experiment.
+
+This does **not** apply to the ligand-free "stay on your own receptor" sweep that
+unconstrained targets get -- that is fixed at `CONFINE_DISTANCE_A` (8 Å) and is
+deliberately not coupled to `Pocket distance:`. The two constraints ask different
+questions: a pocket asks *which site*, where tightening is the whole point, while the
+sweep asks *which protein* of residues scattered the length of the chain, where no
+ligand can be near all of them and the number only scales the pull. Coupling them meant
+tightening a pocket silently re-tuned the baseline arm it was about to be compared with.
+
 ## 🧬 compare-sse: apo vs holo secondary-structure shifts
 
 **Why this exists:** a confidence score tells you *what* Boltz predicted, not *how the
@@ -1327,6 +1389,15 @@ example campaigns.
   proximity, which would match a wrong pose to itself; and a reference is refused unless
   it is genuinely a structure of that protein -- 7E14 matched GIPR's residue numbering at
   0.11 identity and would otherwise have been reported on. See **Ligand pose vs experiment** above.
+- [x] Answer "how tight should a pocket be?" with measurements rather than intuition:
+  six conditions on GLP1R + orforglipron against 7E14, reported in **How tight should a
+  pocket be?** above. `Pocket distance` turned out to be the lever -- the same 62
+  residues at 4 A instead of 8 A took the pose from 9.51 A to 2.04-2.56 A -- while the
+  contact count did not order the outcome at all. Confidence spans 0.834-0.849 across
+  that whole range and ligand ipTM ranks a 8.96 A failure mid-pack, which is the
+  evidence for the pose panel existing. Decoupled the confine-to-receptor sweep from
+  `Pocket distance:` in the same pass, so tightening a pocket no longer re-tunes the
+  baseline arm it is compared against.
 - [x] Give each comparison its own frame: **one pair viewer per predicted/experimental
   ligand pair**, exactly two ligands as sticks, superposed through their receptors and
   zoomed to fit, grouped by the pocket each target was run against. Fed by two

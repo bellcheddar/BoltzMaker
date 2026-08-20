@@ -1241,3 +1241,39 @@ def test_the_dashboards_mobile_rules_come_last_in_its_stylesheet(bm):
     for rule in _re.finditer(r"^\.[a-zA-Z][\w.-]*\s*(,|\{)", css[first_media:], _re.M):
         raise AssertionError(
             f"a plain rule ({rule.group(0).strip()}) is defined after the mobile block")
+
+
+def test_tightening_a_pocket_does_not_retune_the_baseline_arm(bm, tmp_path):
+    """`Pocket distance:` must not reach the confine-to-receptor sweep.
+
+    The two constraints ask different questions. A named pocket asks "which site",
+    and tightening it is the point -- 8A to 4A took a measured pose from 9.51A to
+    2.56A. The sweep asks "which protein" of residues scattered the length of the
+    chain, where no ligand can be near all of them. Coupling them meant that
+    changing the pocket silently changed the unconstrained baseline the pocket was
+    about to be compared against, which is exactly the variable a matrix campaign
+    exists to hold still.
+    """
+    md = tmp_path / "c.md"
+    md.write_text("""Settings:
+Output folder: ./y
+Pocket distance: 4
+
+Protein: RECP
+Sequence: MKTAYIAKQRQISFVKSHFSRQLEERLGLIEVQMKTAYIAKQRQISFVKSHFSRQLEERLGLIEVQ
+Pocket contact: RECP residue 12 as SITE
+
+Ligand: LIG1
+SMILES: CCO
+""")
+    campaign = bm.parse_md(md)
+    named, sweep = None, None
+    for fam, lig, code in bm._expand_targets(campaign):
+        doc = bm._build_yaml_doc(fam, lig, campaign, code)
+        pocket = [c["pocket"] for c in doc.get("constraints", []) if "pocket" in c][0]
+        if code:
+            named = pocket
+        else:
+            sweep = pocket
+    assert named["max_distance"] == 4.0, "the named pocket honours the setting"
+    assert sweep["max_distance"] == bm.CONFINE_DISTANCE_A == 8.0

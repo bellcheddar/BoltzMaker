@@ -1471,6 +1471,13 @@ def _pocket_for(fam, lig, code):
     return fam.pocket_contacts
 
 
+#: Distance for the "stay on your own receptor" sweep applied to targets with no named
+#: pocket. 8A is what was validated: on the GLP1R/GIPR campaign it put all 8 baseline
+#: targets on their own receptor, where before them 6 of 27 ligands had docked onto the
+#: G protein instead.
+CONFINE_DISTANCE_A = 8.0
+
+
 def _build_yaml_doc(fam: ProteinFamily, lig: object, campaign: Campaign,
                      pocket_code: object = None) -> dict:
     # lig is None for a ligand-free (apo) target ("Ligands: none") -- no ligand entity,
@@ -1519,11 +1526,18 @@ def _build_yaml_doc(fam: ProteinFamily, lig: object, campaign: Campaign,
         # 59, so the restraint sits in a force regime Boltz already handles well. It
         # is not satisfiable in the sense of being within 8A of all of them -- it is
         # directional, and the direction is "onto this protein".
+        # Fixed at CONFINE_DISTANCE_A, deliberately NOT `Pocket distance:`. That setting
+        # tunes a real pocket -- where a tighter number is the whole point, and lowering
+        # it from 8A to 4A took a measured pose from 9.51A to 2.56A -- while this sweep
+        # is asking a different question ("which protein?") of residues scattered the
+        # length of the chain, where no ligand can be close to all of them and the
+        # number only scales the pull. Coupling them meant tightening a pocket silently
+        # re-tuned the baseline arm it was going to be compared against.
         stride = max(1, len(fam.sequence) // 58)
         constraints.append({"pocket": {
             "binder": lig.id,
             "contacts": [[fam.id, i + 1] for i in range(0, len(fam.sequence), stride)],
-            "max_distance": campaign.settings.pocket_distance,
+            "max_distance": CONFINE_DISTANCE_A,
             "force": True,
         }})
     for atom1, atom2 in (fam.bond_constraints or []):
