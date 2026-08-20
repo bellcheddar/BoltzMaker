@@ -317,9 +317,22 @@ def test_the_split_also_narrows_the_pinned_category_list():
 
 
 def test_the_two_motif_panels_share_one_legend():
+    """One legend under the pair, not a Plotly legend inside the left chart.
+
+    The halves are separate plots, so a Plotly legend belongs to one of them and
+    cannot span both -- it took a third of the left chart's width and left the right
+    chart with no key at all. The shared one is built as HTML and inserted after the
+    grid, so it spans them.
+    """
     js = _explorer_js()
-    split = js[js.index("function splitMotifChart"):js.index("//: Plotly's typed-array spec")]
-    assert 'showlegend = kind === "loop"' in split
+    split = js[js.index("function splitMotifChart"):js.index("function buildMotifLegend")]
+    assert "showlegend = false" in split, "neither half draws its own"
+    assert 'showlegend = kind === "loop"' not in split
+    assert "buildMotifLegend(grid, spec)" in split
+
+    builder = js[js.index("function buildMotifLegend"):js.index("//: Plotly's typed-array spec")]
+    assert "md-motif-legend-item" in builder
+    assert "insertBefore(legend, grid.nextSibling)" in builder, "after the grid, spanning it"
 
 
 def test_typed_arrays_are_decoded_before_a_trace_is_split():

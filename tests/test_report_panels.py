@@ -590,3 +590,25 @@ def test_shortening_headers_leaves_the_cells_alone():
     html = "<tr><th>H-bond</th></tr><tr><td>H-bond</td></tr>"
     out = reports.shorten_headers(html)
     assert "<td>H-bond</td>" in out
+
+
+def test_the_collapsible_group_attributes_survive_sanitising():
+    """Without them the table renders collapsed and cannot be expanded again.
+
+    The classes pass the sanitiser on their own, so the columns hide and the headers
+    keep their caret and hover -- they simply do nothing, because the toggle selects
+    on `data-group` and there is nothing to select. Hidden columns with no way back
+    is worse than not collapsing them at all.
+    """
+    from boltzmaker_web import reports
+
+    html = ("<main><div class='md-card'><h2>Summary table</h2><table class='full-table'>"
+            "<thead><tr><th colspan='1' class='ft-group ft-collapsible' "
+            "data-full-span='6' data-group='Confidence'>Confidence</th></tr></thead>"
+            "<tbody><tr><td class='ft-collapsed' data-group='Confidence'>0.8</td></tr>"
+            "</tbody></table></div></main>")
+    panels, _specs = reports.extract(html)
+    kept = panels[0].html
+    assert "ft-collapsible" in kept
+    assert 'data-group="Confidence"' in kept
+    assert 'data-full-span="6"' in kept

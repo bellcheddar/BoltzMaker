@@ -260,10 +260,11 @@
 {% elif slot.kind == 'report' %}
 <div class="md-card{% if slot.panel.wide %} md-card-wide{% endif %}" id="{{ slot.anchor }}">
   <h2>{{ slot.panel.title }}</h2>
-  {% if slot.panel.title in ('pIC50 vs confidence score', 'pIC50 vs binder probability') %}
-  {#  Both scatters, because both are clickable: they plot the same points against
-      different axes. "below" since the detail panel moved under the Targets table;
-      these plots now sit above both.  #}
+  {% if slot.panel.title in ('pIC50 vs confidence score', 'pIC50 vs binder probability',
+                            'Interaction counts by type', 'Ranked predicted pIC50',
+                            'Ranked confidence') %}
+  {#  Every chart whose points are targets, because every one of them is clickable.
+      "below" since the detail panel moved under the Targets table.  #}
   <p class="md-hint" style="margin-top:0">Click a point to open that target, in the panel
     below the Targets table.</p>
   {% endif %}

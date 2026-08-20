@@ -206,12 +206,17 @@
       return;
     }
     this.plugin.managers.interactivity.lociSelects.deselectAll();
+    // durationMs 0, here and at every other focusLoci: Mol* animates the camera by
+    // default, and an animation started before `up` is set lands after it and undoes
+    // it. That is why the pockets pane kept coming back level however many times the
+    // orientation code was called -- the orientation was applied and then animated
+    // away a few frames later.
     this.plugin.managers.camera.focusLoci({
       kind: "element-loci", structure: data,
       elements: data.units.map(function (unit) {
         return { unit: unit, indices: allIndices(unit) };
       }),
-    });
+    }, { durationMs: 0 });
   };
 
   function allIndices(unit) {
@@ -384,6 +389,7 @@
      spheres, so a subset is one call. */
   Wrapper.prototype.frameExtras = function (names) {
     var self = this;
+    var restoreUp = this._up;
     var loci = [];
     (names || Object.keys(this.extras)).forEach(function (name) {
       var entry = self.extras[name];
@@ -399,7 +405,9 @@
     if (!loci.length) { this.resetCamera(); return false; }
     // A single-element array is not the array branch in Mol*'s own code, so hand
     // it the loci itself and let the ordinary path frame it.
-    this.plugin.managers.camera.focusLoci(loci.length === 1 ? loci[0] : loci);
+    this.plugin.managers.camera.focusLoci(loci.length === 1 ? loci[0] : loci,
+                                          { durationMs: 0 });
+    if (restoreUp) this.orientUp(restoreUp);
     return true;
   };
 
@@ -539,6 +547,9 @@
   */
   Wrapper.prototype.orientUp = function (up) {
     if (!up || up.length !== 3 || !this.plugin.canvas3d) return this;
+    // Remembered so a later re-frame can restore it: the pockets pane re-frames on
+    // every row click, and each of those would otherwise level the camera again.
+    this._up = up;
     var length = Math.sqrt(up[0] * up[0] + up[1] * up[1] + up[2] * up[2]);
     if (!length || !isFinite(length)) return this;
     return this._applyUp([up[0] / length, up[1] / length, up[2] / length]);

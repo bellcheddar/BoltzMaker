@@ -702,9 +702,29 @@ tr.md-check-na .md-check-fail { color: var(--md-text-muted); }
 .md-pose-group:first-child { margin-top: 6px; }
 /* auto-fit, not a fixed count: a pocket with one pair should not leave two empty
    columns, and one with six should wrap rather than shrink each frame to a stamp. */
+/* The coverage card holds two tables; the second's heading is a block and its
+   statistics are inline text, so without this they ran together on one line. */
+/* One legend under both per-motif charts, spanning the pair. Wraps rather than
+   scrolls: twelve target names is more than fits on a line, and a legend you have
+   to scroll is one you will not read. */
+.md-motif-legend {
+  display: flex; flex-wrap: wrap; gap: 6px 18px;
+  margin: 10px 2px 0; padding-top: 10px;
+  border-top: 1px solid var(--md-border);
+  font-size: 11.5px; color: var(--md-text-muted);
+}
+.md-motif-legend-item { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
+.md-motif-legend-swatch { width: 11px; height: 11px; border-radius: 2px; flex-shrink: 0; }
+
+.md-coverage-stats { margin-top: 18px; }
+.md-coverage-stats .md-sub { margin: 0 0 8px; display: block; }
+.md-coverage-stats > :not(.md-sub) { display: block; margin-top: 4px; }
+
+/* Exactly two per row, not auto-fit: these are read in pairs (a pocket against its
+   baseline), and a row of four turns that comparison into a horizontal scan. */
 .md-pose-row {
   display: grid; gap: 14px;
-  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 .md-pose-tile {
   border: 1px solid var(--md-border); border-radius: var(--md-radius);

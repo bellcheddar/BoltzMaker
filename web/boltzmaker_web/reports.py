@@ -54,6 +54,12 @@ _ALLOWED_ATTRS = {
     "stroke-linejoin", "stroke-dasharray", "d", "cx", "cy", "r", "rx", "ry",
     "x", "y", "x1", "y1", "x2", "y2", "points", "transform", "opacity",
     "fill-rule", "clip-rule", "aria-hidden",
+    # The summary table's collapsible column groups. Inert data attributes -- they
+    # name a group and record its full span, and nothing reads them but this page's
+    # own toggle. Without them the classes still arrive, so the table renders
+    # collapsed and the headers look clickable while nothing can be selected to
+    # show again: the columns were hidden with no way to get them back.
+    "data-group", "data-full-span",
 }
 
 _SCRIPT_RE = re.compile(r"<script\b.*?</script\s*>", re.S | re.I)
@@ -86,6 +92,8 @@ PANEL_ORDER = (
     "Campaign summary",
     "pIC50 vs confidence score",    # clickable: a point opens the target detail
     "pIC50 vs binder probability",  # the other view of the same points
+    "Ranked predicted pIC50",
+    "Ranked confidence",
     "Summary table",
     "@targets",                     # the sortable, filterable target table
     "@detail",                      # sits directly under the table it is driven by
@@ -95,10 +103,13 @@ PANEL_ORDER = (
     "Pockets",
     "Ligand preparation",
     "Ligand structures",
-    "Ranked predicted pIC50",
-    "Ranked confidence",
     "Interaction counts by type",
     "SSE motif shifts (apo vs holo)",
+    # The coverage and statistics summarise the comparison; the per-motif chart is
+    # the detail behind them, so it reads after rather than before.
+    "Family coverage and SSE shifts",
+    "Family coverage",
+    "Overall shift statistics",
     "Per-motif Ca RMSD",
     # Both of these summarise what the per-motif chart above shows in detail, so they
     # read after it rather than before. "Family coverage" is the merged card (see
@@ -107,9 +118,6 @@ PANEL_ORDER = (
     # for campaigns whose report predates it.
     "Selectivity and motif shifts",
     "Family x ligand selectivity",
-    "Family coverage and SSE shifts",
-    "Family coverage",
-    "Overall shift statistics",
     "Motif x target RMSD",
 )
 
@@ -623,9 +631,12 @@ def _merge_coverage_panels(panels: list) -> list:
         return panels
 
     first["title"] = COVERAGE_MERGED_TITLE
+    # The heading is a block and the statistics that follow are inline text, so
+    # without the wrapper they ran together on one line.
     first["html"] = (f"{first['html']}"
+                     f"<div class=\"md-coverage-stats\">"
                      f"<h3 class=\"md-sub\">{_COVERAGE_TITLES[1]}</h3>"
-                     f"{second['html']}")
+                     f"{second['html']}</div>")
     return [panel for panel in panels if panel is not second]
 
 

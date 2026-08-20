@@ -184,16 +184,33 @@ var BoltzExplorer = (function () {
     return match || data.targets.filter(function (t) { return t.id === name; })[0];
   }
 
-  function wireScatterClicks(host) {
+  /* Click a point or a bar to open that target.
+
+     Three ways to recover which target was clicked, because the charts carry the
+     name differently. A scatter puts it in the trace's `text`; a bar chart is
+     plotted against numeric positions with the names in the axis `ticktext`, so
+     there is no text on the point at all and the tick has to be looked up by index;
+     and a categorical axis gives the name as `point.x` directly.
+  */
+  function wirePointClicks(host) {
     if (!host || !host.on) return;
     host.on("plotly_click", function (ev) {
       if (!ev.points || !ev.points.length) return;
       var point = ev.points[0];
-      var label = point.text || (point.data && point.data.text && point.data.text[point.pointIndex]);
+      var label = point.text
+        || (point.data && point.data.text && point.data.text[point.pointIndex]);
+      if (!label) {
+        var ticks = host.layout && host.layout.xaxis && host.layout.xaxis.ticktext;
+        if (ticks && point.pointIndex !== undefined) label = ticks[point.pointIndex];
+      }
+      if (!label && typeof point.x === "string") label = point.x;
       var target = label && targetByDisplayName(String(label));
       if (target) select(target.id);
     });
   }
+
+  //: Kept as an alias so the older call sites read the same as they always did.
+  var wireScatterClicks = wirePointClicks;
 
   // ---- per-target detail --------------------------------------------------
 
@@ -2268,9 +2285,10 @@ var BoltzExplorer = (function () {
         copy.x = keepIndex.map(function (i) { return trace.x[i]; });
         copy.y = keepIndex.map(function (i) { return y[i]; });
         copy.hovertemplate = "%{fullData.name}<br>%{x}: %{y:.2f} \u00c5<extra></extra>";
-        // One legend for the pair: the second panel's traces are the same twelve
-        // targets, and a second copy of the list says nothing the first did not.
-        copy.showlegend = kind === "loop";
+        // Neither chart draws its own: one shared legend goes under both (see
+        // buildMotifLegend). Inside a chart it took a third of the plot width, and
+        // putting it on only the left half left the right one unlabelled.
+        copy.showlegend = false;
         return copy;
       }).filter(function (trace) { return trace.x.length; });
       if (!traces.length) {
@@ -2286,7 +2304,7 @@ var BoltzExplorer = (function () {
       }
       drawn[kind] = true;
       var layout = JSON.parse(JSON.stringify(spec.layout || {}));
-      layout.showlegend = kind === "loop";
+      layout.showlegend = false;
       // The report pins the category list so every chart shares one x ordering.
       // Left alone, both halves draw all fifteen motifs and only half of each has
       // any bars -- the split was in the data and invisible on screen.
@@ -2305,6 +2323,7 @@ var BoltzExplorer = (function () {
     // surviving chart squeezed into half a card next to white space.
     var grid = loops.closest ? loops.closest(".md-motif-grid") : null;
     if (grid) grid.classList.toggle("md-motif-grid-single", !(drawn.loop && drawn.tm));
+    if (grid) buildMotifLegend(grid, spec);
     // The legend lives on the loops half; if that half is gone it has to move, or
     // the only chart on screen has no key to its colours.
     if (!drawn.loop && drawn.tm) {
@@ -2316,6 +2335,40 @@ var BoltzExplorer = (function () {
       }
     }
     return true;
+  }
+
+  /* One legend for both per-motif charts, under the pair and spanning them.
+
+     Built as HTML rather than left to Plotly: the two halves are separate plots, so
+     a Plotly legend belongs to one of them and cannot span both -- which is why it
+     used to sit inside the left chart, taking a third of its width and leaving the
+     right chart with no key at all. */
+  function buildMotifLegend(grid, spec) {
+    var existing = grid.parentNode.querySelector(".md-motif-legend");
+    if (existing) existing.parentNode.removeChild(existing);
+
+    var legend = document.createElement("div");
+    legend.className = "md-motif-legend";
+    var seen = {};
+    (spec.data || []).forEach(function (trace) {
+      var name = trace.name || "";
+      if (!name || seen[name]) return;
+      seen[name] = true;
+      var colour = (trace.marker && trace.marker.color) || trace.line && trace.line.color;
+      if (Array.isArray(colour)) colour = colour[0];
+      var item = document.createElement("span");
+      item.className = "md-motif-legend-item";
+      var swatch = document.createElement("span");
+      swatch.className = "md-motif-legend-swatch";
+      swatch.style.background = colour || "#888";
+      item.appendChild(swatch);
+      var label = document.createElement("span");
+      label.textContent = name;
+      label.title = name;
+      item.appendChild(label);
+      legend.appendChild(item);
+    });
+    if (legend.childNodes.length) grid.parentNode.insertBefore(legend, grid.nextSibling);
   }
 
   //: Plotly's typed-array spec: numbers that came from numpy arrive as base64
@@ -2341,6 +2394,11 @@ var BoltzExplorer = (function () {
     }
   }
 
+  //: Charts whose x values are targets, so a click can open one. Excludes the
+  //: per-motif and fingerprint charts, whose x is a motif or a residue.
+  var CLICKABLE_CHARTS = ["chart-scatter", "chart-pic50-binder", "chart-interactions",
+                          "chart-pic50", "chart-confidence"];
+
   function drawSpec(spec, host) {
     try {
       normaliseSpec(spec, host);
@@ -2348,9 +2406,9 @@ var BoltzExplorer = (function () {
       // Both scatters open a target: they plot the same points against different
       // axes, and a point being clickable on one chart and inert on the other is
       // the kind of inconsistency a reader blames on themselves.
-      if (spec.id === "chart-scatter" || spec.id === "chart-pic50-binder") {
-        wireScatterClicks(host);
-      }
+      // Every chart whose points ARE targets: both scatters and the interaction
+      // counts. The ranked bars are the same targets again, so they get it too.
+      if (CLICKABLE_CHARTS.indexOf(spec.id) >= 0) wirePointClicks(host);
     } catch (err) {
       host.innerHTML = '<p class="md-hint">This chart could not be drawn.</p>';
     }
