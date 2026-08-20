@@ -546,6 +546,21 @@ POCKETS_VIEWER_HTML = (
 )
 
 
+#: Appended below the Ligand pose vs experiment table, for the same reason the
+#: pockets viewer is appended below its own: the table is the measurement, which only
+#: the machine that ran the prediction could make, and the viewer is this page's. One
+#: small viewer per pair rather than one big one holding all of them, because the
+#: question here is per pair -- "did THIS ligand land where the experiment puts it" --
+#: and a dozen pairs superposed in one frame is the picture that question is not.
+POSE_VIEWER_HTML = (
+    '<div class="md-detail-pane md-pose-pane">'
+    '<h3 class="md-sub">Predicted against experimental</h3>'
+    '<p class="md-hint" id="pose-note" style="margin-top:0"></p>'
+    '<div class="md-pose-grid" id="pose-grid"></div>'
+    '</div>'
+)
+
+
 def rebuild_panels(panels: list) -> list:
     """Swap in this page's own markup for the panels it redraws."""
     for panel in panels:
@@ -557,6 +572,8 @@ def rebuild_panels(panels: list) -> list:
             panel["html"] = shorten_headers(panel["html"])
         elif title == "Pockets" and isinstance(panel, dict):
             panel["html"] = panel["html"] + POCKETS_VIEWER_HTML
+        elif title == "Ligand pose vs experiment" and isinstance(panel, dict):
+            panel["html"] = panel["html"] + POSE_VIEWER_HTML
     return panels
 
 #: Header text the summary table can spare. Every column of that table is a

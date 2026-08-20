@@ -599,6 +599,46 @@ tr.md-check-na .md-check-fail { color: var(--md-text-muted); }
    on screen. */
 .md-pockets-pane .md-overlay-rmsd.md-off-receptor { color: var(--md-accent-red); }
 
+/* ---- predicted against experimental, one small viewer per pair ---- */
+.md-pose-pane { margin-top: 16px; }
+.md-pose-group {
+  font-size: 12px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase;
+  color: var(--md-text-muted); margin: 18px 0 8px;
+}
+.md-pose-group:first-child { margin-top: 6px; }
+/* auto-fit, not a fixed count: a pocket with one pair should not leave two empty
+   columns, and one with six should wrap rather than shrink each frame to a stamp. */
+.md-pose-row {
+  display: grid; gap: 14px;
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+}
+.md-pose-tile {
+  border: 1px solid var(--md-border); border-radius: var(--md-radius);
+  padding: 10px; background: var(--md-bg-alt); min-width: 0;
+}
+.md-pose-head { display: flex; align-items: baseline; gap: 8px; margin-bottom: 6px; }
+.md-pose-name {
+  flex: 1; min-width: 0; font-size: 12px; font-weight: 600;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.md-pose-score { font-size: 12px; font-variant-numeric: tabular-nums; font-weight: 600; }
+.md-pose-good { color: var(--md-accent-green); }
+.md-pose-fair { color: var(--md-accent-amber); }
+.md-pose-poor { color: var(--md-accent-red); }
+/* An explicit height on the host, not a min-height on a flex child: these tiles are
+   grid cells with nothing to stretch them, and a Mol* canvas in a zero-height box
+   initialises to 0x0 and then never resizes when the box later grows. */
+.md-pose-viewer { height: 220px; min-height: 220px; flex: none; }
+/* Until a tile is drawn its host is an empty bordered box; the dashed edge says it
+   is waiting rather than broken. */
+.md-pose-viewer:not(.md-pose-loaded) { border-style: dashed; background: transparent; }
+.md-pose-tile .md-viewer-controls { margin-top: 8px; }
+.md-pose-tile .md-viewer-controls .md-btn { padding: 3px 10px; font-size: 11px; }
+.md-pose-tile-note { font-size: 11px; margin: 6px 0 0; }
+/* The one-column phone rule for .md-pose-row is in the mobile block at the END of
+   this file, not here: a media query carries no extra specificity, so any plain rule
+   written below it wins at every width. */
+
 /* A row of the pockets table is a selection: click it to show only its structures.
    The affordance has to live on the row itself because the table is markup the
    report generated -- this page cannot add a button to it, only behaviour. */
@@ -667,6 +707,7 @@ tr.md-check-na .md-check-fail { color: var(--md-text-muted); }
   .md-viewer { min-height: 260px; }
   .md-detail-select { font-size: 15px; }
   .md-fingerprint-grid, .md-motif-grid { grid-template-columns: 1fr; }
+  .md-pose-row { grid-template-columns: 1fr; }
   .md-seq-tooltip { white-space: normal; max-width: 240px; }
   .md-mode-card { padding: 18px; }
 

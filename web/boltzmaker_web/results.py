@@ -300,6 +300,12 @@ class Results:
     interactions: dict = field(default_factory=dict)
     #: UniProt accession by protein short name, when the Prepare form was told one.
     accessions: dict = field(default_factory=dict)
+    #: One entry per predicted/experimental ligand pair BoltzMaker could compare,
+    #: with the site/pose/conformer distances it measured. Empty for a campaign that
+    #: shipped no reference structures, and for every results file written before the
+    #: comparison existed -- both of which read the same way here, which is correct:
+    #: there is nothing to draw.
+    pose_pairs: list = field(default_factory=list)
 
     @property
     def private(self) -> bool:
@@ -517,6 +523,21 @@ def load(root: Path) -> Results:
         except (json.JSONDecodeError, OSError):
             accessions = {}
 
+    # The pairs are only listed here; their coordinates stay in the files the viewer
+    # fetches one at a time, so a campaign with thirty comparisons does not put thirty
+    # ligands' coordinates into every page load.
+    pose_pairs: list[dict] = []
+    pose_index = root / "posepairs" / "index.json"
+    if pose_index.is_file():
+        try:
+            payload = json.loads(pose_index.read_text(encoding="utf-8"))
+            raw = payload.get("pairs") if isinstance(payload, dict) else None
+            pose_pairs = [pair for pair in (raw or []) if isinstance(pair, dict)
+                          and (root / "posepairs" / f"{pair.get('stem')}_pred.cif").is_file()
+                          and (root / "posepairs" / f"{pair.get('stem')}_ref.cif").is_file()]
+        except (json.JSONDecodeError, OSError):
+            pose_pairs = []
+
     md_path = root / "boltz_input.md"
     families = sorted({t.family_id for t in targets if t.family_id})
 
@@ -549,6 +570,7 @@ def load(root: Path) -> Results:
         reports=reports,
         interactions=_load_interactions(root),
         accessions=accessions,
+        pose_pairs=pose_pairs,
     )
 
 

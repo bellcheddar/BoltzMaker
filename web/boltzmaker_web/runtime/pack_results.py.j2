@@ -123,6 +123,24 @@ def main() -> int:
         if path.is_file():
             members.append((f"summary/{name}", path))
 
+    # The ligand-pose pairs: two ligands each, a few kilobytes, and the only thing in
+    # the payload that compares a prediction with an experiment. Added by name from
+    # the index rather than by globbing the folder, so a stale file left by an earlier
+    # analyze of a campaign that has since changed is not shipped as current.
+    pose_index = CAMPAIGN_DIR / "boltz_pose_pairs" / "index.json"
+    if pose_index.is_file():
+        members.append(("posepairs/index.json", pose_index))
+        try:
+            pairs = json.loads(pose_index.read_text()).get("pairs") or []
+        except (json.JSONDecodeError, OSError):
+            pairs = []
+        for pair in pairs:
+            stem = str(pair.get("stem") or "")
+            for which in ("pred", "ref"):
+                add(f"posepairs/{stem}_{which}.cif",
+                    CAMPAIGN_DIR / "boltz_pose_pairs" / f"{stem}_{which}.cif",
+                    "ligand pose pair")
+
     # One structure and one interaction image per target, named by target_id
     # rather than by Boltz's own filenames. The web side then addresses a target
     # by its id alone and never has to re-derive `{stem}_model_0.cif`.

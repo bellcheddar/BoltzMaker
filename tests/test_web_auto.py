@@ -105,6 +105,26 @@ def packed_bmz(tmp_path, built_bundle):
         "centdist=5.33; angle=64.18; offset=0.65; type=T,AAA_LIG\n"
     )
 
+    # The ligand-pose pairs, as BoltzMaker's analyze writes them: an index naming
+    # each comparison, and two single-ligand mmCIFs per entry. AAA_LIG's pair is
+    # complete; BBB_LIG's index entry has no files, which is what a campaign
+    # re-analysed after its references changed looks like on disk.
+    pose_dir = campaign / "boltz_pose_pairs"
+    pose_dir.mkdir()
+    (pose_dir / "index.json").write_text(json.dumps({"pairs": [
+        {"stem": "AAA_LIG", "family": "FAM1", "ligand": "LIG", "pocket": "SITE1",
+         "reference": "1ABC", "ligand_code": "LIG", "site": 0.9, "pose": 1.4,
+         "shape": 0.8, "atoms": 6, "residues": 120},
+        {"stem": "BBB_LIG", "family": "FAM2", "ligand": "LIG", "pocket": "unconstrained",
+         "reference": "1ABC", "ligand_code": "LIG", "site": 8.1, "pose": 11.7,
+         "shape": 1.1, "atoms": 6, "residues": 118},
+    ]}))
+    for which in ("pred", "ref"):
+        (pose_dir / f"AAA_LIG_{which}.cif").write_text(
+            "data_x\nloop_\n_atom_site.group_PDB\n_atom_site.id\n"
+            "_atom_site.type_symbol\n_atom_site.Cartn_x\n_atom_site.Cartn_y\n"
+            "_atom_site.Cartn_z\nHETATM 1 C 0.000 0.000 0.000\n")
+
     proc = subprocess.run([sys.executable, "pack_results.py"], cwd=campaign,
                           capture_output=True, text=True)
     assert proc.returncode == 0, f"packer failed:\n{proc.stdout}\n{proc.stderr}"
@@ -811,3 +831,95 @@ def test_a_geometry_distance_that_differs_is_kept(loaded_results):
     labels = [f["label"] for f in hbond["geometry"]]
     assert "H···A" in labels        # 3.20, kept
     assert "D···A" not in labels    # 3.67, same as the row's own
+
+
+# ===========================================================================
+#  Predicted against experimental: the pair viewer's data path
+# ===========================================================================
+#
+# The numbers are measured on the machine that ran the prediction -- it is the only
+# one with RDKit, the reference structures and the predicted complex -- so the whole
+# of this feature's server side is carriage: get the pairs through the packer, into
+# the session, and out of two routes without letting a crafted .bmz name a file
+# outside the session.
+
+def _pose_token(client, source) -> str:
+    response = client.post(
+        "/auto/analysis",
+        data={"results_file": (io.BytesIO(source.read_bytes()), "r.bmz")},
+        content_type="multipart/form-data")
+    return response.data.decode().split('BoltzExplorer.init("')[1].split('"')[0]
+
+
+def test_the_packer_carries_the_pose_pairs(packed_bmz):
+    with zipfile.ZipFile(packed_bmz) as zf:
+        names = set(zf.namelist())
+    assert "posepairs/index.json" in names
+    assert "posepairs/AAA_LIG_pred.cif" in names
+    assert "posepairs/AAA_LIG_ref.cif" in names
+
+
+def test_a_pair_whose_files_are_missing_is_not_listed(client, packed_bmz):
+    """Listing it would give the viewer a tile that can only fail to draw.
+
+    The index is written by an earlier analyze and the files can outlive it -- a
+    campaign whose reference structures changed re-measures fewer pairs than its
+    last index names.
+    """
+    token = _pose_token(client, packed_bmz)
+    payload = client.get(f"/auto/analysis/{token}/pose-pairs.json").get_json()
+    stems = [pair["stem"] for pair in payload["pairs"]]
+    assert stems == ["AAA_LIG"], "BBB_LIG has an index entry but no coordinates"
+
+
+def test_both_halves_of_a_pair_are_served(client, packed_bmz):
+    token = _pose_token(client, packed_bmz)
+    for which in ("pred", "ref"):
+        served = client.get(f"/auto/analysis/{token}/pose-pair/{which}/AAA_LIG.cif")
+        assert served.status_code == 200
+        assert b"HETATM" in served.data
+
+
+def test_a_pose_pair_request_cannot_leave_the_session(client, packed_bmz):
+    token = _pose_token(client, packed_bmz)
+    for target in ("../boltz_input.md", "../../etc/passwd", "NOSUCH"):
+        response = client.get(f"/auto/analysis/{token}/pose-pair/pred/{target}.cif")
+        assert response.status_code in (400, 404), target
+    # `which` is a closed set too: it is interpolated straight into the filename.
+    assert client.get(
+        f"/auto/analysis/{token}/pose-pair/../AAA_LIG.cif").status_code in (400, 404)
+
+
+def test_the_viewer_is_attached_to_the_pose_panel_only(client, tmp_path, packed_bmz):
+    """The table is the report's, the viewer is this page's.
+
+    reports.py strips every script from an upload, so a viewer that arrived inside
+    the dashboard could never run here -- it has to be added on this side, and only
+    to the panel it belongs to.
+    """
+    from boltzmaker_web import reports
+
+    panels = [{"title": "Ligand pose vs experiment", "html": "<table></table>",
+               "kind": "table"},
+              {"title": "Pockets", "html": "<table></table>", "kind": "table"},
+              {"title": "Summary table", "html": "<table></table>", "kind": "table"}]
+    rebuilt = {panel["title"]: panel["html"] for panel in reports.rebuild_panels(panels)}
+    assert 'id="pose-grid"' in rebuilt["Ligand pose vs experiment"]
+    assert 'id="pose-grid"' not in rebuilt["Pockets"]
+    assert 'id="pose-grid"' not in rebuilt["Summary table"]
+    assert 'id="viewer-pockets"' in rebuilt["Pockets"], "the pockets viewer still attaches"
+
+
+def test_a_campaign_with_no_comparisons_serves_an_empty_list(client, tmp_path, packed_bmz):
+    """Not a 404: the pane distinguishes "nothing to compare" from "request failed",
+    and only the first of those is a sentence worth showing a reader."""
+    source = tmp_path / "nopairs.bmz"
+    shutil.copyfile(packed_bmz, source)
+    stripped = tmp_path / "stripped.bmz"
+    with zipfile.ZipFile(source) as src, zipfile.ZipFile(stripped, "w") as dst:
+        for item in src.infolist():
+            if not item.filename.startswith("posepairs/"):
+                dst.writestr(item, src.read(item.filename))
+    token = _pose_token(client, stripped)
+    payload = client.get(f"/auto/analysis/{token}/pose-pairs.json").get_json()
+    assert payload == {"pairs": []}

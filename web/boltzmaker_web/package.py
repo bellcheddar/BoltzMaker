@@ -111,6 +111,19 @@ def build(session: Path, web_root: Path, repo_root: Path, loaded, payload: str,
         if overlay.is_file():
             zf.writestr("data/overlay.json", _read(overlay))
 
+        # The ligand-pose pairs come straight out of the campaign rather than from a
+        # session cache: nothing on the server computed them, BoltzMaker measured them
+        # on the machine that ran the prediction and shipped them in the .bmz.
+        pose_index = campaign_dir / "posepairs" / "index.json"
+        if pose_index.is_file():
+            zf.writestr("data/pose-pairs.json", _read(pose_index))
+            for pair in loaded.pose_pairs:
+                for which in ("pred", "ref"):
+                    path = campaign_dir / "posepairs" / f"{pair.get('stem')}_{which}.cif"
+                    if path.is_file():
+                        zf.writestr(f"data/pose-pair/{which}-{pair['stem']}.cif",
+                                    _read(path))
+
         # The campaign's own files, so the package is an archive as well as a
         # viewer: someone given only this can still read the numbers.
         for name in ("boltz_summary.csv", "boltz_interactions.csv",

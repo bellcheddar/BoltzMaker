@@ -1369,6 +1369,43 @@ def _alphafold_payload(session: Path, loaded: bmz.Results, target: str,
     return payload
 
 
+@bp.route("/analysis/<token>/pose-pairs.json")
+def pose_pairs(token: str):
+    """Which predicted/experimental ligand pairs this campaign has, and their numbers.
+
+    The listing only; the coordinates are two files per pair, fetched by the viewer
+    that draws them. A campaign with thirty comparisons would otherwise put sixty
+    ligands into a page load that mostly does not need them.
+    """
+    session = _session_dir(token)
+    if session is None:
+        return Response("session expired", status=404, mimetype="text/plain")
+    try:
+        loaded = bmz.load(session / "campaign")
+    except bmz.BmzError:
+        return Response("session unreadable", status=404, mimetype="text/plain")
+    return Response(json.dumps({"pairs": loaded.pose_pairs}),
+                    mimetype="application/json")
+
+
+@bp.route("/analysis/<token>/pose-pair/<which>/<target>.cif")
+def pose_pair_file(token: str, which: str, target: str):
+    """One ligand of one pair: `pred` as superposed, or `ref` as the experiment has it."""
+    session = _session_dir(token)
+    if session is None:
+        return Response("session expired", status=404, mimetype="text/plain")
+    if which not in ("pred", "ref") or not _TARGET_RE.match(target or ""):
+        return Response("bad request", status=400, mimetype="text/plain")
+    root = (session / "campaign" / "posepairs").resolve()
+    path = (root / f"{target}_{which}.cif").resolve()
+    # The name is regex-checked above, but the containment check is what actually
+    # guarantees it: a regex says what a name looks like, and only comparing the
+    # resolved parent says where the file is.
+    if path.parent != root or not path.is_file():
+        return Response("not found", status=404, mimetype="text/plain")
+    return send_file(path, mimetype="chemical/x-cif", max_age=SESSION_CACHE_SECONDS)
+
+
 @bp.route("/analysis/<token>/alphafold/<target>.json")
 def alphafold_model(token: str, target: str):
     session = _session_dir(token)

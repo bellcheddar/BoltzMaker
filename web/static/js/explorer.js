@@ -591,6 +591,10 @@ var BoltzExplorer = (function () {
       overlay: function (kind, id) {
         return base + "overlay/" + kind + "/" + encodeURIComponent(id) + ".cif";
       },
+      poseIndex: function () { return base + "pose-pairs.json"; },
+      posePair: function (which, id) {
+        return base + "pose-pair/" + which + "/" + encodeURIComponent(id) + ".cif";
+      },
       image: function (id) { return base + "image/" + encodeURIComponent(id); },
       alphafoldInfo: function (id, accession) {
         return base + "alphafold/" + encodeURIComponent(id) + ".json"
@@ -614,6 +618,10 @@ var BoltzExplorer = (function () {
       overlayIndex: function () { return "data/overlay.json"; },
       overlay: function (kind, id) {
         return "data/overlay/" + kind + "-" + encodeURIComponent(id) + ".cif";
+      },
+      poseIndex: function () { return "data/pose-pairs.json"; },
+      posePair: function (which, id) {
+        return "data/pose-pair/" + which + "-" + encodeURIComponent(id) + ".cif";
       },
       image: function (id) { return "data/plip/" + encodeURIComponent(id) + ".png"; },
       alphafoldInfo: function () { return ""; },
@@ -1101,6 +1109,232 @@ var BoltzExplorer = (function () {
     wrapper.frameExtras(wanted.map(function (r) { return "lig:" + r.id; }));
   }
 
+  // ---- predicted against experimental, one small viewer per pair ----------
+
+  /* Grey for the experiment and red for the prediction, the same language the rest
+     of this page uses: grey is context you did not compute, red is the ligand you
+     did. Reversing it -- colouring the crystal structure brightly -- would make the
+     experiment look like the thing under test. */
+  var POSE_PRED_COLOUR = 0xd81b60;
+  var POSE_REF_COLOUR = 0x8a8a8a;
+
+  /* A browser allows a limited number of live WebGL contexts (commonly around
+     sixteen, and this page already holds five), and exceeding it does not raise --
+     it silently kills the oldest, so early viewers turn black while later ones look
+     fine. So the pair viewers are pooled: at most this many exist at once, created
+     as their tile scrolls into view and disposed least-recently-seen-first. A
+     campaign with thirty comparisons costs the same as one with four. */
+  var POSE_VIEWER_BUDGET = 4;
+
+  var poseTiles = {};        // stem -> { host, wrapper, promise, note }
+  var poseLive = [];         // stems with a live viewer, least recent first
+
+  function poseGroups(pairs) {
+    var order = [], byPocket = {};
+    pairs.forEach(function (pair) {
+      var pocket = pair.pocket || "unconstrained";
+      if (!byPocket[pocket]) { byPocket[pocket] = []; order.push(pocket); }
+      byPocket[pocket].push(pair);
+    });
+    // Named pockets first and alphabetical; the unconstrained baseline last, because
+    // it is what the named ones are being compared against.
+    order.sort(function (a, b) {
+      var loose = a === "unconstrained", other = b === "unconstrained";
+      if (loose !== other) return loose ? 1 : -1;
+      return a < b ? -1 : a > b ? 1 : 0;
+    });
+    return order.map(function (pocket) {
+      var rows = byPocket[pocket].slice();
+      rows.sort(function (a, b) { return a.pose - b.pose; });
+      return { pocket: pocket, pairs: rows };
+    });
+  }
+
+  /* The same 2A/5A bands the panel's own icons use. Duplicated here rather than
+     read off the table, because the table is HTML this page did not write and
+     parsing a colour back out of it to re-apply it is worse than restating two
+     numbers -- but they are the same two numbers as POSE_GOOD_RMSD and
+     POSE_FAIR_RMSD in BoltzMaker.py, and must move together. */
+  function poseTierClass(value) {
+    if (value === null || value === undefined) return "";
+    if (value < 2) return "md-pose-good";
+    if (value < 5) return "md-pose-fair";
+    return "md-pose-poor";
+  }
+
+  function releasePoseViewer(stem) {
+    var tile = poseTiles[stem];
+    if (!tile || !tile.wrapper) return;
+    try { tile.wrapper.dispose(); } catch (err) { /* already gone */ }
+    tile.wrapper = null;
+    tile.promise = null;
+    tile.host.innerHTML = "";
+    tile.host.classList.remove("md-pose-loaded");
+    tile.note.textContent = "Scroll back to redraw.";
+  }
+
+  function claimPoseSlot(stem) {
+    poseLive = poseLive.filter(function (name) { return name !== stem; });
+    poseLive.push(stem);
+    while (poseLive.length > POSE_VIEWER_BUDGET) {
+      releasePoseViewer(poseLive.shift());
+    }
+  }
+
+  function showPosePair(pair) {
+    var tile = poseTiles[pair.stem];
+    if (!tile || tile.promise) return;
+    claimPoseSlot(pair.stem);
+    tile.note.textContent = "Drawing…";
+    tile.promise = BoltzViewer.create(tile.host).then(function (wrapper) {
+      tile.wrapper = wrapper.hideAxes();
+      tile.host.classList.add("md-pose-loaded");
+      // In series, as everywhere else here: two concurrent loads into one Mol*
+      // plugin race through its state tree and the structure a load returns is then
+      // not always the one it just added.
+      return wrapper.loadExtra("ref:" + pair.stem, sources.posePair("ref", pair.stem),
+                               { color: POSE_REF_COLOUR, type: "ball-and-stick" })
+        .then(function () {
+          return wrapper.loadExtra("pred:" + pair.stem,
+                                   sources.posePair("pred", pair.stem),
+                                   { color: POSE_PRED_COLOUR, type: "ball-and-stick" });
+        })
+        .then(function () {
+          wrapper.frameExtras(["ref:" + pair.stem, "pred:" + pair.stem]);
+          tile.note.textContent = "Grey: " + pair.reference + " " + pair.ligand_code
+                                  + ". Red: predicted.";
+        });
+    }).catch(function () {
+      tile.note.textContent = "This pair could not be drawn.";
+      tile.promise = null;
+    });
+  }
+
+  function posePairTile(pair) {
+    var tile = document.createElement("div");
+    tile.className = "md-pose-tile";
+
+    var head = document.createElement("div");
+    head.className = "md-pose-head";
+    var name = document.createElement("span");
+    name.className = "md-pose-name";
+    name.textContent = pair.stem;
+    name.title = pair.ligand + " on " + pair.family + ", against " + pair.reference;
+    head.appendChild(name);
+    var score = document.createElement("span");
+    score.className = "md-pose-score " + poseTierClass(pair.pose);
+    score.textContent = pair.pose.toFixed(2) + " Å";
+    score.title = "Symmetry-corrected RMSD in place, after superposing the receptor on "
+                  + pair.reference + " over " + pair.residues + " residues. "
+                  + "Site " + pair.site.toFixed(2) + " Å, conformer "
+                  + pair.shape.toFixed(2) + " Å.";
+    head.appendChild(score);
+    tile.appendChild(head);
+
+    var host = document.createElement("div");
+    host.className = "md-viewer md-pose-viewer";
+    tile.appendChild(host);
+
+    var controls = document.createElement("div");
+    controls.className = "md-viewer-controls md-button-row";
+    [["spin", "Spin"], ["reset", "Reset"]].forEach(function (pair2) {
+      var button = document.createElement("button");
+      button.type = "button";
+      button.className = "md-btn md-btn-secondary";
+      button.textContent = pair2[1];
+      button.addEventListener("click", function () {
+        var live = poseTiles[pair.stem];
+        if (!live || !live.wrapper) return;
+        if (pair2[0] === "spin") { live.wrapper.setStyle("spin"); return; }
+        // Reset frames the two ligands again rather than the whole scene: they ARE
+        // the whole scene here, but resetCamera pads to a default box and the pair
+        // then sits small in the middle of it.
+        live.wrapper.frameExtras(["ref:" + pair.stem, "pred:" + pair.stem]);
+      });
+      controls.appendChild(button);
+    });
+    tile.appendChild(controls);
+
+    var note = document.createElement("p");
+    note.className = "md-hint md-pose-tile-note";
+    note.textContent = "Scroll into view to draw.";
+    tile.appendChild(note);
+
+    poseTiles[pair.stem] = { host: host, wrapper: null, promise: null, note: note };
+    return tile;
+  }
+
+  function posePairsPane() {
+    var grid = document.getElementById("pose-grid");
+    var note = document.getElementById("pose-note");
+    if (!grid || !note) return;           // report predates the pose panel
+    if (!BoltzViewer.available()) { note.textContent = BoltzViewer.reason(); return; }
+
+    fetch(sources.poseIndex())
+      .then(function (response) { return response.ok ? response.json() : null; })
+      .then(function (payload) {
+        // Filtered, not trusted: the index comes out of a file a user uploaded, and
+        // one entry missing its distances would otherwise throw inside toFixed and
+        // take the whole pane down with it.
+        var pairs = ((payload && payload.pairs) || []).filter(function (pair) {
+          return pair && typeof pair.stem === "string" && pair.stem
+                 && typeof pair.pose === "number" && typeof pair.site === "number"
+                 && typeof pair.shape === "number";
+        });
+        if (!pairs.length) throw new Error("none");
+        var groups = poseGroups(pairs);
+        note.textContent = pairs.length + " pair" + (pairs.length === 1 ? "" : "s")
+          + " across " + groups.length + " pocket" + (groups.length === 1 ? "" : "s")
+          + ". Each frame holds exactly two ligands, superposed through their "
+          + "receptors: the prediction in red, the experimental one in grey.";
+        groups.forEach(function (group) {
+          var heading = document.createElement("h4");
+          heading.className = "md-pose-group";
+          heading.textContent = group.pocket === "unconstrained"
+            ? "Unconstrained" : "Pocket " + group.pocket;
+          grid.appendChild(heading);
+          var row = document.createElement("div");
+          row.className = "md-pose-row";
+          group.pairs.forEach(function (pair) { row.appendChild(posePairTile(pair)); });
+          grid.appendChild(row);
+        });
+        watchPoseTiles(pairs);
+      })
+      .catch(function () {
+        note.textContent = "This campaign has no experimental structure to compare "
+          + "against, so there is nothing to draw here.";
+      });
+  }
+
+  /* Drawn when scrolled to, not all at once. Without the observer every tile would
+     claim a WebGL context on load and all but the last few would be killed by the
+     browser before anyone scrolled to them. */
+  function watchPoseTiles(pairs) {
+    var byHost = {};
+    pairs.forEach(function (pair) {
+      var tile = poseTiles[pair.stem];
+      if (tile) byHost[pair.stem] = pair;
+    });
+    if (typeof IntersectionObserver !== "function") {
+      // No observer: draw the first few and leave the rest to their buttons, rather
+      // than drawing all of them and losing contexts.
+      pairs.slice(0, POSE_VIEWER_BUDGET).forEach(showPosePair);
+      return;
+    }
+    var observer = new IntersectionObserver(function (entries) {
+      entries.forEach(function (entry) {
+        if (!entry.isIntersecting) return;
+        var stem = entry.target.getAttribute("data-pose-stem");
+        if (byHost[stem]) showPosePair(byHost[stem]);
+      });
+    }, { rootMargin: "200px" });
+    Object.keys(poseTiles).forEach(function (stem) {
+      var host = poseTiles[stem].host;
+      host.setAttribute("data-pose-stem", stem);
+      observer.observe(host);
+    });
+  }
+
   // ---- the AlphaFold overlay ----------------------------------------------
 
   //: Per target, once resolved: the accession, how it was resolved, and the fit.
@@ -1489,6 +1723,7 @@ var BoltzExplorer = (function () {
 
     trackHeaderHeight();
     loadOverlays();
+    posePairsPane();
 
     wireDestroy();
 

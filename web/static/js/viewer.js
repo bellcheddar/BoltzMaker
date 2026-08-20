@@ -482,6 +482,19 @@
     return drawn;
   };
 
+  /* The orientation gizmo, off. It is a reasonable thing to have in a viewer the
+     size of a card, and clutter in one the size of a stamp: in a 220px pair tile the
+     axes cross is a fifth of the frame and sits over the molecule the tile exists to
+     show. Set through canvas3d props because it is drawn into the WebGL scene, not
+     into the DOM, so no amount of CSS reaches it. */
+  Wrapper.prototype.hideAxes = function () {
+    if (!this.plugin.canvas3d) return this;
+    this.plugin.canvas3d.setProps({
+      camera: { helper: { axes: { name: "off", params: {} } } },
+    });
+    return this;
+  };
+
   Wrapper.prototype.dispose = function () {
     try { this.viewer.dispose(); } catch (err) { /* already gone */ }
   };
