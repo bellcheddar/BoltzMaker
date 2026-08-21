@@ -226,6 +226,12 @@ def assemble_boltz_input_md(
             block.append(f"Partners: {', '.join(p.partner_names)}")
         if apo_reference.get(p.name):
             block.append(f"Apo structure: {apo_reference[p.name]}")
+        # Which structure this protein's site was read out of. The form has always
+        # known it -- it downloaded the entry and extracted the contacts -- and used
+        # to drop it here, so the report could name a pocket but never say what it
+        # was derived from.
+        if p.pocket_pdb and p.pocket_ligand:
+            block.append(f"Pocket source: {p.pocket_ligand} from {p.pocket_pdb.upper()}")
         for code, positions in sorted(p.pockets.items()):
             for position in positions:
                 block.append(f"Pocket contact: {p.name} residue {position} as {code}")

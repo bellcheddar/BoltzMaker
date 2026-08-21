@@ -10,7 +10,10 @@
   <div class="md-card">
     <h2>Settings</h2>
     <div class="md-field">
-      <label><input type="checkbox" name="predict_affinity"> Predict binding affinity too (slower, adds Kd/pIC50 estimates)</label>
+      <label><input type="checkbox" name="predict_affinity" checked> Predict binding affinity too (slower, adds Kd/pIC50 estimates)</label>
+      <p class="md-hint">The summary table ranks on pIC50; without this its ranking
+        column is empty. Rank on pIC50 rather than binder probability, which has measured
+        near-zero correlation with it.</p>
     </div>
 
     {#  Checked by default, and the reason is measured rather than assumed: run
@@ -23,9 +26,10 @@
       <label><input type="checkbox" name="confine_to_receptor" checked> Keep ligands on their
         own protein &mdash; a ligand with no pocket set still has to bind its receptor
         somewhere, rather than a co-folded partner</label>
-      <p class="md-hint">Without this, an unconstrained ligand may dock onto a co-folded
-        partner chain instead of the protein you are studying. It does not choose a site:
-        any point on the receptor satisfies it.</p>
+      <p class="md-hint">Off, ligands can dock onto a co-folded partner instead of your
+        protein &mdash; in one campaign 6 of 27 did. It picks the protein, not the site.
+        Not Boltz's <code>force</code> flag: every pocket constraint sets that anyway, and
+        this decides whether a target with no pocket is restrained at all.</p>
     </div>
 
     {#  Co-folding puts a ligand wherever the model likes. Measured on a real
@@ -34,19 +38,20 @@
         which makes their predicted affinities meaningless as receptor
         pharmacology. This keeps every ligand in the same pocket as the one in
         each protein's reference structure.  #}
-    <div class="md-field">
-      <label><input type="checkbox" name="use_same_pocket" id="use-same-pocket"> Use same pocket
-        &mdash; keep each ligand near the ligand in its own holo reference structure</label>
-    </div>
+    {#  No "use same pocket" tick box any more. Naming a holo structure on a ligand
+        row is the statement of intent, so the server derives it from that. As a box it
+        was redundant, and left unticked it silently threw away every PDB that had been
+        typed in -- it only ticked itself when a row was added by clicking "add pocket",
+        not when a seeded or restored row was filled in.  #}
     <div class="md-field md-pocket-distance">
       <label for="pocket_distance">Pocket distance (&Aring;)</label>
       <input type="text" inputmode="decimal" id="pocket_distance" name="pocket_distance"
-             value="8" placeholder="8">
-      <p class="md-hint">How far the ligand may sit from the pocket residues taken from the
-        reference. Boltz's own default is 6&nbsp;&Aring;; 8&nbsp;&Aring; is a little looser, so the
-        pose is guided rather than forced. <b>Set the holo reference on each ligand row in the
-        Ligands section below</b> &mdash; the pocket belongs to the ligand, not the protein, so
-        two ligands on the same receptor can use different sites.</p>
+             value="4" placeholder="4">
+      <p class="md-hint">How close the ligand must sit to the pocket residues. Tight
+        matters: on one test the same residues at 8&nbsp;&Aring; left the ligand 9.5&nbsp;&Aring;
+        from its crystal pose, and at 4&nbsp;&Aring; reproduced it to 2.6&nbsp;&Aring;. Set the
+        holo reference per ligand below &mdash; a pocket belongs to the ligand, not the
+        protein.</p>
     </div>
   </div>
 
@@ -81,11 +86,11 @@
     <button type="button" class="md-remove-row" title="Remove">&times;</button>
     <div class="md-field md-uniprot-field">
       <label>UniProt accession (optional)</label>
-      <input type="text" name="partner_uniprot[]" maxlength="12" placeholder="e.g. P50148"
+      <input type="text" name="partner_uniprot[]" maxlength="12" placeholder="e.g. P63092 (GNAS)"
              data-uniprot-for="partner">
       <p class="md-hint md-uniprot-note">Fills the short name and sequence below from UniProt.</p>
     </div>
-    <div class="md-field"><label>Short name (max 5 letters)</label><input type="text" name="partner_name[]" maxlength="5"></div>
+    <div class="md-field"><label>Short name (max 5 letters)</label><input type="text" name="partner_name[]" maxlength="5" placeholder="e.g. GNAS"></div>
     <div class="md-field"><label>Sequence</label><textarea name="partner_sequence[]"></textarea></div>
   </div>
 </template>
@@ -95,31 +100,31 @@
     <button type="button" class="md-remove-row" title="Remove">&times;</button>
     <div class="md-field md-uniprot-field">
       <label>UniProt accession (optional)</label>
-      <input type="text" name="protein_uniprot[]" maxlength="12" placeholder="e.g. P28223"
+      <input type="text" name="protein_uniprot[]" maxlength="12" placeholder="e.g. P43220 (GLP1R)"
              data-uniprot-for="protein">
       <p class="md-hint md-uniprot-note">Fills the short name and sequence below from
         UniProt, and tells the explorer which AlphaFold model to overlay on this
         protein. Left blank, the model is looked up from the sequence instead, which
         only works when the construct is exactly a UniProt sequence.</p>
     </div>
-    <div class="md-field"><label>Short name (max 5 letters)</label><input type="text" name="protein_name[]" maxlength="5"></div>
+    <div class="md-field"><label>Short name (max 5 letters)</label><input type="text" name="protein_name[]" maxlength="5" placeholder="e.g. GLP1R"></div>
     <div class="md-field"><label>Sequence</label><textarea name="protein_sequence[]"></textarea></div>
     <div class="md-field">
       <label>Co-folded partners (comma-separated short names, optional)</label>
-      <input type="text" name="protein_partners[]" placeholder="e.g. GNAS, GNB1">
+      <input type="text" name="protein_partners[]" placeholder="e.g. GNAS, GNB1, GNG2">
     </div>
     {#  Per protein, not per campaign: a campaign can hold several proteins and each
         needs its own apo reference. Left blank, a ligand-free companion is predicted
         instead, so the apo-vs-holo comparison works without anyone hunting for a
         structure.  #}
     <div class="md-field">
-      <label>Apo structure PDB id (optional)</label>
-      <input type="text" name="protein_apo_pdb[]" maxlength="4" placeholder="e.g. 2RH1">
-      <p class="md-hint">An experimental <b>ligand-free</b> structure of this protein, used
-        only for the apo-vs-holo comparison &mdash; not for the pocket, which is set just
-        below. A structure with a bound ligand is not an apo reference and will be flagged.
-        mmCIF is used where the PDB has no legacy file, which is the case for most recent
-        cryo-EM entries.</p>
+      <label>Apo or inactive structure PDB id (optional)</label>
+      <input type="text" name="protein_apo_pdb[]" maxlength="4" placeholder="e.g. 5VEW">
+      <p class="md-hint">What the motif comparison measures movement <em>from</em>. It may
+        carry an antagonist or a modulator &mdash; the state matters, not emptiness.
+        <b>Check what it is bound to:</b> a structure titled &ldquo;apo&rdquo; can still be
+        captured in its active state, and then no activation shift can show. The report's
+        Reference structures panel names the state it found.</p>
     </div>
     {#  The value is the row's ordinal, stamped by wizard.js, not a plain "on".
         An unchecked box posts nothing at all, so a bare name="...[]" checkbox would
@@ -204,7 +209,7 @@
 <template id="tpl-ligand">
   <div class="md-repeat-block">
     <button type="button" class="md-remove-row" title="Remove">&times;</button>
-    <div class="md-field"><label>Short name (max 5 letters)</label><input type="text" name="ligand_name[]" maxlength="5"></div>
+    <div class="md-field"><label>Short name (max 5 letters)</label><input type="text" name="ligand_name[]" maxlength="5" placeholder="e.g. ORFO"></div>
     {#  A <select>, not the radio pair this used to be. Radios sharing a name form ONE
         group across the whole form, so every ligand row was competing for a single
         selection: picking CCD in the second row silently unpicked the first, the browser

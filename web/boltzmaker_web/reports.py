@@ -90,6 +90,9 @@ _DROP_TITLE_PATTERNS = (
 # the whole sequence is legible in one list.
 PANEL_ORDER = (
     "Campaign summary",
+    # What the campaign was built on: which structure each pocket came from, and
+    # whether each secondary-structure reference is active or inactive.
+    "Reference structures",
     "pIC50 vs confidence score",    # clickable: a point opens the target detail
     "pIC50 vs binder probability",  # the other view of the same points
     "Ranked predicted pIC50",

@@ -28,6 +28,35 @@ var BoltzWizard = (function () {
     }
   }
 
+  /* Examples that change down a repeating list. Every row is cloned from the same
+     <template>, so without this the second and third partner rows both read "e.g.
+     GNAS" -- which reads as a suggestion to type GNAS three times rather than as a
+     heterotrimer. Placeholders only: they are grey, never submitted, and vanish the
+     moment anything is typed. */
+  var ROW_EXAMPLES = {
+    "partner_name[]": ["e.g. GNAS", "e.g. GNB1", "e.g. GNG2"],
+    "partner_uniprot[]": ["e.g. P63092 (GNAS)", "e.g. P62873 (GNB1)", "e.g. P59768 (GNG2)"],
+    "pocket_pdb[]": ["e.g. 7E14", "e.g. 7RBT"],
+  };
+
+  /* Shared, because the pocket rows are added from a second IIFE further down this
+     file and a function declared in this one is not in scope there. */
+  window.BoltzWizardRows = window.BoltzWizardRows || {};
+  window.BoltzWizardRows.stamp = stampExamples;
+
+  function stampExamples(container) {
+    if (!container) return;
+    Object.keys(ROW_EXAMPLES).forEach(function (name) {
+      var inputs = container.querySelectorAll('input[name="' + name + '"]');
+      for (var i = 0; i < inputs.length; i++) {
+        var examples = ROW_EXAMPLES[name];
+        // Past the end of the list the last example stands rather than a blank: a
+        // fourth partner still wants to be shown the shape of the thing.
+        inputs[i].placeholder = examples[Math.min(i, examples.length - 1)];
+      }
+    });
+  }
+
   function addRow(templateId, containerId) {
     var tpl = document.getElementById(templateId);
     var container = document.getElementById(containerId);
@@ -36,6 +65,7 @@ var BoltzWizard = (function () {
     // The fragment's nodes were moved by appendChild, so re-query the attached row.
     var rowEl = container.lastElementChild;
     wireRemove(rowEl);
+    stampExamples(container);
     return rowEl;
   }
 
@@ -260,8 +290,6 @@ var BoltzWizard = (function () {
    real answer that gets said out loud.  */
 (function () {
   var LOOKUP = "/auto/pocket-ligands/";
-  var toggle = document.getElementById("use-same-pocket");
-  if (!toggle) return;
 
   /* Direct children only. Pocket rows are themselves .md-repeat-block and are nested
      inside protein rows, so a descendant query returns protein0, pocket0, protein1,
@@ -300,6 +328,7 @@ var BoltzWizard = (function () {
     var tpl = document.getElementById("tpl-pocket");
     if (!container || !tpl) return null;
     container.appendChild(tpl.content.cloneNode(true));
+    window.BoltzWizardRows.stamp(container);
     var added = container.lastElementChild;
     var remove = added.querySelector(".md-remove-row");
     if (remove) remove.addEventListener("click", function () {
@@ -360,9 +389,6 @@ var BoltzWizard = (function () {
     var el = event.target;
     if (!el || !el.matches) return;
     if (el.matches(".add-pocket")) {
-      /* An explicit click is a statement of intent; seeding a first row is not, so
-         only this path ticks the box. */
-      if (!toggle.checked) { toggle.checked = true; }
       addPocketRow(el.closest(".md-repeat-block"));
     }
     if (el.id === "add-protein") setTimeout(function () { restamp(); setEnabled(); }, 0);
@@ -371,7 +397,6 @@ var BoltzWizard = (function () {
   document.addEventListener("change", function (event) {
     var el = event.target;
     if (!el || !el.matches) return;
-    if (el === toggle) setEnabled();
     if (el.matches('input[name="pocket_pdb[]"]')) load(el);
   });
 
@@ -381,11 +406,13 @@ var BoltzWizard = (function () {
 
   /* Rows are seeded inside DOMContentLoaded, and this file runs before it, so a
      bare call here finds no rows and leaves the seeded row's button disabled
-     forever. Worse, a restored form sets the checkbox without firing `change`, so
-     the toggle handler never runs either -- which is exactly how the button ended
-     up dead for someone with a saved page. Re-sync on every event that can change
-     either the rows or the checkbox. */
-  function sync() { seedRows(); restamp(); setEnabled(); }
+     forever. Re-sync on every event that can change the rows. */
+  function sync() {
+    seedRows(); restamp(); setEnabled();
+    window.BoltzWizardRows.stamp(document.getElementById("partner-rows"));
+    var pocketHosts = document.querySelectorAll(".md-pocket-rows");
+    for (var i = 0; i < pocketHosts.length; i++) window.BoltzWizardRows.stamp(pocketHosts[i]);
+  }
   document.addEventListener("DOMContentLoaded", sync);
   document.addEventListener("boltz:wizard-ready", sync);
   document.addEventListener("boltz:form-changed", sync);

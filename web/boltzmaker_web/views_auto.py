@@ -246,8 +246,19 @@ def prepare():
 
     try:
         predict_affinity, proteins, partners, ligands, confine_to_receptor = _parse_form()
-        use_same_pocket = request.form.get("use_same_pocket") in ("1", "on", "true", "yes")
-        raw_distance = (request.form.get("pocket_distance") or "8").strip()
+        # Derived from whether any pocket reference was actually given, not from a
+        # separate tick box. The box was redundant -- naming a holo structure on a
+        # ligand row IS the statement of intent -- and worse than redundant: left
+        # unticked it silently discarded every PDB the user had typed in, and it only
+        # ticked itself when the row was added by clicking "add pocket", never when a
+        # seeded or restored row was filled in.
+        use_same_pocket = any(
+            (value or "").strip() for value in request.form.getlist("pocket_pdb[]"))
+        # 4A, not 8. Measured on GLP1R/orforglipron: the identical 62 pocket residues
+        # at 8A put the ligand 9.5A from the crystal pose, at 4A they reproduced it to
+        # 2.6A. The form's own default must agree with the field's, or a submission
+        # that leaves the box untouched silently uses the old number.
+        raw_distance = (request.form.get("pocket_distance") or "4").strip()
         try:
             pocket_distance = float(raw_distance)
         except ValueError:

@@ -14,7 +14,12 @@ var BoltzFormState = (function () {
   "use strict";
 
   var STORAGE_KEY = "boltzmaker.prepare.v1";
-  var STATE_VERSION = 1;
+  /* Bumped when a default changes or a field disappears. The version was written
+     into the saved state from the start and never read back, so a form saved before
+     a default moved kept re-applying the old value for ever -- which is exactly how
+     a browser went on filling in the old 8A pocket distance after the default became
+     4A, and would have restored the removed "use same pocket" box with it. */
+  var STATE_VERSION = 2;
   var form = null;
   var statusEl = null;
 
@@ -169,7 +174,15 @@ var BoltzFormState = (function () {
     }
     if (!raw) return false;
     try {
-      apply(JSON.parse(raw));
+      var state = JSON.parse(raw);
+      if (!state || state.version !== STATE_VERSION) {
+        // Older layout: drop it rather than reviving defaults the page has moved on
+        // from. Losing a saved draft is the lesser harm against silently running a
+        // campaign with last month's settings.
+        try { window.localStorage.removeItem(STORAGE_KEY); } catch (e) {}
+        return false;
+      }
+      apply(state);
       return true;
     } catch (err) {
       // A state file from an older layout, or corrupt. Drop it rather than

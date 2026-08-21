@@ -990,3 +990,65 @@ def test_the_stripper_does_not_eat_this_pages_own_pane(client):
     from boltzmaker_web import reports
     html = "<div class='md-detail-pane md-pose-pane'><div>keep me</div></div>"
     assert reports._strip_pose_pane(html) == html
+
+
+# ===========================================================================
+#  The prepare form's pocket intent
+# ===========================================================================
+
+def test_naming_a_pocket_structure_is_enough_to_use_it(client, monkeypatch):
+    """There is no "use same pocket" tick box any more, and there must not be.
+
+    As a control it was redundant -- naming a holo structure on a ligand row IS the
+    intent -- and left unticked it silently discarded every PDB the user had typed
+    in. It only ticked itself when a row was added by clicking "add pocket", never
+    when a seeded or restored row was filled in, so a saved form could lose its
+    pockets without saying anything.
+    """
+    page = client.get("/auto/prepare").data.decode()
+    assert 'name="use_same_pocket"' not in page
+    assert 'id="use-same-pocket"' not in page
+    # The pocket reference field is still there -- it is what carries the intent now.
+    assert 'name="pocket_pdb[]"' in page
+
+
+def test_the_prepare_form_defaults_match_what_the_campaigns_actually_use(client):
+    """A default that disagrees with practice is a trap: the summary table ranks on
+    pIC50, so leaving affinity off produces a table whose ranking column is empty."""
+    page = client.get("/auto/prepare").data.decode()
+    assert 'name="predict_affinity" checked' in page
+    assert 'name="confine_to_receptor" checked' in page
+    assert 'value="4" placeholder="4"' in page, "the measured pocket distance"
+
+
+def test_the_confine_box_does_not_claim_to_be_boltzs_force_flag(client):
+    """Every pocket constraint BoltzMaker writes already carries force: true --
+    without it Boltz skips the steering potential entirely. This box decides
+    something else: whether a target with no named pocket is restrained at all."""
+    page = client.get("/auto/prepare").data.decode().lower()
+    # Case-insensitive: the sentence has been reworded more than once, and a test that
+    # pins its capitalisation fails on an edit that changed nothing that matters.
+    assert "not boltz's <code>force</code> flag" in page
+
+
+def test_repeating_rows_get_examples_that_change_down_the_list(client):
+    """Every row is cloned from one <template>, so all three partner rows shared a
+    placeholder -- which read as "type GNAS three times" rather than as a
+    heterotrimer. The examples are stamped by row index instead."""
+    js = (pathlib_Path(__file__).resolve().parent.parent
+          / "web" / "static" / "js" / "wizard.js").read_text()
+    assert '"partner_name[]": ["e.g. GNAS", "e.g. GNB1", "e.g. GNG2"]' in js
+    assert '"pocket_pdb[]"' in js
+    # Shared through a handle: the pocket rows are added from a second IIFE, and a
+    # function declared in the first is not in scope there.
+    assert "window.BoltzWizardRows.stamp" in js
+
+
+def test_a_saved_form_cannot_revive_a_default_the_page_has_moved_on_from(client):
+    """The version was written into saved state from the start and never read back,
+    so a browser holding a form from before the pocket distance became 4A kept
+    filling in 8A for ever."""
+    js = (pathlib_Path(__file__).resolve().parent.parent
+          / "web" / "static" / "js" / "form_state.js").read_text()
+    assert "state.version !== STATE_VERSION" in js
+    assert "var STATE_VERSION = 2;" in js
