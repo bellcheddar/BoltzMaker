@@ -580,6 +580,7 @@ import json
 import re
 import threading
 import time
+import shlex
 from dataclasses import dataclass, field, asdict
 
 import yaml
@@ -677,6 +678,8 @@ class ProteinFamily:
     templates: object = None
     apo_structure: object = None   # raw path string to a reference apo structure, or None
     apo_chain: object = None        # explicit apo chain id, or None (triggers auto-detect)
+    #: "CODE from PDBID" -- the structure this protein's named pocket was read from.
+    pocket_source: object = None
     family_type: str = "auto"        # "gpcr" | "kinase" | "auto" -- selects the compare-sse MotifAnnotator
     group: object = None             # optional display/report grouping name shared across
                                        # multiple Protein: blocks of the same underlying
@@ -706,6 +709,11 @@ class Campaign:
     families: list
     ligands: list
     source_path: object = None
+    #: {pocket code: PDB id it was derived from}, from `Pocket source:` lines. The
+    #: prep form knows which structure it read a site out of; without this the spec
+    #: kept the residue numbers and threw the provenance away, so a report could say
+    #: a target was run against pocket "41Y" but never which structure that was.
+    pocket_sources: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -742,7 +750,7 @@ _RECORD_ALLOWED_FIELDS = {
     "settings": {"output folder", "predict affinity", "pocket distance",
                  "targets per invocation", "confine to receptor"},
     "protein": {"sequence", "partners", "ligands", "modifications", "cyclic", "msa", "templates",
-                "apo structure", "apo chain", "family type", "group"},
+                "apo structure", "apo chain", "family type", "group", "pocket source"},
     "partner": {"sequence", "type", "copies", "modifications", "cyclic", "msa"},
     "ligand": {"smiles", "ccd", "role"},
 }
@@ -762,6 +770,16 @@ _COVALENT_RE = re.compile(
 # run against each of them plus an unconstrained baseline -- the matrix that answers
 # "where does this compound actually want to sit". "for LIGAND" instead scopes a
 # single pocket to one ligand.
+#: "Pocket source: V6G from 7E14" -- which structure a named pocket's residues were
+#: read out of. The prep form has always known this (it downloads the entry, finds the
+#: ligand and extracts the contacts) and threw it away when writing the spec, so a
+#: report could name the pocket a target was run against but never the structure
+#: behind it. Read as a field on the protein block rather than as a statement so a
+#: campaign that omits it parses exactly as before.
+_POCKET_SOURCE_RE = re.compile(
+    r"^(?P<code>[A-Za-z0-9_-]+)\s+from\s+(?P<pdb>[A-Za-z0-9]{4,8})\s*$", re.IGNORECASE)
+
+
 _POCKET_RE = re.compile(
     rf"^pocket contact:\s*{_ENDPOINT}"
     rf"(?:\s+for\s+(?P<lig>\S+))?(?:\s+as\s+(?P<code>[A-Za-z0-9_-]+))?\s*$",
@@ -934,7 +952,7 @@ def _build_family_record(name: str, fields: dict, partners: dict, statements: li
         bond_constraints=bond_constraints, contact_constraints=contact_constraints,
         templates=_parse_csv(fields["templates"]) if "templates" in fields else None,
         apo_structure=fields.get("apo structure"), apo_chain=fields.get("apo chain"), family_type=family_type,
-        group=fields.get("group"),
+        group=fields.get("group"), pocket_source=fields.get("pocket source"),
     )
 
 
@@ -1392,7 +1410,22 @@ def parse_md(path: Path) -> Campaign:
         raise MDParseError("no 'Protein:' blocks found")
     if not ligands:
         raise MDParseError("no 'Ligand:' blocks found")
-    return Campaign(settings=settings, partners=partners, families=families, ligands=ligands, source_path=path)
+    # Campaign-wide: a pocket code is named once and every protein carrying it uses
+    # the same site, so the code-to-structure mapping belongs to the campaign.
+    pocket_sources = {}
+    for fam in families:
+        raw = (fam.pocket_source or "").strip()
+        if not raw:
+            continue
+        match = _POCKET_SOURCE_RE.match(raw)
+        if not match:
+            raise MDParseError(
+                f"protein '{fam.id}': 'Pocket source: {raw}' should read "
+                f"'<pocket code> from <PDB id>', e.g. 'V6G from 7E14'.")
+        pocket_sources[match.group("code")] = match.group("pdb").upper()
+
+    return Campaign(settings=settings, partners=partners, families=families, ligands=ligands,
+                    source_path=path, pocket_sources=pocket_sources)
 
 
 # ==========================================================================
@@ -3556,10 +3589,21 @@ def _plotly_font() -> dict:
 #: down instead of the toolbar out, which is the only lever Plotly gives.
 _MODEBAR_MARGIN_PX = 46
 
+#: Room under the plot for a horizontal legend, on top of the space the rotated tick
+#: labels already need.
+_LEGEND_MARGIN_PX = 60
+
 
 def _plotly_to_div(fig, div_id: str) -> str:
-    fig.update_layout(margin=dict(l=60, r=20, t=_MODEBAR_MARGIN_PX, b=100),
-                       height=_CHART_HEIGHT_PX + _MODEBAR_MARGIN_PX,
+    # A legend placed below the plot sits outside the axes, so it needs its own strip
+    # of margin -- without this it is drawn into the bottom edge and clipped, which
+    # looks like the legend simply failing to render.
+    below = bool(getattr(fig.layout, "showlegend", False)) and (
+        (getattr(fig.layout.legend, "y", 0) or 0) < 0)
+    fig.update_layout(margin=dict(l=60, r=20, t=_MODEBAR_MARGIN_PX,
+                                  b=100 + (_LEGEND_MARGIN_PX if below else 0)),
+                       height=(_CHART_HEIGHT_PX + _MODEBAR_MARGIN_PX
+                               + (_LEGEND_MARGIN_PX if below else 0)),
                        paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", font=_plotly_font(),
                        # Always visible and always in the same place. The default
                        # reveals it on hover, so it appears over whatever is beneath
@@ -3582,14 +3626,35 @@ def _make_bar_chart(df: pd.DataFrame, col: str, div_id: str):
     # doesn't appear twice (once baked into the chart, once in the card).
     if col not in df.columns:
         return None
-    d = df[["display_name", col]].dropna().sort_values(col, ascending=False)
+    key = _protein_key(df)
+    columns = ["display_name", col] + ([key] if key in df.columns else [])
+    d = df[columns].dropna(subset=["display_name", col])
     if d.empty:
         return None
-    n = len(d)
-    x = list(range(n))
-    fig = go.Figure(go.Bar(x=x, y=d[col].tolist(), width=_BAR_WIDTH, marker_color="#4C72B0"))
-    fig.update_xaxes(tickmode="array", tickvals=x, ticktext=d["display_name"].tolist(), tickangle=-75,
-                      tickfont=dict(size=_TICK_FONTSIZE), range=[-0.75, max(n - 0.25, _BAR_MIN_SLOTS - 0.75)])
+
+    # Grouped by protein, then ranked inside each group. Ranking the whole campaign in
+    # one sequence interleaves receptors, and the question these bars answer is "which
+    # compound wins ON THIS receptor" -- which a reader cannot see when the neighbouring
+    # bar belongs to something else.
+    fig = go.Figure()
+    ticks, labels, position = [], [], 0
+    groups = _protein_groups(d)
+    for label, _symbol, colour, sub in groups:
+        sub = sub.sort_values(col, ascending=False)
+        x = list(range(position, position + len(sub)))
+        position += len(sub)
+        ticks.extend(x)
+        labels.extend(sub["display_name"].tolist())
+        fig.add_trace(go.Bar(
+            x=x, y=sub[col].tolist(), width=_BAR_WIDTH, marker_color=colour,
+            name=label or "Target", showlegend=label is not None,
+            customdata=sub["display_name"].tolist(),
+            hovertemplate="%{customdata}<br>" + col + " %{y:.2f}<extra></extra>"))
+
+    fig.update_layout(legend=_BOTTOM_LEGEND, showlegend=len(groups) > 1, bargap=0.15)
+    fig.update_xaxes(tickmode="array", tickvals=ticks, ticktext=labels, tickangle=-75,
+                      tickfont=dict(size=_TICK_FONTSIZE),
+                      range=[-0.75, max(position - 0.25, _BAR_MIN_SLOTS - 0.75)])
     fig.update_yaxes(title_text=col, title_font=dict(size=_AXIS_LABEL_FONTSIZE), tickfont=dict(size=_TICK_FONTSIZE))
     return _plotly_to_div(fig, div_id)
 
@@ -3634,6 +3699,56 @@ def _make_selectivity_heatmap(df: pd.DataFrame, div_id: str = "chart-selectivity
     return _plotly_to_div(fig, div_id)
 
 
+#: One marker shape per protein, so a scatter says which receptor a point belongs to
+#: without reading its label. Colour is already carrying the tier, so shape is the only
+#: channel left -- and it is the one that survives the colourbar.
+_PROTEIN_SYMBOLS = ["circle", "diamond", "square", "triangle-up", "cross", "x",
+                    "star", "pentagon", "hexagon", "triangle-down"]
+
+#: One colour per protein for the ranked bars. Chosen to stay apart at small size and
+#: to avoid the tier green/amber/red, which mean something else on this page.
+_PROTEIN_COLOURS = ["#1e73be", "#00875a", "#b07d00", "#9b51e0", "#0f9ba8", "#c45500",
+                    "#4a9fd4", "#8a6100", "#6a3fb5", "#2f6f9f"]
+
+#: Below the plot and horizontal, so it reads as a key to the whole chart rather than
+#: as something floating in the data. Plotly legends are clickable by default: one
+#: click hides a protein, a double-click isolates it, which is the interaction asked
+#: for and costs nothing to provide.
+_BOTTOM_LEGEND = dict(orientation="h", yanchor="top", y=-0.42, x=0, xanchor="left",
+                      font=dict(size=_LEGEND_FONTSIZE),
+                      bgcolor="rgba(255,255,255,0.85)", bordercolor="#dde4ed", borderwidth=1)
+
+
+def _protein_key(df: pd.DataFrame) -> str:
+    """Which column names the protein. family_group is the shared receptor name
+    (5HT2A) where family_id is the internal per-variant id (H2ANG), so it is what a
+    legend should say."""
+    return "family_group" if "family_group" in df.columns else "family_id"
+
+
+def _protein_groups(d: pd.DataFrame) -> list:
+    """(label, symbol, colour, sub_df) per protein, in first-seen order.
+
+    First-seen rather than alphabetical so a protein keeps the same shape and colour
+    across every chart on the page -- the rows arrive in manifest order, which is the
+    same for all of them.
+    """
+    key = _protein_key(d)
+    if key not in d.columns:
+        return [(None, _PROTEIN_SYMBOLS[0], _PROTEIN_COLOURS[0], d)]
+    groups = []
+    for i, name in enumerate(list(dict.fromkeys(d[key].dropna().tolist()))):
+        sub = d[d[key] == name]
+        if not sub.empty:
+            groups.append((str(name), _PROTEIN_SYMBOLS[i % len(_PROTEIN_SYMBOLS)],
+                           _PROTEIN_COLOURS[i % len(_PROTEIN_COLOURS)], sub))
+    return groups or [(None, _PROTEIN_SYMBOLS[0], _PROTEIN_COLOURS[0], d)]
+
+
+#: Kept for the ligand-grid badges, which still label pharmacology. The scatters
+#: used to shape-code by this and now shape-code by protein: with one receptor per
+#: shape a reader can see which points belong together, whereas agonist/antagonist
+#: was usually constant across a campaign and split nothing.
 _ROLE_MARKER_SYMBOL = {"agonist": "circle", "antagonist": "diamond"}
 _ROLE_MARKER_DEFAULT = "circle"
 
@@ -3644,25 +3759,6 @@ _ROLE_MARKER_DEFAULT = "circle"
 # (which stays in its default outside-right position) without needing to shrink the plot.
 _INSET_LEGEND = dict(font=dict(size=_LEGEND_FONTSIZE), x=0.01, y=0.99, xanchor="left", yanchor="top",
                       bgcolor="rgba(255,255,255,0.85)", bordercolor="#dde4ed", borderwidth=1)
-
-
-def _role_groups(d: pd.DataFrame) -> list:
-    """Splits rows into (legend_label, marker_symbol, sub_df) groups by ligand_role, for
-    scatter plots that shape-code agonist vs antagonist. Collapses to one unlabeled group
-    (no legend entries) when no target in the campaign has a Role: set, so campaigns that
-    don't use that optional Ligand: field see no spurious legend split.
-    """
-    if "ligand_role" not in d.columns or d["ligand_role"].isna().all():
-        return [(None, _ROLE_MARKER_DEFAULT, d)]
-    groups = []
-    for role, symbol in _ROLE_MARKER_SYMBOL.items():
-        sub = d[d["ligand_role"] == role]
-        if not sub.empty:
-            groups.append((role.capitalize(), symbol, sub))
-    other = d[~d["ligand_role"].isin(_ROLE_MARKER_SYMBOL)]
-    if not other.empty:
-        groups.append((None, _ROLE_MARKER_DEFAULT, other))
-    return groups
 
 
 def _tier_marker(values, colorscale: list, colorbar_title: str, is_first_trace: bool, symbol: str) -> dict:
@@ -3687,14 +3783,15 @@ def _make_scatter(df: pd.DataFrame, div_id: str):
     # antagonist -- so a single point answers both "how confident is this structure" and
     # "which pharmacology is this" at a glance.
     colorscale = _tier_colorscale(LOW_CONFIDENCE_THRESHOLD, CONFIDENCE_GREEN_THRESHOLD)
-    for i, (label, symbol, sub) in enumerate(_role_groups(d)):
+    groups = _protein_groups(d)
+    for i, (label, symbol, _colour, sub) in enumerate(groups):
         fig.add_trace(go.Scatter(
             x=sub[conf_col], y=sub["pIC50"], mode="markers+text", text=sub["display_name"],
             textposition="top center", textfont=dict(size=_ANNOTATION_FONTSIZE),
             marker=_tier_marker(sub[conf_col], colorscale, "confidence_score", i == 0, symbol),
             name=label or "Target", showlegend=label is not None,
         ))
-    fig.update_layout(legend=_INSET_LEGEND)
+    fig.update_layout(legend=_BOTTOM_LEGEND, showlegend=len(groups) > 1)
     _pad_scatter_for_labels(fig, d[conf_col], d["pIC50"])
     fig.update_xaxes(title_text=conf_col, title_font=dict(size=_AXIS_LABEL_FONTSIZE), tickfont=dict(size=_TICK_FONTSIZE))
     fig.update_yaxes(title_text="pIC50", title_font=dict(size=_AXIS_LABEL_FONTSIZE), tickfont=dict(size=_TICK_FONTSIZE))
@@ -3734,14 +3831,15 @@ def _make_pic50_vs_binder_chart(df: pd.DataFrame, div_id: str):
     # table's bullseye icon) via a continuous colourscale + colorbar legend, shape by
     # agonist/antagonist. Binder probability on x, pIC50 on y.
     colorscale = _tier_colorscale(AFFINITY_RED_THRESHOLD, AFFINITY_GREEN_THRESHOLD)
-    for i, (label, symbol, sub) in enumerate(_role_groups(d)):
+    groups = _protein_groups(d)
+    for i, (label, symbol, _colour, sub) in enumerate(groups):
         fig.add_trace(go.Scatter(
             x=sub["affinity_probability_binary"], y=sub["pIC50"], mode="markers+text",
             text=sub["display_name"], textposition="top center", textfont=dict(size=_ANNOTATION_FONTSIZE),
             marker=_tier_marker(sub["affinity_probability_binary"], colorscale, "Binder probability", i == 0, symbol),
             name=label or "Target", showlegend=label is not None,
         ))
-    fig.update_layout(legend=_INSET_LEGEND)
+    fig.update_layout(legend=_BOTTOM_LEGEND, showlegend=len(groups) > 1)
     _pad_scatter_for_labels(fig, d["affinity_probability_binary"], d["pIC50"])
     fig.update_xaxes(title_text="Binder probability", title_font=dict(size=_AXIS_LABEL_FONTSIZE), tickfont=dict(size=_TICK_FONTSIZE))
     fig.update_yaxes(title_text="pIC50", title_font=dict(size=_AXIS_LABEL_FONTSIZE), tickfont=dict(size=_TICK_FONTSIZE))
@@ -4601,6 +4699,176 @@ def _target_display_name(fam: object, ligand_id: object) -> str:
     internal disambiguation stem (e.g. "H2ANG_RISP") BoltzMaker uses internally.
     """
     return f"{_family_display_name(fam)}_{ligand_id if ligand_id else 'apo'}"
+
+
+#: Names a heterotrimeric G protein subunit in an mmCIF's entity descriptions. Read
+#: from the descriptions rather than from the sequence: a sequence motif (Walker A,
+#: GAGESGKST) looked more principled and does not work, because these are cryo-EM
+#: complexes with mini-G constructs whose P-loop is often unmodelled -- tried on
+#: 7rg9, 8wa3 and 7E14, all three of which contain Gs and none of which matched.
+_G_PROTEIN_NAME = re.compile(
+    r"guanine nucleotide-binding|G\(s\) subunit|G\(i\)|G\(o\)|G\(t\)|"
+    r"\bG\s*protein\b|\bGnas\b|\bGNA[SIQ]\b", re.IGNORECASE)
+
+#: Not evidence of anything: crystallisation additives, cryoprotectants, lipids and
+#: the modified residues that turn up in a construct.
+_INCIDENTAL_HET = {
+    "HOH", "SO4", "PO4", "GOL", "EDO", "PEG", "PGE", "MPD", "ACT", "CL", "NA", "K",
+    "MG", "CA", "ZN", "OLA", "OLC", "OLB", "CLR", "PLM", "CHS", "Y01", "MSE", "CSD",
+    "GDP", "GTP", "GNP", "NAG", "BMA", "MAN", "TRS", "IMD", "DMS", "FMT", "ACE",
+}
+
+
+def _entity_descriptions(path: Path) -> list:
+    """Every `_entity.pdbx_description` in an mmCIF, however the loop is laid out."""
+    try:
+        lines = path.read_text(errors="replace").splitlines()
+    except OSError:
+        return []
+    names, index, in_loop = [], None, False
+    columns = []
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith("_entity."):
+            if not in_loop:
+                in_loop, columns = True, []
+            columns.append(stripped.split(".", 1)[1])
+            continue
+        if in_loop and columns:
+            if index is None:
+                if "pdbx_description" not in columns:
+                    in_loop, columns = False, []
+                    continue
+                index = columns.index("pdbx_description")
+            if not stripped or stripped.startswith(("#", "loop_", "_")):
+                if stripped.startswith("_"):
+                    continue
+                in_loop, columns, index = False, [], None
+                continue
+            # Quoted descriptions contain spaces, so split respecting quotes.
+            try:
+                fields = shlex.split(stripped)
+            except ValueError:
+                continue
+            if len(fields) > index:
+                names.append(fields[index])
+    return names
+
+
+def _reference_state(path: Path) -> dict:
+    """What a reference structure actually is: chains, bound ligands, and its state.
+
+    Read from the file rather than trusted from its title. Both of the "apo"
+    references this project started with -- GLP-1R's 7rg9 and GIPR's 8wa3 -- are
+    titled apo and are Gs-coupled, i.e. ligand-free but *active*. A per-motif
+    comparison against one of those measures active against active, and the TM6
+    activation shift it is read for cannot appear.
+    """
+    chains, ligands = {}, {}
+    for row in _mmcif_atom_rows(path):
+        chain = row.get("auth_asym_id") or "?"
+        chains[chain] = chains.get(chain, 0) + 1
+        if row["_record"] == "HETATM":
+            comp = row.get("label_comp_id", "")
+            if comp and comp not in _INCIDENTAL_HET:
+                ligands[comp] = ligands.get(comp, 0) + 1
+
+    descriptions = _entity_descriptions(path)
+    has_g_protein = any(_G_PROTEIN_NAME.search(name) for name in descriptions)
+    return {
+        "chains": len(chains),
+        "ligands": sorted(ligands),
+        "g_protein": has_g_protein,
+        "entities": descriptions,
+        "state": "active (G protein bound)" if has_g_protein else "no G protein bound",
+    }
+
+
+def _build_reference_panel_html(campaign: Campaign, campaign_dir: Path) -> str:
+    """Every experimental structure this campaign leaned on, and what it is.
+
+    Two jobs. It records which structure each named pocket's residues came from,
+    which the spec used to discard -- a report could say a target ran against pocket
+    "41Y" and never say what 41Y was. And it states, per protein, whether the
+    structure the secondary-structure comparison measures against is active or
+    inactive, because that single fact decides whether the numbers below it mean
+    anything: the same GLP1R prediction gives TM6 2.56A against an active reference
+    and 8.81A against an inactive one.
+
+    Silent when a campaign has neither pockets nor apo references.
+    """
+    pocket_rows = []
+    references = _reference_structures(campaign_dir)
+    codes = sorted({code for fam in campaign.families for code in (fam.pockets or {})})
+    for code in codes:
+        source = campaign.pocket_sources.get(code)
+        path = references.get(code)
+        if not source and path is not None:
+            source = path.stem.upper()
+        proteins = sorted({fam.id for fam in campaign.families if code in (fam.pockets or {})})
+        residues = sum(len((fam.pockets or {}).get(code) or []) for fam in campaign.families)
+        origin = html.escape(source) if source else (
+            "<span class='cell-na' title='no Pocket source: line and no reference file "
+            "containing this ligand'>not recorded</span>")
+        pocket_rows.append(
+            f"<tr><td>{html.escape(code)}</td><td>{origin}</td>"
+            f"<td>{html.escape(', '.join(proteins))}</td>"
+            f"<td class='ft-num'>{residues}</td></tr>")
+
+    sse_rows = []
+    for fam in campaign.families:
+        if not fam.apo_structure:
+            continue
+        path = Path(fam.apo_structure)
+        if not path.is_absolute():
+            path = campaign_dir / path
+        if path.is_file():
+            info = _reference_state(path)
+            state = info["state"]
+            bound = ", ".join(info["ligands"][:4]) or "none"
+            detail = (f"{info['chains']} chain(s), bound: {bound}")
+            colour = _TIER_AMBER if info["g_protein"] else _TIER_GREEN
+            note = ("A G-protein-coupled reference is in the ACTIVE state, so a motif "
+                    "comparison against it measures active against active and the "
+                    "activation shift cannot appear."
+                    if info["g_protein"] else
+                    "No G protein bound, so this reference can show an inactive-to-active "
+                    "shift.")
+        else:
+            state, detail, colour = "file not found", "", _TIER_RED
+            note = "The path in 'Apo structure:' does not resolve."
+        sse_rows.append(
+            f"<tr><td>{html.escape(fam.id)}</td>"
+            f"<td>{html.escape(path.name)}</td>"
+            f"<td><span style='color:{colour}' title='{html.escape(note, quote=True)}'>"
+            f"{html.escape(state)}</span></td>"
+            f"<td>{html.escape(detail)}</td>"
+            f"<td>{html.escape(fam.apo_chain or 'auto')}</td></tr>")
+
+    if not pocket_rows and not sse_rows:
+        return ""
+
+    parts = ["<div class='md-card table-card'><h2>Reference structures</h2>"
+             "<p>The experimental structures this campaign was built on: where each "
+             "pocket came from, and what the secondary-structure comparison measures "
+             "against.</p>"]
+    if pocket_rows:
+        parts.append(
+            "<h3 class='md-sub'>Pocket definitions</h3>"
+            "<table class='full-table'><thead><tr><th>Pocket</th><th>From</th>"
+            "<th>Proteins</th><th class='ft-num'>Contacts</th></tr></thead>"
+            f"<tbody>{''.join(pocket_rows)}</tbody></table>")
+    if sse_rows:
+        parts.append(
+            "<h3 class='md-sub'>Secondary-structure references</h3>"
+            "<table class='full-table'><thead><tr><th>Protein</th><th>Structure</th>"
+            "<th>State</th><th>Contents</th><th>Chain</th></tr></thead>"
+            f"<tbody>{''.join(sse_rows)}</tbody></table>"
+            "<p class='md-hint'>State is read from the file, not from its title. A "
+            "structure titled &ldquo;apo&rdquo; is often ligand-free <em>and</em> "
+            "G-protein-coupled, which is the active state.</p>")
+    parts.append("</div>")
+    return "".join(parts)
 
 
 def _build_campaign_summary(campaign: Campaign, campaign_dir: Path) -> list:
@@ -5884,6 +6152,11 @@ def write_html(df: pd.DataFrame, path: Path, campaign_dir: Path, campaign: Campa
     summary_html = pd.DataFrame(summary_rows, columns=["Field", "Value", "Details"]).to_html(
         index=False, na_rep="", escape=False, classes="campaign-summary")
     parts = [f"<div class='md-card table-card'><h2>Campaign summary</h2>{summary_html}</div>"]
+    # Directly under the summary: it says what the campaign was built on, which frames
+    # every number below it.
+    reference_html = _build_reference_panel_html(campaign, campaign_dir)
+    if reference_html:
+        parts.append(reference_html)
 
     summary_view_path = campaign_dir / "boltz_summary_view.csv"
     write_summary_csv(df, summary_view_path)

@@ -28,11 +28,16 @@ class MotifAnnotator(ABC):
 
     @abstractmethod
     def annotate(self, sequence: str, pdb_id: object = None, structure_path: object = None,
-                 name_hint: object = None) -> list:
+                 name_hint: object = None, chain_id: object = None) -> list:
         """Returns list[Motif]. Extra kwargs are used only by annotators that need them
         and ignored by the rest: pdb_id by accession-keyed lookups (e.g.
         PfamFallbackAnnotator); structure_path -- a path to the apo structure file --
-        by annotators whose backing service is structure- rather than sequence-based
+        by annotators whose backing service is structure- rather than sequence-based;
+        chain_id -- the `Apo chain:` the spec named, if any -- by the two that have to
+        pick a chain out of the apo file. Without it a structure with two equal copies
+        of the receptor (5VEW has two, both at 0.6 identity once its T4-lysozyme
+        fusion is counted) refuses to auto-detect and annotation fails outright, even
+        though the spec said which chain to use
         (e.g. GPCRdb has no sequence-input endpoint, verified against its live API);
         name_hint -- a human-readable identifier such as the family id -- by
         name-keyed lookups (e.g. KLIFS's kinase-name search). Never raises past the

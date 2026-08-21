@@ -162,13 +162,13 @@ class GPCRdbAnnotator(MotifAnnotator):
         return _count_membrane_spans(sequence) >= _MIN_TM_SPANS
 
     def annotate(self, sequence: str, pdb_id: object = None, structure_path: object = None,
-                 name_hint: object = None) -> list:
+                 name_hint: object = None, chain_id: object = None) -> list:
         if structure_path is None:
             return []
         try:
             from .. import structures as _structures
             st = _structures.load_and_clean(structure_path)
-            chain = _structures.resolve_protein_chain(st, None, sequence)
+            chain = _structures.resolve_protein_chain(st, chain_id, sequence)
             polymer = chain.get_polymer()
             apo_seq = _structures.one_letter_sequence(polymer)
             apo_resnum_to_pos = {res.seqid.num: i for i, res in enumerate(polymer)}
