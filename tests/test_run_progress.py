@@ -1311,3 +1311,175 @@ def test_the_pic50_cell_carries_no_ensemble_spread(bm):
                          "flags": ""}])
     html = bm._build_full_table_html(df)
     assert "8.50" in html and "±" not in html and "0.42" not in html
+
+
+# --- what the campaign was built on -------------------------------------------
+
+def _cif_with_entities(path, descriptions, hetero=(), chains=("A",)):
+    """A minimal mmCIF carrying an _entity loop and a few atoms."""
+    lines = ["data_test", "loop_", "_entity.id", "_entity.type", "_entity.pdbx_description"]
+    for i, name in enumerate(descriptions, 1):
+        lines.append(f"{i} polymer '{name}'")
+    lines += ["#", "loop_"]
+    columns = ["group_PDB", "id", "type_symbol", "label_atom_id", "label_comp_id",
+               "auth_asym_id", "auth_seq_id", "Cartn_x", "Cartn_y", "Cartn_z"]
+    lines += [f"_atom_site.{c}" for c in columns]
+    n = 1
+    for chain in chains:
+        for i in range(3):
+            lines.append(f"ATOM {n} C CA ALA {chain} {i + 1} 0.0 0.0 {float(i)}")
+            n += 1
+    for comp in hetero:
+        lines.append(f"HETATM {n} C C1 {comp} {chains[0]} 900 1.0 1.0 1.0")
+        n += 1
+    path.write_text("\n".join(lines) + "\n")
+    return path
+
+
+def test_a_g_protein_coupled_reference_is_reported_as_active(bm, tmp_path):
+    """An "apo" structure is very often ligand-free AND G-protein-coupled.
+
+    That is the active state, so a motif comparison against it measures active
+    against active and the activation shift cannot appear. Measured on GLP-1R: TM6
+    moves 2.56A against 7rg9 (apo, Gs-bound) and 8.81A against 5VEW (inactive), for
+    the same prediction. The panel has to say which one a campaign used.
+    """
+    path = _cif_with_entities(
+        tmp_path / "apo.cif",
+        ["Glucagon-like peptide 1 receptor",
+         "Isoform Gnas-2 of Guanine nucleotide-binding protein G(s) subunit alpha"],
+        chains=("R", "A"))
+    info = bm._reference_state(path)
+    assert info["g_protein"] is True
+    assert "active" in info["state"]
+
+
+def test_state_is_read_from_the_entity_names_not_from_the_sequence(bm, tmp_path):
+    """A Walker A motif looked more principled and does not work.
+
+    These are cryo-EM complexes built with mini-G constructs whose P-loop is often
+    unmodelled: tried on 7rg9, 8wa3 and 7E14, all three of which contain Gs and none
+    of which matched. 7E14 names its entities only "Gs" and "G protein", so the
+    pattern has to catch those too.
+    """
+    path = _cif_with_entities(tmp_path / "terse.cif", ["Gs", "G protein"])
+    assert bm._reference_state(path)["g_protein"] is True
+
+
+def test_an_inactive_reference_is_not_mistaken_for_active_by_its_ligand(bm, tmp_path):
+    """5VEW carries a negative allosteric modulator and no G protein.
+
+    A bound ligand says nothing about the state -- which is exactly why the prep
+    field is no longer called "apo".
+    """
+    path = _cif_with_entities(tmp_path / "inactive.cif",
+                              ["Glucagon-like peptide 1 receptor,Endolysin chimera"],
+                              hetero=("97Y",))
+    info = bm._reference_state(path)
+    assert info["g_protein"] is False
+    assert info["ligands"] == ["97Y"], "the modulator is reported, not ignored"
+
+
+def test_a_pocket_records_the_structure_it_came_from(bm, tmp_path):
+    """The spec used to keep a pocket's residue numbers and drop its provenance."""
+    md = tmp_path / "c.md"
+    md.write_text("""Settings:
+Output folder: ./y
+
+Protein: RECP
+Sequence: MKTAYIAKQRQISFVKSHFSRQLEERLGLIEVQ
+Pocket source: V6G from 7E14
+Pocket contact: RECP residue 12 as V6G
+
+Ligand: LIG1
+SMILES: CCO
+""")
+    campaign = bm.parse_md(md)
+    assert campaign.pocket_sources == {"V6G": "7E14"}
+    panel = bm._build_reference_panel_html(campaign, tmp_path)
+    assert "7E14" in panel and "V6G" in panel
+
+
+def test_a_malformed_pocket_source_is_refused_with_the_shape_it_wanted(bm, tmp_path):
+    md = tmp_path / "c.md"
+    md.write_text("""Settings:
+Output folder: ./y
+
+Protein: RECP
+Sequence: MKTAYIAKQRQISFVKSHFSRQLEERLGLIEVQ
+Pocket source: 7E14
+Pocket contact: RECP residue 12 as V6G
+
+Ligand: LIG1
+SMILES: CCO
+""")
+    with pytest.raises(bm.MDParseError) as excinfo:
+        bm.parse_md(md)
+    assert "from" in str(excinfo.value) and "V6G from 7E14" in str(excinfo.value)
+
+
+# --- charts that say which receptor a point belongs to -------------------------
+
+def _summary_frame():
+    import pandas as _pd
+    return _pd.DataFrame([
+        {"display_name": "1_A_LIG1", "family_group": "RECA", "pIC50": 9.0,
+         "confidence_score": 0.80, "affinity_probability_binary": 0.6},
+        {"display_name": "2_A_LIG2", "family_group": "RECA", "pIC50": 7.5,
+         "confidence_score": 0.75, "affinity_probability_binary": 0.4},
+        {"display_name": "3_B_LIG1", "family_group": "RECB", "pIC50": 8.5,
+         "confidence_score": 0.78, "affinity_probability_binary": 0.5},
+    ])
+
+
+def _traces(html):
+    import json, re
+    body = re.search(r'Plotly\.newPlot\(\s*"[^"]+",\s*(\[.*?\]),\s*\{', html, re.S)
+    return json.loads(body.group(1))
+
+
+def test_each_protein_gets_its_own_marker_shape(bm):
+    """Colour is already carrying the confidence tier, so shape is the only channel
+    left to say which receptor a point belongs to -- and it is the one that survives
+    next to a colourbar."""
+    traces = _traces(bm._make_scatter(_summary_frame(), "chart-scatter"))
+    shapes = {t["name"]: t["marker"]["symbol"] for t in traces}
+    assert shapes == {"RECA": "circle", "RECB": "diamond"}
+
+
+def test_the_ranked_bars_are_grouped_by_protein_then_ranked_inside_each(bm):
+    """One sequence across the whole campaign interleaves receptors, and the question
+    the bars answer is "which compound wins ON THIS receptor" -- unreadable when the
+    neighbouring bar belongs to something else."""
+    traces = _traces(bm._make_bar_chart(_summary_frame(), "pIC50", "chart-pic50"))
+    assert [t["name"] for t in traces] == ["RECA", "RECB"]
+    assert traces[0]["y"] == [9.0, 7.5], "ranked within the group, not across the campaign"
+    # Contiguous positions, so the groups do not interleave on the axis.
+    assert traces[0]["x"] == [0, 1] and traces[1]["x"] == [2]
+
+
+def test_one_trace_per_protein_is_what_makes_the_legend_clickable(bm):
+    """Plotly toggles a trace when its legend entry is clicked, so the interactivity
+    asked for comes from the split itself rather than from any handler."""
+    for html in (bm._make_scatter(_summary_frame(), "s"),
+                 bm._make_bar_chart(_summary_frame(), "pIC50", "b")):
+        traces = _traces(html)
+        assert len(traces) == 2
+        assert all(t.get("showlegend") for t in traces)
+
+
+def test_a_single_protein_campaign_gets_no_legend(bm):
+    """A legend of one entry is a label pretending to be a control."""
+    import pandas as _pd
+    one = _summary_frame().head(2)          # both rows are RECA
+    html = bm._make_bar_chart(one, "pIC50", "b")
+    assert '"showlegend": false' in html.replace(" ", "").replace('"showlegend":false',
+                                                                 '"showlegend": false') \
+        or '"showlegend":false' in html
+
+
+def test_a_legend_below_the_plot_is_given_room(bm):
+    """Placed below the axes it is outside them, so without its own margin it is
+    drawn into the bottom edge and clipped -- which reads as the legend not rendering."""
+    html = bm._make_bar_chart(_summary_frame(), "pIC50", "b")
+    assert '"b": 160' in html or '"b":160' in html

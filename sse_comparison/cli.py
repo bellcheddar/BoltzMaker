@@ -97,7 +97,8 @@ def run_compare_sse(campaign: object, campaign_dir: Path, family_id: object = No
         motifs, annotator_source = [], None
         for annotator in annotator_chain:
             try:
-                found = annotator.annotate(fam.sequence, structure_path=str(apo_path), name_hint=fam.id)
+                found = annotator.annotate(fam.sequence, structure_path=str(apo_path),
+                                           name_hint=fam.id, chain_id=fam.apo_chain)
             except Exception as exc:
                 print(f"BoltzMaker: WARNING: {type(annotator).__name__} failed for '{fam.id}' ({exc})")
                 found = []

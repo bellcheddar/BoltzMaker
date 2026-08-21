@@ -128,7 +128,7 @@ class KLIFSAnnotator(MotifAnnotator):
         return "HRD" in sequence and "DFG" in sequence
 
     def annotate(self, sequence: str, pdb_id: object = None, structure_path: object = None,
-                 name_hint: object = None) -> list:
+                 name_hint: object = None, chain_id: object = None) -> list:
         if not name_hint:
             return []
         try:
