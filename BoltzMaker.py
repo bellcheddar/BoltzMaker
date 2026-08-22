@@ -694,6 +694,12 @@ class Ligand:
     ccd: object = None
     role: object = None  # optional "agonist" / "antagonist" -- purely for reporting
                            # (dashboard charts, compare-sse), never affects generate/run
+    #: "control" or "experimental". A control has been verified experimentally, by
+    #: structure or by assay, so its prediction can be checked against something real;
+    #: an experimental compound is under investigation and has nothing to check
+    #: against. Reporting only -- it never reaches a YAML -- but it is what tells a
+    #: reader which points on a chart are the yardstick and which are the question.
+    ligand_class: object = None
     # Pocket contacts scoped to THIS ligand, overriding the protein's. A pocket is
     # not purely a property of the receptor: measured on GLP1R/GIPR, the site where
     # orforglipron binds GLP1R (7E14) and the site where LSN1 binds GIPR (7RBT) share
@@ -752,7 +758,7 @@ _RECORD_ALLOWED_FIELDS = {
     "protein": {"sequence", "partners", "ligands", "modifications", "cyclic", "msa", "templates",
                 "apo structure", "apo chain", "family type", "group", "pocket source"},
     "partner": {"sequence", "type", "copies", "modifications", "cyclic", "msa"},
-    "ligand": {"smiles", "ccd", "role"},
+    "ligand": {"smiles", "ccd", "role", "class"},
 }
 
 # A statement's owner is always its first-mentioned chain, which must be a
@@ -979,6 +985,20 @@ def _smiles_to_inchikey(smiles: str):
         return None
 
 
+#: What a ligand is for. "control" -- verified experimentally, by structure or by
+#: assay, so its prediction can be checked. "experimental" -- a screening compound
+#: under investigation, with nothing to check against. Left unset when a campaign
+#: does not say, which reads as unknown rather than as either.
+LIGAND_CLASSES = ("control", "experimental")
+LIGAND_CLASS_NOTE = _LIGAND_CLASS_NOTE = {
+    "control": "Verified experimentally, by structure or by assay -- this prediction "
+               "can be checked against something real.",
+    "experimental": "A screening compound under investigation, with no experimental "
+                    "result to check the prediction against.",
+}
+LIGAND_CLASS_LABELS = {"control": "Control", "experimental": "Experimental"}
+
+
 def _build_ligand_record(name: str, fields: dict, statements: list, lineno: int) -> Ligand:
     has_smiles, has_ccd = "smiles" in fields, "ccd" in fields
     if has_smiles == has_ccd:  # both True (ambiguous) or both False (missing)
@@ -988,9 +1008,13 @@ def _build_ligand_record(name: str, fields: dict, statements: list, lineno: int)
     if role and role not in ("agonist", "antagonist"):
         raise MDParseError(f"ligand '{name}' has invalid Role '{role}' "
                             f"(expected agonist/antagonist, line {lineno})")
+    ligand_class = fields.get("class", "").strip().lower() or None
+    if ligand_class and ligand_class not in LIGAND_CLASSES:
+        raise MDParseError(f"ligand '{name}' has invalid Class '{ligand_class}' "
+                            f"(expected control/experimental, line {lineno})")
     pocket_contacts = [s["token"] for s in statements if s["type"] == "pocket"] or None
     return Ligand(id=name, smiles=smiles, ccd=fields.get("ccd"), role=role,
-                  pocket_contacts=pocket_contacts)
+                  ligand_class=ligand_class, pocket_contacts=pocket_contacts)
 
 
 # ==========================================================================
@@ -3447,11 +3471,18 @@ def analyze(yaml_dir: Path, out_dir: Path, campaign_dir: Path,
         display_name = _target_display_name(fam, t.ligand_id)
         if run_number is not None:
             display_name = f"{run_number}_{display_name}"
+        # ...and the pocket on the end, so the name says which of a ligand's several
+        # runs this is. Without it the only difference between a constrained target
+        # and its baseline is the run number, which reads as an index rather than as
+        # a condition -- "2_GLP1R_..._ORFO_41Y" says what was done to it.
+        if t.ligand_id is not None:
+            display_name = f"{display_name}_{pocket_code or UNCONSTRAINED_LABEL}"
         row = {"run": run_number,
                "target_id": t.stem, "family_id": t.family_id, "family_group": family_group,
                "partner_ids": partner_ids, "display_name": display_name, "ligand_id": t.ligand_id,
                "pocket": (pocket_code or UNCONSTRAINED_LABEL) if t.ligand_id is not None else None,
-               "ligand_smiles": ligand_smiles, "ligand_role": lig.role if lig else None, "flags": ""}
+               "ligand_smiles": ligand_smiles, "ligand_role": lig.role if lig else None,
+               "ligand_class": (lig.ligand_class if lig else None), "flags": ""}
         d = pred_dir / t.stem if pred_dir else None
         if not d or not d.is_dir():
             row["flags"] = "MISSING_OUTPUTS"
@@ -3628,6 +3659,8 @@ def _make_bar_chart(df: pd.DataFrame, col: str, div_id: str):
         return None
     key = _protein_key(df)
     columns = ["display_name", col] + ([key] if key in df.columns else [])
+    if "ligand_class" in df.columns:
+        columns.append("ligand_class")
     d = df[columns].dropna(subset=["display_name", col])
     if d.empty:
         return None
@@ -3646,12 +3679,18 @@ def _make_bar_chart(df: pd.DataFrame, col: str, div_id: str):
         ticks.extend(x)
         labels.extend(sub["display_name"].tolist())
         fig.add_trace(go.Bar(
-            x=x, y=sub[col].tolist(), width=_BAR_WIDTH, marker_color=colour,
+            x=x, y=sub[col].tolist(), width=_BAR_WIDTH,
+            marker=dict(color=colour, line=_class_outline(sub.get("ligand_class",
+                                                                  [None] * len(sub)))),
             name=label or "Target", showlegend=label is not None,
             customdata=sub["display_name"].tolist(),
             hovertemplate="%{customdata}<br>" + col + " %{y:.2f}<extra></extra>"))
 
-    fig.update_layout(legend=_BOTTOM_LEGEND, showlegend=len(groups) > 1, bargap=0.15)
+    class_traces = _class_legend_traces(d, symbol="square")
+    for trace in class_traces:
+        fig.add_trace(trace)
+    fig.update_layout(legend=_BOTTOM_LEGEND, bargap=0.15,
+                      showlegend=len(groups) > 1 or bool(class_traces))
     fig.update_xaxes(tickmode="array", tickvals=ticks, ticktext=labels, tickangle=-75,
                       tickfont=dict(size=_TICK_FONTSIZE),
                       range=[-0.75, max(position - 0.25, _BAR_MIN_SLOTS - 0.75)])
@@ -3761,9 +3800,51 @@ _INSET_LEGEND = dict(font=dict(size=_LEGEND_FONTSIZE), x=0.01, y=0.99, xanchor="
                       bgcolor="rgba(255,255,255,0.85)", bordercolor="#dde4ed", borderwidth=1)
 
 
-def _tier_marker(values, colorscale: list, colorbar_title: str, is_first_trace: bool, symbol: str) -> dict:
+#: The unverified compound is ringed, not the control. Colour on these charts already
+#: means the confidence or affinity tier, and a second meaning on the same channel
+#: makes both unreadable -- so the outline carries it. Marking the experimental ones
+#: is the way round that draws the eye to what is unproven: a control is the
+#: background they are read against.
+_EXPERIMENTAL_OUTLINE = dict(width=2, colour="#d62728")
+_DEFAULT_OUTLINE = dict(width=1, colour="#333333")
+
+
+def _class_legend_traces(d: pd.DataFrame, symbol: str = "circle") -> list:
+    """Legend-only markers explaining the outline, when the campaign uses classes.
+
+    The ring is a per-point property, so Plotly gives it no legend of its own -- a
+    reader would see two thicknesses and no key. These traces carry no data: they
+    exist to put "Control" and "Experimental" in the legend beside the proteins.
+    """
+    if "ligand_class" not in d.columns:
+        return []
+    present = [c for c in LIGAND_CLASSES if (d["ligand_class"] == c).any()]
+    if len(present) < 2:
+        return []          # nothing to tell apart
+    traces = []
+    for name in present:
+        outline = _EXPERIMENTAL_OUTLINE if name == "experimental" else _DEFAULT_OUTLINE
+        traces.append(go.Scatter(
+            x=[None], y=[None], mode="markers", name=LIGAND_CLASS_LABELS[name],
+            hoverinfo="skip", showlegend=True,
+            marker=dict(size=9, symbol=symbol, color="#ffffff",
+                        line=dict(width=outline["width"], color=outline["colour"]))))
+    return traces
+
+
+def _class_outline(classes) -> dict:
+    """Per-point marker outline, ringed red where the ligand is experimental."""
+    values = ["experimental" if str(c) == "experimental" else "" for c in classes]
+    return dict(
+        width=[_EXPERIMENTAL_OUTLINE["width"] if v else _DEFAULT_OUTLINE["width"] for v in values],
+        color=[_EXPERIMENTAL_OUTLINE["colour"] if v else _DEFAULT_OUTLINE["colour"] for v in values])
+
+
+def _tier_marker(values, colorscale: list, colorbar_title: str, is_first_trace: bool,
+                 symbol: str, classes=None) -> dict:
+    line = _class_outline(classes) if classes is not None else dict(width=1, color="#333333")
     marker = dict(color=values, colorscale=colorscale, cmin=0, cmax=1, size=9, symbol=symbol,
-                  line=dict(width=1, color="#333333"), showscale=is_first_trace)
+                  line=line, showscale=is_first_trace)
     if is_first_trace:
         marker["colorbar"] = dict(title=colorbar_title, thickness=14)
     return marker
@@ -3788,10 +3869,15 @@ def _make_scatter(df: pd.DataFrame, div_id: str):
         fig.add_trace(go.Scatter(
             x=sub[conf_col], y=sub["pIC50"], mode="markers+text", text=sub["display_name"],
             textposition="top center", textfont=dict(size=_ANNOTATION_FONTSIZE),
-            marker=_tier_marker(sub[conf_col], colorscale, "confidence_score", i == 0, symbol),
+            marker=_tier_marker(sub[conf_col], colorscale, "confidence_score", i == 0, symbol,
+                                classes=sub.get("ligand_class")),
             name=label or "Target", showlegend=label is not None,
         ))
-    fig.update_layout(legend=_BOTTOM_LEGEND, showlegend=len(groups) > 1)
+    class_traces = _class_legend_traces(d)
+    for trace in class_traces:
+        fig.add_trace(trace)
+    fig.update_layout(legend=_BOTTOM_LEGEND,
+                      showlegend=len(groups) > 1 or bool(class_traces))
     _pad_scatter_for_labels(fig, d[conf_col], d["pIC50"])
     fig.update_xaxes(title_text=conf_col, title_font=dict(size=_AXIS_LABEL_FONTSIZE), tickfont=dict(size=_TICK_FONTSIZE))
     fig.update_yaxes(title_text="pIC50", title_font=dict(size=_AXIS_LABEL_FONTSIZE), tickfont=dict(size=_TICK_FONTSIZE))
@@ -3836,10 +3922,15 @@ def _make_pic50_vs_binder_chart(df: pd.DataFrame, div_id: str):
         fig.add_trace(go.Scatter(
             x=sub["affinity_probability_binary"], y=sub["pIC50"], mode="markers+text",
             text=sub["display_name"], textposition="top center", textfont=dict(size=_ANNOTATION_FONTSIZE),
-            marker=_tier_marker(sub["affinity_probability_binary"], colorscale, "Binder probability", i == 0, symbol),
+            marker=_tier_marker(sub["affinity_probability_binary"], colorscale, "Binder probability",
+                                i == 0, symbol, classes=sub.get("ligand_class")),
             name=label or "Target", showlegend=label is not None,
         ))
-    fig.update_layout(legend=_BOTTOM_LEGEND, showlegend=len(groups) > 1)
+    class_traces = _class_legend_traces(d)
+    for trace in class_traces:
+        fig.add_trace(trace)
+    fig.update_layout(legend=_BOTTOM_LEGEND,
+                      showlegend=len(groups) > 1 or bool(class_traces))
     _pad_scatter_for_labels(fig, d["affinity_probability_binary"], d["pIC50"])
     fig.update_xaxes(title_text="Binder probability", title_font=dict(size=_AXIS_LABEL_FONTSIZE), tickfont=dict(size=_TICK_FONTSIZE))
     fig.update_yaxes(title_text="pIC50", title_font=dict(size=_AXIS_LABEL_FONTSIZE), tickfont=dict(size=_TICK_FONTSIZE))
@@ -4428,6 +4519,10 @@ img, canvas { max-width: 100%; height: auto; }
 .md-3dmol-viewer { width: 100%; height: 260px; position: relative; background: #fff; border-radius: var(--md-radius); }
 /* Collapsed columns are hidden outright rather than narrowed: a 0-width cell still
    draws its borders and leaves a ladder of hairlines across the table. */
+.lig-class { font-weight: 600; }
+.lig-control { color: var(--md-primary); }
+.lig-experimental { color: var(--md-text-muted); font-weight: 400; }
+
 .ft-collapsed { display: none; }
 .ft-collapsed.ft-shown { display: table-cell; }
 .ft-collapsible { cursor: pointer; user-select: none; }
@@ -4845,7 +4940,32 @@ def _build_reference_panel_html(campaign: Campaign, campaign_dir: Path) -> str:
             f"<td>{html.escape(detail)}</td>"
             f"<td>{html.escape(fam.apo_chain or 'auto')}</td></tr>")
 
-    if not pocket_rows and not sse_rows:
+    # Which ligands are yardsticks and which are questions. Third table in this panel
+    # because it is the same kind of fact as the other two: what the campaign was
+    # built on, as opposed to what it found.
+    ligand_rows = []
+    for lig in campaign.ligands:
+        name = lig.ligand_class
+        label = LIGAND_CLASS_LABELS.get(name or "", "&mdash;")
+        css = ("lig-control" if name == "control"
+               else "lig-experimental" if name == "experimental" else "cell-na")
+        title = _LIGAND_CLASS_NOTE.get(name or "", "No Class: set for this ligand.")
+        source = ", ".join(sorted(code for code, _p in references.items()
+                                  if _reference_ligand_for(lig, None, references,
+                                                            campaign_dir)[0] == code))
+        # Built outside the f-string: an escaped quote inside an f-string expression is
+        # a syntax error before Python 3.12, and this file runs under 3.11 in a campaign
+        # environment even when it compiles cleanly here.
+        origin_cell = (html.escape(source) if source
+                       else "<span class='cell-na'>none</span>")
+        ligand_rows.append(
+            f"<tr><td>{html.escape(lig.id)}</td>"
+            f"<td><span class='lig-class {css}' title='{html.escape(title, quote=True)}'>"
+            f"{label}</span></td>"
+            f"<td>{'SMILES' if lig.smiles else 'CCD'}</td>"
+            f"<td>{origin_cell}</td></tr>")
+
+    if not pocket_rows and not sse_rows and not ligand_rows:
         return ""
 
     parts = ["<div class='md-card table-card'><h2>Reference structures</h2>"
@@ -4867,6 +4987,16 @@ def _build_reference_panel_html(campaign: Campaign, campaign_dir: Path) -> str:
             "<p class='md-hint'>State is read from the file, not from its title. A "
             "structure titled &ldquo;apo&rdquo; is often ligand-free <em>and</em> "
             "G-protein-coupled, which is the active state.</p>")
+    if ligand_rows:
+        parts.append(
+            "<h3 class='md-sub'>Ligand definitions</h3>"
+            "<table class='full-table'><thead><tr><th>Ligand</th><th>Class</th>"
+            "<th>Given as</th><th>Experimental structure</th></tr></thead>"
+            f"<tbody>{''.join(ligand_rows)}</tbody></table>"
+            "<p class='md-hint'>A <b>control</b> has been verified experimentally, by "
+            "structure or by assay, so its prediction can be checked; an "
+            "<b>experimental</b> compound is under investigation, with nothing to check "
+            "against. Experimental compounds are ringed in red in the charts.</p>")
     parts.append("</div>")
     return "".join(parts)
 
@@ -4989,7 +5119,7 @@ _FULL_TABLE_RENAME = {
     # the summary table's "Target" was a protein while the targets list's was a run.
     # The user-facing vocabulary is the one the prepare form uses: proteins, co-folded
     # partners, ligands, pockets, ligand-free companions, and predictions.
-    "run": "Run", "pocket": "Pocket",
+    "run": "Run", "pocket": "Pocket", "ligand_class": "Class",
     "family_id": "Protein", "family_group": "Protein", "partner_ids": "Partner", "ligand_id": "Ligand",
     "flags": "Summary", "confidence_score": "Score", "ptm": "pTM", "iptm": "ipTM",
     "ligand_iptm": "Lig ipTM", "protein_iptm": "PPI ipTM",
@@ -4998,7 +5128,7 @@ _FULL_TABLE_RENAME = {
     "plip_total_count": "Total",
 }
 _FULL_TABLE_GROUPS = {
-    "run": "Identity", "pocket": "Identity",
+    "run": "Identity", "pocket": "Identity", "ligand_class": "Identity",
     "family_id": "Identity", "family_group": "Identity", "partner_ids": "Identity",
     "ligand_id": "Identity", "flags": "Identity",
     "confidence_score": "Confidence", "ptm": "Confidence", "iptm": "Confidence",
@@ -5016,7 +5146,8 @@ _COLLAPSED_GROUPS = {"Confidence": "confidence_score", "Interactions": "plip_tot
 
 
 _FULL_TABLE_GROUP_ORDER = ["Identity", "Affinity", "Confidence", "Interactions", "Structure", "Other"]
-_FULL_TABLE_TEXT_COLS = {"family_id", "family_group", "partner_ids", "ligand_id", "flags", "pocket"}
+_FULL_TABLE_TEXT_COLS = {"family_id", "family_group", "partner_ids", "ligand_id", "flags",
+                          "pocket", "ligand_class"}
 _PLIP_COUNT_LABELS = {
     "hydrogen_bonds": "H-bond", "hydrophobic": "Phobic", "pi_stacks": "π-stack",
     "salt_bridges": "Salt", "pi_cation": "π-cation", "halogen_bonds": "Halogen",
@@ -5971,8 +6102,9 @@ def _summary_table_order(df: "pd.DataFrame"):
     was in the site. Orforglipron, a confirmed potent GLP1R binder, came 0.59 and
     ranked below compounds it beats by orders of magnitude experimentally.
 
-    pIC50 put the same four in their known order -- ORFO 11.2, LIG1 9.8, LSN1 8.4,
-    LSN2 7.9 -- so it is the output carrying the quantitative signal, and it is what
+    pIC50 put the same four in their known order -- orforglipron at 11.2, then the
+    other three at 9.8, 8.4 and 7.9 -- so it is the output carrying the quantitative
+    signal, and it is what
     the table ranks on. A binary binder/non-binder score also has nothing to separate
     when every ligand in the campaign is a real binder.
 
@@ -6078,6 +6210,16 @@ def _build_full_table_html(df: pd.DataFrame) -> str:
             # "Apo" says what the row IS. "N/A" said only that a ligand id could not
             # be shown, which is the least interesting true thing about it.
             return "<span class='cell-na' title='ligand-free (apo) target'>Apo</span>"
+        if c == "ligand_class":
+            if is_apo:
+                return ("<span class='cell-na' title='no ligand to classify'>N/A</span>")
+            if pd.isna(v) or not str(v).strip():
+                return ("<span class='cell-na' title='no Class: set for this ligand'>"
+                        "&mdash;</span>")
+            label = LIGAND_CLASS_LABELS.get(str(v), str(v))
+            css = "lig-control" if str(v) == "control" else "lig-experimental"
+            return (f"<span class='lig-class {css}' title='{html.escape(_LIGAND_CLASS_NOTE[str(v)], quote=True)}'>"
+                    f"{html.escape(label)}</span>")
         if c == "pocket" and (is_apo or pd.isna(v) or not str(v).strip()):
             return ("<span class='cell-na' title='no pocket applies -- ligand-free "
                     "(apo) target'>N/A</span>")
