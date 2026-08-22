@@ -171,6 +171,9 @@ class Target:
     run: object = None
     #: The pocket code this prediction was run against, or "Unc" for unconstrained.
     pocket: str = ""
+    #: "control" or "experimental" -- whether this ligand has an experimental result
+    #: to check the prediction against.
+    ligand_class: str = ""
     flags: list[str] = field(default_factory=list)
     note: str = ""
     confidence: float = None
@@ -487,6 +490,7 @@ def load(root: Path) -> Results:
             # int, not float: this is an ordinal and "Run 3.0" is not a thing.
             run=(int(_num(row.get("run"))) if _num(row.get("run")) is not None else None),
             pocket=(row.get("pocket") or "").strip(),
+            ligand_class=(row.get("ligand_class") or "").strip(),
             family_id=(row.get("family_id") or "").strip(),
             family_group=(row.get("family_group") or "").strip(),
             ligand_id=(row.get("ligand_id") or "").strip(),
@@ -634,7 +638,7 @@ def to_json(results: Results) -> str:
         "targets": [
             {
                 "id": t.target_id, "name": t.display_name, "family": t.family_id,
-                "run": t.run, "pocket": t.pocket,
+                "run": t.run, "pocket": t.pocket, "ligand_class": t.ligand_class,
                 "group": t.family_group, "ligand": t.ligand_id, "smiles": t.ligand_smiles,
                 "role": t.ligand_role, "flags": t.flags, "note": t.note,
                 "confidence": t.confidence, "ptm": t.ptm, "iptm": t.iptm,

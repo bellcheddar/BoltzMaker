@@ -327,15 +327,16 @@ img, canvas { max-width: 100%; height: auto; }
 #target-table thead th:nth-child(3) { width: 84px; }   /* Protein    */
 #target-table thead th:nth-child(4) { width: 74px; }   /* Ligand     */
 #target-table thead th:nth-child(5) { width: 74px; }   /* Pocket     */
-#target-table thead th:nth-child(6) { width: 104px; }   /* Confidence */
-#target-table thead th:nth-child(7) { width: 72px; }   /* pIC50      */
-#target-table thead th:nth-child(8) { width: 112px; }   /* Interactions */
-#target-table thead th:nth-child(9) { width: 122px; }  /* Flags      */
+#target-table thead th:nth-child(6) { width: 86px; }    /* Class      */
+#target-table thead th:nth-child(7) { width: 94px; }    /* Confidence */
+#target-table thead th:nth-child(8) { width: 66px; }    /* pIC50      */
+#target-table thead th:nth-child(9) { width: 96px; }    /* Interactions */
+#target-table thead th:nth-child(10) { width: 112px; }  /* Flags      */
 /* Flag pills wrap, both between pills and inside one. "low confidence strong
    affinity" is a single unbroken pill 78px wider than its column, and one cell
    overflowing is all it takes to give the whole table a horizontal scrollbar. */
-#target-table td:nth-child(9) { white-space: normal; }
-#target-table td:nth-child(9) .md-flag {
+#target-table td:nth-child(10) { white-space: normal; }
+#target-table td:nth-child(10) .md-flag {
   display: inline-block; white-space: normal; overflow-wrap: anywhere; max-width: 100%;
 }
 #target-table td:nth-child(2) {
@@ -707,6 +708,13 @@ tr.md-check-na .md-check-fail { color: var(--md-text-muted); }
 /* One legend under both per-motif charts, spanning the pair. Wraps rather than
    scrolls: twelve target names is more than fits on a line, and a legend you have
    to scroll is one you will not read. */
+/* Control vs experimental, wherever it is shown. The charts ring a control rather
+   than recolouring it -- colour there already means the confidence or affinity tier,
+   and a second meaning on one channel makes both unreadable. */
+.lig-class { font-weight: 600; }
+.lig-control { color: var(--md-primary); }
+.lig-experimental { color: var(--md-text-muted); font-weight: 400; }
+
 .md-motif-legend {
   display: flex; flex-wrap: wrap; gap: 6px 18px;
   margin: 10px 2px 0; padding-top: 10px;

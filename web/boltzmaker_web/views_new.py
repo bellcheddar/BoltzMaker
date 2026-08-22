@@ -179,6 +179,10 @@ def _parse_form() -> tuple[bool, list[ProteinInput], list[PartnerInput], list[Li
     ligand_names_raw = request.form.getlist("ligand_name[]")
     ligand_kinds = request.form.getlist("ligand_kind[]")
     ligand_values = request.form.getlist("ligand_value[]")
+    # Defaulted per row rather than zipped: an older saved form has no class field at
+    # all, and truncating to the shortest list is exactly the bug the check below
+    # exists to catch.
+    ligand_classes = request.form.getlist("ligand_class[]")
     ligands: list[LigandInput] = []
     # zip() over parallel arrays truncates to the shortest, which is how a form bug
     # that posted one ligand_kind for several rows silently dropped every ligand after
@@ -191,14 +195,20 @@ def _parse_form() -> tuple[bool, list[ProteinInput], list[PartnerInput], list[Li
             f"{len(ligand_kinds)} types, {len(ligand_values)} values) -- please report this.",
             field="ligand_name",
         )
-    for raw_name, kind, value in zip(ligand_names_raw, ligand_kinds, ligand_values):
+    for index, (raw_name, kind, value) in enumerate(
+            zip(ligand_names_raw, ligand_kinds, ligand_values)):
+        ligand_class = (ligand_classes[index] if index < len(ligand_classes)
+                        else "experimental")
+        if ligand_class not in ("control", "experimental"):
+            ligand_class = "experimental"
         if not raw_name.strip() and not value.strip():
             continue
         name = validate_name(raw_name, used_names, field="ligand_name")
         used_names.add(name)
         if not value.strip():
             raise WizardValidationError(f"Ligand '{name}' needs a SMILES or CCD value.", field="ligand_value")
-        ligands.append(LigandInput(name=name, kind=kind, value=value))
+        ligands.append(LigandInput(name=name, kind=kind, value=value,
+                                   ligand_class=ligand_class))
 
     return predict_affinity, proteins, partners, ligands, confine_to_receptor
 

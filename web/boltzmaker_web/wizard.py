@@ -138,6 +138,10 @@ class LigandInput:
     name: str
     kind: str  # "smiles" | "ccd"
     value: str
+    #: "control" (verified experimentally) or "experimental" (under investigation).
+    #: Reporting only -- it never reaches a YAML -- but it is what tells a reader
+    #: which points on a chart are the yardstick and which are the question.
+    ligand_class: str = "experimental"
 
 
 def assemble_boltz_input_md(
@@ -252,9 +256,15 @@ def assemble_boltz_input_md(
     ligand_blocks = []
     for lg in ligands:
         if lg.kind == "ccd":
-            ligand_blocks.append([f"Ligand: {lg.name}", f"CCD: {lg.value.strip()}"])
+            block = [f"Ligand: {lg.name}", f"CCD: {lg.value.strip()}"]
+            if lg.ligand_class:
+                block.append(f"Class: {lg.ligand_class}")
+            ligand_blocks.append(block)
         else:
-            ligand_blocks.append([f"Ligand: {lg.name}", f"SMILES: {lg.value.strip()}"])
+            block = [f"Ligand: {lg.name}", f"SMILES: {lg.value.strip()}"]
+            if lg.ligand_class:
+                block.append(f"Class: {lg.ligand_class}")
+            ligand_blocks.append(block)
 
     for block in protein_blocks + partner_blocks + ligand_blocks:
         out.append("")

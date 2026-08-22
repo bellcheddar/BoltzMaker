@@ -110,7 +110,8 @@ var BoltzExplorer = (function () {
         // Pocket included so "v6g" filters the table to that pocket's runs, which is
         // the comparison a matrix campaign is read for.
         var haystack = (t.id + " " + t.name + " " + t.ligand + " " + t.family + " "
-                        + t.group + " " + (t.pocket || "")).toLowerCase();
+                        + t.group + " " + (t.pocket || "") + " "
+                        + (t.ligand_class || "")).toLowerCase();
         if (haystack.indexOf(text) === -1) return false;
       }
       return true;
@@ -152,6 +153,14 @@ var BoltzExplorer = (function () {
       cell(t.family || "—");
       cell(t.ligand || "—");
       cell(t.pocket || "—");
+      var cls = cell(t.ligand_class
+        ? t.ligand_class.charAt(0).toUpperCase() + t.ligand_class.slice(1) : "—");
+      if (t.ligand_class) {
+        cls.className = "lig-class lig-" + t.ligand_class;
+        cls.title = t.ligand_class === "control"
+          ? "Verified experimentally -- this prediction can be checked against something real."
+          : "A screening compound under investigation, with nothing to check against.";
+      }
       cell(fmt(t.confidence, 2), "num");
       cell(t.pic50 === null ? "—" : fmt(t.pic50, 2), "num");
       cell(t.plip_total ? String(t.plip_total) : "—", "num");
@@ -2243,8 +2252,15 @@ var BoltzExplorer = (function () {
     // so the name has to be carried per point for the hover to be able to say it.
     var names = (spec.layout && spec.layout.xaxis && spec.layout.xaxis.ticktext) || [];
     (spec.data || []).forEach(function (trace) {
+      // The class key is drawn as data-free traces; giving them a hover template
+      // makes an empty point at the origin respond to the mouse.
+      if (trace.hoverinfo === "skip") return;
       trace.hovertemplate = template;
-      if (names.length) trace.customdata = names.slice();
+      // Only when the trace has none of its own. These charts now carry one trace per
+      // protein, each holding a subset of the bars, while ticktext is the whole axis
+      // -- so copying it wholesale gave every trace names starting from index 0 and
+      // the second protein's bars showed the first protein's labels.
+      if (!trace.customdata && names.length) trace.customdata = names.slice();
     });
   }
 

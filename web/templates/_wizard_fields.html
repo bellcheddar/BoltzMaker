@@ -225,6 +225,18 @@
       </select>
     </div>
     <div class="md-field"><label>Value</label><input type="text" name="ligand_value[]" placeholder="SMILES string or CCD code"></div>
+    {#  A select for the same reason the identifier type is one: radios sharing a name
+        form a single group across the whole form, so one row's choice unpicks another's
+        and the posted list is shorter than the number of rows.  #}
+    <div class="md-field">
+      <label>Class</label>
+      <select name="ligand_class[]">
+        <option value="experimental" selected>Experimental &mdash; screening compound</option>
+        <option value="control">Control &mdash; verified by structure or assay</option>
+      </select>
+      <p class="md-hint">Controls are what the predictions are judged against; they are
+        ringed in the charts and listed in the report's Reference structures panel.</p>
+    </div>
   </div>
 </template>
 
