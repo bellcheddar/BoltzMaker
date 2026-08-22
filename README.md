@@ -1477,8 +1477,8 @@ example campaigns.
   constrained) -- it was reporting how a target was set up, not what was in the site.
   Orforglipron, a confirmed potent GLP1R binder, scored 0.59 and ranked below
   compounds it beats experimentally by orders of magnitude. pIC50 put the same four in
-  their known order (ORFO 11.2, LIG1 9.8, LSN1 8.4, LSN2 7.9), so that is what the
-  table ranks on. A binary binder/non-binder score also has nothing to separate when
+  their known order (orforglipron 11.2, then the other three at 9.8, 8.4 and 7.9), so
+  that is what the table ranks on. A binary binder/non-binder score also has nothing to separate when
   every ligand in a campaign is a real binder.
 - [ ] Classify the failure before retrying, and escalate along the axis that addresses it:
   a memory ladder (isolation, then `--max-msa-seqs 2048`) and a NaN ladder

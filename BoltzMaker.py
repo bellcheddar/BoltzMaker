@@ -6102,8 +6102,9 @@ def _summary_table_order(df: "pd.DataFrame"):
     was in the site. Orforglipron, a confirmed potent GLP1R binder, came 0.59 and
     ranked below compounds it beats by orders of magnitude experimentally.
 
-    pIC50 put the same four in their known order -- ORFO 11.2, LIG1 9.8, LSN1 8.4,
-    LSN2 7.9 -- so it is the output carrying the quantitative signal, and it is what
+    pIC50 put the same four in their known order -- orforglipron at 11.2, then the
+    other three at 9.8, 8.4 and 7.9 -- so it is the output carrying the quantitative
+    signal, and it is what
     the table ranks on. A binary binder/non-binder score also has nothing to separate
     when every ligand in the campaign is a real binder.
 
