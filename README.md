@@ -14,94 +14,59 @@
 
 ---
 
-A single script that manages a Boltz-2 batch campaign end to end: parse a `boltz_input.md`
-spec, generate the per-target Boltz YAML files, preflight the environment and inputs, run
-`boltz predict` with a live progress bar (with resume support), and analyze the results into
-a CSV, an XLSX workbook, and an HTML dashboard -- optionally enriched with real
-protein-ligand interaction analysis via [cif2plip](https://github.com/bellcheddar/cif2plip).
-The non-GPU stages -- the `new` wizard, `generate`, `preflight`, and full `analyze`
-(including PLIP interaction detection and compare-sse) -- are also available with no local
-install at **[boltzmaker.mdeller.com](https://boltzmaker.mdeller.com)**; only the GPU
-`run` step still needs your own hardware (see **Web deployment** below).
+BoltzMaker is for campaign-scale Boltz-2 work: a matrix of receptors x ligands x conditions,
+described once and run as one unit, rather than a prediction at a time. One annotated
+`boltz_input.md` names the proteins, their co-folded partners, the ligands, the pocket /
+covalent / distance constraints and any ligand-free controls; BoltzMaker crosses them into a
+target per combination and carries all of them through generation, validation, prediction and
+reporting together. The example campaigns below run up to 20 targets from one file, and a real
+GPCR panel here ran 26. It is built for structural biologists and drug-discovery scientists
+running structure/affinity panels -- covalent-linkage studies, multi-chain SAR and selectivity
+matrices, pocket-condition sweeps.
 
-Why it matters: hand-running a Boltz-2 campaign means writing dozens of near-identical YAML
-files by hand, remembering the right CLI flags for the hardware you're on, and manually
-digging through prediction JSONs afterwards, all repetitive, error-prone steps that don't
-need a human. BoltzMaker turns a single annotated spec into the full pipeline: generated
-inputs, environment/input validation (including ligand-chemistry sanity checks --
-undefined stereocentres, ambiguous protonation states, stray salts -- so bad input
-chemistry is caught before hours of compute, not silently mispredicted), a monitored run
-with Mac-safe memory defaults, and a ready-to-read report. It is useful for: structural
-biologists and drug-discovery scientists
-running Boltz-2 structure/affinity panels (single targets, covalent-linkage studies, or
-multi-chain SAR/selectivity campaigns) who want a repeatable, resumable, well-documented
-pipeline instead of a pile of hand-edited scripts.
+**The way in is [boltzmaker.mdeller.com](https://boltzmaker.mdeller.com), and it installs
+nothing.** Every stage but one runs there: describing the campaign (the `new` wizard's questions
+as a form), `generate`, `preflight`, and the whole of `analyze` -- PLIP interaction detection and
+compare-sse included. Only the GPU `run` step needs your own hardware, so the site hands you one
+self-extracting bundle carrying the spec, BoltzMaker and a pinned environment. Run it where the
+GPU is, bring back the single `.bmz` it writes, and the site opens the campaign as an interactive
+report. Full detail under **Web deployment** below.
 
-Don't want to hand-write the spec at all? `BoltzMaker.py new` interviews you in plain
-English -- proteins, partners, ligands, and the constraint sentences -- and writes a
-valid `boltz_input.md` for you. If you've already got a reference co-crystal or homology
-structure for a protein, it can even suggest pocket-contact residues automatically,
-remapped onto your target's own numbering via sequence alignment, instead of you reading
-them off a structure viewer by hand.
+Why it matters: hand-running a campaign that size means writing dozens of near-identical YAML
+files, remembering the right CLI flags for your hardware, and digging through prediction JSONs
+afterwards. BoltzMaker does all three, enriches the result with real protein-ligand interaction
+analysis via [cif2plip](https://github.com/bellcheddar/cif2plip), and runs ligand-chemistry
+checks -- undefined stereocentres, ambiguous protonation states, stray salts -- so bad chemistry
+is caught before hours of compute rather than silently mispredicted.
 
-BoltzMaker grew out of five smaller, single-purpose tools written earlier:
-[generate_yaml](https://github.com/bellcheddar/generate_yaml) for building the input
-YAMLs, [simple-zsh-script-to-run-boltz2](https://github.com/bellcheddar/simple-zsh-script-to-run-boltz2)
-for driving the actual `boltz predict` runs, [analyze-boltz2-results](https://github.com/bellcheddar/analyze-boltz2-results)
-for the post-run analysis, [cif2plip](https://github.com/bellcheddar/cif2plip) for
-protein-ligand interaction profiling, and [smiles2grid](https://github.com/bellcheddar/smiles2grid)
-for rendering a ligand set into a boxed grid of 2D structures. BoltzMaker consolidates
-all five into one spec-driven pipeline sharing a single campaign format, so the same
-input file drives every stage instead of juggling separate scripts and re-typing target
-names between them.
-
-And yes, the name is a nod to [Boltmaker](https://www.timothytaylor.co.uk/beer/boltmaker),
-Timothy Taylor's Champion Beer of Britain and one of the author's favourites.
+It installs locally as a single script too, consolidating five earlier single-purpose tools into
+one spec-driven pipeline sharing a single campaign format:
+[generate_yaml](https://github.com/bellcheddar/generate_yaml) (input YAMLs),
+[simple-zsh-script-to-run-boltz2](https://github.com/bellcheddar/simple-zsh-script-to-run-boltz2)
+(driving `boltz predict`),
+[analyze-boltz2-results](https://github.com/bellcheddar/analyze-boltz2-results) (post-run
+analysis), [cif2plip](https://github.com/bellcheddar/cif2plip) (interaction profiling) and
+[smiles2grid](https://github.com/bellcheddar/smiles2grid) (a boxed grid of 2D ligand
+structures). And yes, the name is a nod to
+[Boltmaker](https://www.timothytaylor.co.uk/beer/boltmaker), Timothy Taylor's Champion Beer of
+Britain and one of the author's favourites.
 
 See [CHANGELOG.md](CHANGELOG.md) for what's changed recently, and
-[PROJECT_PLAN.md](PROJECT_PLAN.md) for the roadmap behind the To-Do list below.
+[PROJECT_PLAN.md](PROJECT_PLAN.md) for the roadmap behind the To-do list below.
 
 ## 📥 Installation
 
-Three ways to run BoltzMaker. **Path 1 installs nothing at all** and is the fastest way to
-see what the pipeline does; Paths 2 and 3 install it properly on your own machine, and differ
-only in whether that machine has internet access. (Looking for more detail or troubleshooting
-on either install path? See **One-time setup** and `docs/tier_b_offline_install.md` further
-down.)
-
-| | What it is | Best when |
-|---|---|---|
-| **Path 1: Web app** | Use it in the browser at [boltzmaker.mdeller.com](https://boltzmaker.mdeller.com). Nothing to install. | You want to try it, build a campaign spec, or analyse results you already have. |
-| **Path 2: Normal install** | Full local install on a machine with internet access. | You are running real campaigns on your own GPU. |
-| **Path 3: Offline install** | A single self-extracting installer built elsewhere and carried across. | The machine is airgapped or behind a firewall. |
+Three ways to run BoltzMaker. **Path 1 installs nothing at all** and is where to start; Paths 2
+and 3 install it properly on your own machine, and differ only in whether that machine has
+internet access.
 
 ### Path 1: Web app (no install)
 
-Everything except the GPU prediction step runs at
-**[boltzmaker.mdeller.com](https://boltzmaker.mdeller.com)**. Real structure prediction needs a
-GPU, which the server does not have, so that one step always happens on your own hardware.
-The site opens on a choice of two ways to work.
-
-**Fully Automated Mode** is two steps and is the one to pick if you just want a campaign run
-end to end:
-
-1. **Prepare.** Describe your proteins, partners and ligands in the form, choose how hard to
-   push your hardware, and download a single self-extracting bundle. It carries the campaign
-   spec, BoltzMaker itself, a pinned environment covering Boltz-2 and the whole analysis
-   stack, and the scripts that run them.
-2. **Analysis.** Run that bundle on a machine with a GPU (double-click it on macOS, or
-   `sh ./boltzmaker_<campaign>.command` from a terminal) and it installs the environment,
-   runs the whole pipeline, and
-   writes one `.bmz` results file. Upload that file back to the site to explore your campaign:
-   a sortable table of every target, a confidence-versus-affinity triage plot, and per-target
-   3D pose viewers with the protein-ligand interactions that were detected.
-
-**Stepwise Mode** exposes the same non-GPU stages as four separate tools: the campaign
-**Wizard**, **Generate**, **Preflight**, and **Analyze**. Pick this when you already have your
-own setup and want one piece of it, rather than the whole pipeline.
-
-Full detail on both, including every option and what the `.bmz` file contains, is in
-**Web deployment** below.
+[boltzmaker.mdeller.com](https://boltzmaker.mdeller.com) opens on two ways to work: **Fully
+Automated Mode**, the two-step describe-download-run-upload flow above, and **Stepwise Mode**,
+which exposes the same non-GPU stages as four independent tools (**Wizard**, **Generate**,
+**Preflight**, **Analyze**) for when you already have your own setup and want one piece of it.
+Both are documented under **Web deployment** below.
 
 ### Path 2: This computer has internet access
 
@@ -119,10 +84,10 @@ cd ~/Desktop/BoltzMaker
 git clone https://github.com/bellcheddar/BoltzMaker.git .
 ```
 
-(the trailing `.` tells it to put the files directly into the folder you just made,
-rather than inside another new folder). If this is the first time you've used `git`,
-macOS may pop up a dialog asking to install "Command Line Tools" -- click Install and
-wait for it to finish, then run the command again.
+(the trailing `.` puts the files directly into the folder you just made rather than inside
+another new folder). If this is the first time you've used `git`, macOS may pop up a dialog
+asking to install "Command Line Tools" -- click Install, wait for it to finish, then run the
+command again.
 
 **3.** Run the installer:
 
@@ -130,8 +95,7 @@ wait for it to finish, then run the command again.
 ./install.sh
 ```
 
-Wait for it to finish. It downloads a few GB of software the first time, so it can
-take a while depending on your connection.
+It downloads a few GB of software the first time, so it can take a while.
 
 **4.** Check it worked:
 
@@ -139,17 +103,15 @@ take a while depending on your connection.
 pixi run preflight examples/t4_lysozyme/boltz_input.md
 ```
 
-If you see a table of green PASS results, you're ready to go -- see **Commands**
-below for what to run next.
+A table of green PASS results means you're ready -- see **Commands** below.
 
 ### Path 3: This computer has no internet access
 
-Use this for a lab machine, server, or any computer that's offline or behind a
-firewall. You'll need a second computer that *does* have internet access to prepare a
-single installer file first.
+For a lab machine, server, or anything offline or behind a firewall. You'll need a second
+computer that *does* have internet access to prepare a single installer file first.
 
-**1.** On the computer **with** internet access, follow **Path 2** above, then build
-the offline installer file:
+**1.** On the computer **with** internet access, follow **Path 2** above, then build the
+offline installer file:
 
 ```sh
 pixi global install pixi-pack
@@ -158,11 +120,10 @@ pixi-pack --platform osx-arm64 --ignore-pypi-non-wheel --create-executable -o bo
 
 (use `--platform linux-64` instead of `osx-arm64` if the offline computer runs Linux)
 
-**2.** Copy `boltzmaker-installer.sh`, together with the whole `BoltzMaker` folder,
-onto the offline computer (USB drive, internal network transfer, etc.).
+**2.** Copy `boltzmaker-installer.sh`, together with the whole `BoltzMaker` folder, onto the
+offline computer (USB drive, internal network transfer, etc.).
 
-**3.** On the offline computer, in a terminal, go to where you copied those files and
-run:
+**3.** On the offline computer, in a terminal, go to where you copied those files and run:
 
 ```sh
 ./boltzmaker-installer.sh -o ./boltzmaker-env
@@ -187,17 +148,18 @@ Full details, including a couple of one-time extra steps this path needs, are in
 +----------------+     +----------+     +-----------+     +-----+     +---------+
 ```
 
-| Stage | Command | Produces |
-|---|---|---|
-| 1. Input | -- | `boltz_input.md` -- the family x partners x ligand DSL spec |
-| 2. Generate | `generate` | `boltz_yamls/*.yaml` + manifest |
-| 3. Preflight | `preflight` | PASS/WARN/FAIL: CLI, GPU/MPS, disk, iCloud, YAML/SMILES/chain-id/chemistry, memory |
-| 4. Predict | `run` | `boltz predict` -> `boltz_output/`, live progress + memory monitor, resumable |
-| 5. Analyze | `analyze` | `boltz_summary.csv`/`.xlsx`, `boltz_dashboard.html`, `boltz_cif/`, plus interaction files if `setup-plip` has run, plus `boltz_sse_comparison.csv`/`.html` for any family with an `Apo structure:` set (see **compare-sse** below) |
+`boltz_input.md` is the family x partners x ligand DSL spec; the four commands that read it
+produce:
+
+| Command | Produces |
+|---|---|
+| `generate` | `boltz_yamls/*.yaml` + manifest |
+| `preflight` | PASS/WARN/FAIL: CLI, GPU/MPS, disk, iCloud, YAML/SMILES/chain-id/chemistry, memory |
+| `run` | `boltz predict` -> `boltz_output/`, live progress + memory monitor, resumable |
+| `analyze` | `boltz_summary.csv`/`.xlsx`, `boltz_dashboard.html`, `boltz_cif/`, plus interaction files if `setup-plip` has run, plus `boltz_sse_comparison.csv`/`.html` for any family with an `Apo structure:` set (see **compare-sse** below) |
 
 Each stage reads only the manifest + files the previous stage wrote, so any stage can be
-re-run on its own (`generate`, `preflight`, `run`, or `analyze` individually) without
-repeating the others: `all` simply chains all four.
+re-run on its own without repeating the others: `all` simply chains all four.
 
 ## 🔧 One-time setup
 
@@ -205,17 +167,13 @@ repeating the others: `all` simply chains all four.
 python3 BoltzMaker.py setup
 ```
 
-Creates a dedicated `.venv` (Python 3.12: boltz pins `numpy<2.0`, which has no prebuilt
-wheel for newer Pythons) next to `BoltzMaker.py` and installs `boltz`, `rich`, `pandas`,
-`openpyxl`, `pyyaml`, `rdkit`, `matplotlib`, `psutil`, `scipy`, `gemmi`, `biopython`,
-`plotly`, `reportlab`, and `requests` into it. This pulls PyTorch (~2-3 GB) and, the first time
-`boltz predict` actually runs, Boltz downloads several GB of model weights over the
-network. Every other command below transparently relaunches itself under this managed
-environment, so you can keep
-invoking the script with whatever `python3` is on your PATH.
-
-Re-run with `--force` to recreate the venv from scratch, or `-y/--yes` to skip the download
-confirmation prompt.
+Creates a dedicated `.venv` (Python 3.12: boltz pins `numpy<2.0`, which has no prebuilt wheel
+for newer Pythons) next to `BoltzMaker.py` and installs `boltz`, `rich`, `pandas`, `openpyxl`,
+`pyyaml`, `rdkit`, `matplotlib`, `psutil`, `scipy`, `gemmi`, `biopython`, `plotly`, `reportlab`
+and `requests`. This pulls PyTorch (~2-3 GB) and, on the first `boltz predict`, several GB of
+model weights. Every other command relaunches itself under this managed environment, so you can
+keep invoking the script with whatever `python3` is on your PATH. `--force` recreates the venv
+from scratch; `-y/--yes` skips the download confirmation prompt.
 
 ### Optional: `setup-plip` (protein-ligand interaction analysis)
 
@@ -223,43 +181,35 @@ confirmation prompt.
 python3 BoltzMaker.py setup-plip
 ```
 
-Entirely optional and separate from the venv above. Builds a `.plip_env` (via a
-self-downloaded [micromamba](https://micro.mamba.pm) -- macOS `osx-arm64`/`osx-64` and
-Linux `linux-64`/`linux-aarch64` are all resolved from the running platform, so this
-works on a Linux server as well as a Mac, ~1-1.5GB, mostly PyMOL's own Qt/
-Cairo/HDF5 dependencies) and vendors a pinned commit of
-[cif2plip](https://github.com/bellcheddar/cif2plip), which converts a Boltz ModelCIF into
-a strict PDB and runs [PLIP](https://github.com/pharmai/plip) on it for real
-protein-ligand interaction fingerprints (H-bonds, salt bridges, pi-stacking, halogen
-bonds, metal coordination, etc.). A conda-forge-based environment is used deliberately
-here rather than pip: PLIP requires OpenBabel and PyMOL as in-process Python imports (not
-subprocess calls), and empirically, `plip`'s own installer forces a broken from-source
-OpenBabel build unless a working OpenBabel is already present, while the standalone PyPI
-`pymol-open-source` wheel has a hardcoded broken library path on this platform --
-conda-forge's builds have neither problem.
+Entirely optional and separate from the venv above. Builds a `.plip_env` (~1-1.5GB, mostly
+PyMOL's own Qt/Cairo/HDF5 dependencies) via a self-downloaded
+[micromamba](https://micro.mamba.pm), resolving `osx-arm64`/`osx-64`/`linux-64`/`linux-aarch64`
+from the running platform so it works on a Linux server as well as a Mac, and vendors a pinned
+commit of [cif2plip](https://github.com/bellcheddar/cif2plip), which converts a Boltz ModelCIF
+into a strict PDB and runs [PLIP](https://github.com/pharmai/plip) on it for real interaction
+fingerprints (H-bonds, salt bridges, pi-stacking, halogen bonds, metal coordination, etc.).
+conda-forge is used deliberately rather than pip, because PLIP needs OpenBabel and PyMOL as
+in-process imports and both PyPI routes are broken -- see the first **Troubleshooting** row.
 
-If `.plip_env` isn't present, everything below degrades gracefully: `analyze` skips
-interaction analysis (dashboard looks exactly as it did before this feature), and the `new`
-wizard simply doesn't ask about reference structures. Nothing else in BoltzMaker requires
-it. `preflight`'s `plip_env` check always reports which mode you're in.
+Without `.plip_env` everything degrades gracefully: `analyze` skips interaction analysis (the
+dashboard looks exactly as it did before this feature) and the `new` wizard doesn't ask about
+reference structures. Nothing else requires it, and `preflight`'s `plip_env` check always
+reports which mode you're in.
 
 ### Optional: `mkdssp`/`dssp` (for `compare-sse`'s SSE-boundary-shift metric)
 
-Not bundled or installed by any BoltzMaker command -- a small external binary you may
-already have (`brew install dssp` on macOS, or `conda install -c salilab dssp`). Only
-needed for one specific `compare-sse` metric (secondary-structure-element boundary
-shift, used when a structure has no deposited HELIX/SHEET records -- true for every
-Boltz-predicted structure). Every other `compare-sse` metric works without it.
+Not bundled or installed by any BoltzMaker command -- a small external binary you may already
+have (`brew install dssp` on macOS, or `conda install -c salilab dssp`). Only needed for one
+`compare-sse` metric (secondary-structure-element boundary shift, used when a structure has
+no deposited HELIX/SHEET records -- true for every Boltz-predicted structure). Every other
+metric works without it.
 
-Two things worth knowing about how that fallback feeds DSSP, both of which used to break
-it. The chain is written to a temporary legacy-PDB file first, whose chain-ID field is a
-single character -- but BoltzMaker's own chain names are the family id verbatim (up to 5
-characters), so any real multi-character family id raised "chain name too long for the PDB
-format". The temporary copy is now renamed to `A` before writing; it is a throwaway DSSP
-input, and only residue numbers and SSE kind are read back out, so nothing you see is
-affected. Separately, `gemmi` emits no `HEADER` record for a structure built purely in
-memory, and `mkdssp` >= 4 then mis-sniffs the headerless file as mmCIF and refuses to parse
-it, so a minimal synthetic `HEADER` line is prepended. Its content is never read.
+Two fixes make that fallback work. The temporary legacy-PDB copy is renamed to chain `A` first,
+because its chain-ID field is a single character while BoltzMaker's chain names are the family id
+verbatim (up to 5), which raised "chain name too long for the PDB format". And a minimal
+synthetic `HEADER` line is prepended, because `gemmi` writes none for a structure built purely in
+memory and `mkdssp` >= 4 then mis-sniffs the headerless file as mmCIF and refuses it. Neither is
+read back -- only residue numbers and SSE kind are.
 
 ### Alternative: `pixi` (one unified environment, macOS + Linux/CUDA)
 
@@ -267,99 +217,106 @@ it, so a minimal synthetic `HEADER` line is prepended. Its content is never read
 ./install.sh
 ```
 
-Installs [`pixi`](https://pixi.sh) if it isn't already on your machine, then solves and
-installs everything (`boltz`, `rdkit`, PLIP's OpenBabel/PyMOL stack, and the rest of
-`requirements.txt`) as **one** environment from `pixi.toml`/`pixi.lock`, replacing the
-need to separately run `setup` + `setup-plip` above. Reproducible (the committed
-`pixi.lock` pins every package on both `osx-arm64` and `linux-64`), and the only path
-here that's actually tested against Linux/CUDA rather than macOS/MPS alone. Once
-installed:
+Installs [`pixi`](https://pixi.sh) if absent, then solves and installs everything (`boltz`,
+`rdkit`, PLIP's OpenBabel/PyMOL stack, and the rest of `requirements.txt`) as **one**
+environment from `pixi.toml`/`pixi.lock`, replacing `setup` + `setup-plip` above. Reproducible
+(the committed `pixi.lock` pins every package on both `osx-arm64` and `linux-64`), and the only
+path here actually tested against Linux/CUDA rather than macOS/MPS alone. Once installed:
 
 ```sh
 pixi run preflight my_campaign.md
 pixi run all my_campaign.md
 ```
 
-(or `pixi shell` to activate the environment directly and run `python3 BoltzMaker.py
-...` as normal). PLIP needs one extra one-time step, same spirit as `setup-plip` above:
-`pixi run postinstall`.
+(or `pixi shell` to activate the environment and run `python3 BoltzMaker.py ...` as normal).
+PLIP needs one extra one-time step, same spirit as `setup-plip`: `pixi run postinstall`. For a
+machine with no internet at all, see **Path 3** above.
 
-**No internet on the target machine at all?** See
-[`docs/tier_b_offline_install.md`](docs/tier_b_offline_install.md) for building a single
-self-extracting installer script per platform (`pixi-pack --create-executable`) that
-needs no `pixi`, no `conda`, and no network to run.
+### Patch the installed `boltz`
 
-**Patch the installed `boltz`.** Two defects in `boltz` 2.x cost one campaign 14.5 hours
-and 20 invocations for zero structures, so BoltzMaker ships fixes for them:
+Two defects in `boltz` 2.x cost one campaign 14.5 hours and 20 invocations for zero
+structures, so BoltzMaker ships fixes:
 
 ```bash
 python3 patches/apply_boltz_patches.py          # idempotent; keeps a .orig of every file
 python3 patches/apply_boltz_patches.py --check  # what preflight runs
 ```
 
-It contains a numerical failure to the one target that caused it rather than aborting the
-whole batch, makes the full-precision guard around the Kabsch alignment follow the tensors'
-device (hardcoded `"cuda"`, it is inert on MPS), reports *which tensor* carried a NaN
-instead of blaming matrix conditioning, and stops the shared affinity phase crashing on a
-target whose structure prediction never completed. `preflight` shows a `boltz_patches` row,
-because a `pip install -U boltz` silently reverts all four.
+BoltzMaker applies them itself before every run, so you rarely need the commands above, and
+`preflight` shows a `boltz_patches` row because a `pip install -U boltz` silently reverts them.
+**What we fixed in Boltz** below describes each one, including the device-correct full-precision
+guard around the Kabsch alignment and the NaN diagnostic that names the offending tensor instead
+of blaming matrix conditioning.
 
 ## 🧪 Examples
 
-Four entirely public-domain campaigns in `examples/`, run any of them with
-`python3 BoltzMaker.py all examples/<name>/boltz_input.md`:
+Four entirely public-domain campaigns ship in `examples/`; run any with
+`python3 BoltzMaker.py all examples/<name>/boltz_input.md`. All four, plus two more that have
+no bundled folder, are **public runs with a live interactive report** on the hosted site. The
+individual URLs are unguessable, so they are also all listed under the
+[**Runs** tab](https://boltzmaker.mdeller.com/runs). The four bundled campaigns were verified
+end to end (`generate` -> `preflight` -> real `boltz predict` -> `analyze`, including cif2plip
+interaction analysis) on an Apple M1 Max, 64GB.
 
-| Example | Demonstrates | Dashboard | Input |
-|---|---|---|---|
-| `t4_lysozyme` | One protein (T4 lysozyme L99A, UniProt P00720) + one ligand (benzene). No partners, no pocket_contacts. The minimal shape; smallest/fastest smoke test. | [boltz_dashboard.html](https://bellcheddar.github.io/BoltzMaker/examples/t4_lysozyme/boltz_dashboard.html) | [boltz_input.md](https://github.com/bellcheddar/BoltzMaker/blob/main/examples/t4_lysozyme/boltz_input.md) |
-| `egfr_covalent` | EGFR kinase domain (UniProt P00533) + a generic covalent fragment, linked via `bond_constraints` at Cys797. Demonstrates covalent-linkage modelling. | [boltz_dashboard.html](https://bellcheddar.github.io/BoltzMaker/examples/egfr_covalent/boltz_dashboard.html) | [boltz_input.md](https://github.com/bellcheddar/BoltzMaker/blob/main/examples/egfr_covalent/boltz_input.md) |
-| `adrb2_gs_panel` | Beta-2 adrenergic receptor (UniProt P07550), agonist vs antagonist, as two separate `Protein:` blocks sharing one sequence rather than one family crossed with both ligands: the agonist target co-folds a Gs alpha partner (UniProt P63092), the antagonist target doesn't (Gs only forms a stable complex with the active, agonist-bound receptor in reality -- co-folding it with the antagonist too made Boltz predict a near-identical active-like fold for both, 0.38 Angstrom apart; splitting them out gets a real conformational difference, 1.28 Angstrom apart, TM6 shift roughly doubled for the agonist). Demonstrates `compare-sse` (see below) and why co-folded partners should match each ligand's real biology, not just get crossed with everything. | [boltz_dashboard.html](https://bellcheddar.github.io/BoltzMaker/examples/adrb2_gs_panel/boltz_dashboard.html) | [boltz_input.md](https://github.com/bellcheddar/BoltzMaker/blob/main/examples/adrb2_gs_panel/boltz_input.md) |
-| `5ht2_gq_panel` | Three serotonin receptors (5-HT2A/2B/2C, UniProt P28223/P41595/P28335), each with a real agonist/antagonist pair (Psilocin/Risperidone, LSD/Balovaptan, Lorcaserin/SB-242084), each predicted both with and without the Gq heterotrimer (GNAQ+GNB1+GNG2) co-folded -- a 3x2x2 panel, plus a native ligand-free (`Ligands: none`) apo target per receptor, used as each receptor's `compare-sse` reference since no genuinely apo experimental structure exists for any of the three (checked entity-by-entity across all 59 deposited structures). Demonstrates `Ligands: none`, a larger size-heterogeneous campaign in one manifest, Apple Silicon MPS support for large multi-chain complexes (see below), and `compare-sse` against a *predicted* rather than experimental apo reference -- TM6 centroid shift comes out consistently larger for the Gq-bound targets than their no-Gq counterparts across all three receptors, the expected activation signal (see [findings.md](https://github.com/bellcheddar/BoltzMaker/blob/main/examples/5ht2_gq_panel/findings.md) for the full statistical write-up). | [boltz_dashboard.html](https://bellcheddar.github.io/BoltzMaker/examples/5ht2_gq_panel/boltz_dashboard.html) | [boltz_input.md](https://github.com/bellcheddar/BoltzMaker/blob/main/examples/5ht2_gq_panel/boltz_input.md) |
+| Campaign | Targets | Demonstrates | Verified run | Links |
+|---|---|---|---|---|
+| `t4_lysozyme` | 1 | The minimal shape: one protein (T4 lysozyme L99A, UniProt P00720), one ligand (benzene), no partners, no pocket contacts. Smallest/fastest smoke test | 3m 16s. Confidence 0.98, pIC50 8.9, 7 hydrophobic contacts matching the known L99A cavity residues | [explore](https://boltzmaker.mdeller.com/runs/K-hKV9wI5OYO-t3srj3C5g/explore) · [dashboard](https://bellcheddar.github.io/BoltzMaker/examples/t4_lysozyme/boltz_dashboard.html) · [input](https://github.com/bellcheddar/BoltzMaker/blob/main/examples/t4_lysozyme/boltz_input.md) |
+| `egfr_covalent` | 1 | Covalent-linkage modelling: EGFR kinase domain (UniProt P00533) + a generic covalent fragment, linked via `bond_constraints` at Cys797 | 5m 31s. Confidence 0.92, covalent Cys797 SG-to-fragment bond confirmed at 1.75 Angstrom | [explore](https://boltzmaker.mdeller.com/runs/5a_wDBYYltnO3xxJeh73CA/explore) · [dashboard](https://bellcheddar.github.io/BoltzMaker/examples/egfr_covalent/boltz_dashboard.html) · [input](https://github.com/bellcheddar/BoltzMaker/blob/main/examples/egfr_covalent/boltz_input.md) |
+| `adrb2_gs` (folder `adrb2_gs_panel`) | 2 | `compare-sse`, and why a co-folded partner should match each ligand's real biology rather than being crossed with everything -- see below | 1h 28m 36s (`ADRB2_ISO1`, agonist+Gs) + 25m 6s (`AR2NG_PRO1`, antagonist alone). Confidence 0.79 (`ADRB2_ISO1`) / 0.83 (`AR2NG_PRO1`) | [explore](https://boltzmaker.mdeller.com/runs/Nutmagij4prtzjYgi_v0LA/explore) · [dashboard](https://bellcheddar.github.io/BoltzMaker/examples/adrb2_gs_panel/boltz_dashboard.html) · [input](https://github.com/bellcheddar/BoltzMaker/blob/main/examples/adrb2_gs_panel/boltz_input.md) |
+| `5ht2_gq` (folder `5ht2_gq_panel`) | 15 | `Ligands: none`, a large size-heterogeneous campaign in one manifest, Apple Silicon MPS support for large multi-chain complexes, and `compare-sse` against a *predicted* apo reference -- see below | 9 small targets (apo + receptor-alone) ~4-5m each; 6 large receptor+Gq-heterotrimer complexes ~43-48m each. All 15 completed (12 ligand-bound + 3 apo); confidence 0.66-0.81, iPTM up to 0.99 for the ligand-bound complexes | [explore](https://boltzmaker.mdeller.com/runs/TaRE0NcV9BOpuguKRujt5g/explore) · [dashboard](https://bellcheddar.github.io/BoltzMaker/examples/5ht2_gq_panel/boltz_dashboard.html) · [input](https://github.com/bellcheddar/BoltzMaker/blob/main/examples/5ht2_gq_panel/boltz_input.md) |
+| `5HT2A_GQ` | 2 | Public run, no bundled example folder | -- | [explore](https://boltzmaker.mdeller.com/runs/d96nzlk1sj5JzfkNCumscw/explore) |
+| `GLP1R_GIPR_pocket_matrix` | 20 | Public run, no bundled folder: two receptors x three ligands x three pocket conditions, plus two apo controls. The campaign behind **How tight should a pocket be?** and **Does the restraint just manufacture the pose?** below, so the live report is where you can see those measurements in situ | -- | [explore](https://boltzmaker.mdeller.com/runs/niSiE5MfGFyddSjGLmeYBA/explore) |
 
-**Verified end-to-end** (`generate` -> `preflight` -> real `boltz predict` -> `analyze`,
-including cif2plip interaction analysis) on an Apple M1 Max, 64GB:
+**`adrb2_gs`: a co-folded partner has to match the ligand's real biology.** Beta-2 adrenergic
+receptor (UniProt P07550), agonist vs antagonist, written as two separate `Protein:` blocks
+sharing one sequence rather than one family crossed with both ligands. The agonist target
+co-folds a Gs alpha partner (UniProt P63092); the antagonist target does not, because in
+reality Gs only forms a stable complex with the active, agonist-bound receptor. Co-folding it
+with the antagonist too made Boltz predict a near-identical active-like fold for both, 0.38
+Angstrom apart; splitting them out gets a real conformational difference, 1.28 Angstrom
+apart, with the TM6 shift roughly doubled for the agonist.
 
-| Example | Targets | Total time | Result |
-|---|---|---|---|
-| `t4_lysozyme` | 1 | 3m 16s | confidence 0.98, pIC50 8.9, 7 hydrophobic contacts matching the known L99A cavity residues |
-| `egfr_covalent` | 1 | 5m 31s | confidence 0.92, covalent Cys797 SG-to-fragment bond confirmed at 1.75 Angstrom |
-| `adrb2_gs_panel` | 2 | 1h 28m 36s (`ADRB2_ISO1`, agonist+Gs) + 25m 6s (`AR2NG_PRO1`, antagonist alone) | confidence 0.79 (`ADRB2_ISO1`) / 0.83 (`AR2NG_PRO1`) |
-| `5ht2_gq_panel` | 15 | 9 small targets (apo + receptor-alone) ~4-5m each; 6 large receptor+Gq-heterotrimer complexes ~43-48m each | All 15 completed successfully (12 ligand-bound + 3 apo); confidence 0.66-0.81, iPTM up to 0.99 for the ligand-bound complexes |
+**`5ht2_gq`: a 3x2x2 panel plus apo controls.** Three serotonin receptors (5-HT2A/2B/2C,
+UniProt P28223/P41595/P28335), each with a real agonist/antagonist pair (Psilocin/Risperidone,
+LSD/Balovaptan, Lorcaserin/SB-242084), each predicted both with and without the Gq
+heterotrimer (GNAQ+GNB1+GNG2) co-folded, plus one native ligand-free (`Ligands: none`) apo
+target per receptor. Those apo predictions are each receptor's `compare-sse` reference,
+because no genuinely apo experimental structure exists for any of the three (checked
+entity-by-entity across all 59 deposited structures). TM6 centroid shift comes out
+consistently larger for the Gq-bound targets than their no-Gq counterparts across all three
+receptors -- the expected activation signal; full statistical write-up in
+[findings.md](https://github.com/bellcheddar/BoltzMaker/blob/main/examples/5ht2_gq_panel/findings.md).
 
-Run time scales with complex size, not just target count: `ADRB2_ISO1`'s two-chain
-receptor+Gs-partner complex took disproportionately longer than the single-chain
-examples, since attention-style operations scale worse than linearly with sequence
-length -- confirmed directly by `AR2NG_PRO1` (same receptor, no partner) finishing in a
-fraction of the time. One contributing factor on Apple Silicon specifically:
-`torch.linalg.svd` (used in the diffusion step) has no MPS implementation and silently
-falls back to CPU -- worth budgeting for on large multi-chain campaigns.
+**Run time scales with complex size, not target count.** `ADRB2_ISO1`'s two-chain receptor+Gs
+complex took disproportionately longer than the single-chain examples, since attention-style
+operations scale worse than linearly with sequence length -- confirmed by `AR2NG_PRO1` (same
+receptor, no partner) finishing in a fraction of the time. On Apple Silicon, `torch.linalg.svd`
+(used in the diffusion step) also has no MPS implementation and silently falls back to CPU:
+worth budgeting for on large multi-chain campaigns.
 
-`5ht2_gq_panel`'s six large 4-chain receptor+Gq-heterotrimer targets (~1250-1280 tokens)
-originally crashed on Apple Silicon: boltz's triangular attention computes the full
-row-wise QK^T score matrix for the whole complex in one unchunked matmul, which exceeds
-MPS's single-tensor size ceiling past roughly 1250 residues and crashes the process
-inside PyTorch's internal tiled-bmm fallback. Each row's attention is independent, so
-chunking along that axis is exact, not an approximation -- `setup` now patches this
-directly into the installed `boltz` package (idempotent, and checked against boltz's
-exact source so a future upgrade can't be silently mis-patched). `run` also wraps
-`boltz predict` with `caffeinate` automatically (macOS only, silently skipped if
-unavailable) as general sleep-prevention hygiene for long GPU jobs. All 15
-`5ht2_gq_panel` targets, including the six large complexes, now complete successfully --
-see [CHANGELOG.md](CHANGELOG.md) for the fix in full.
+`5ht2_gq_panel`'s six large 4-chain receptor+Gq targets (~1250-1280 tokens) originally crashed
+on Apple Silicon: boltz's triangular attention computes the full row-wise QK^T score matrix for
+the whole complex in one unchunked matmul, which exceeds MPS's single-tensor size ceiling past
+roughly 1250 residues and crashes inside PyTorch's internal tiled-bmm fallback. Each row's
+attention is independent, so chunking along that axis is exact, not an approximation -- `setup`
+patches this into the installed `boltz` package (idempotent, and checked against boltz's exact
+source so a future upgrade can't be silently mis-patched). `run` also wraps `boltz predict`
+with `caffeinate` (macOS only, silently skipped if unavailable) as sleep-prevention hygiene for
+long GPU jobs. All 15 targets now complete -- see [CHANGELOG.md](CHANGELOG.md) for the fix.
 
 ## 🧭 boltz_input.md format
 
-Plain labelled text -- no markdown, no YAML, no brackets, no quoting. One rule: blocks
-are `Label: value` lines with a blank line between them; comments start with `#`. Field
-names are plain English (`Output folder`, `Predict affinity`, `Pocket contact`) rather
-than Boltz-internal snake_case. Don't want to hand-write it at all? Run `python3
-BoltzMaker.py new` and answer plain questions instead -- see **Commands** below.
+Plain labelled text -- no markdown, no YAML, no brackets, no quoting. One rule: blocks are
+`Label: value` lines with a blank line between them; comments start with `#`. Field names are
+plain English (`Output folder`, `Predict affinity`, `Pocket contact`) rather than
+Boltz-internal snake_case. Don't want to hand-write it? Run `python3 BoltzMaker.py new` and
+answer plain questions instead.
 
 The format has two layers: a **family x partners x ligand cross-product** (the ergonomic
-layer: write each protein/ligand once, get every combination as a separate target), and
-standalone **constraint sentences** for the two/three-ended relationships (covalent
-bonds, distance constraints) that don't fit inside one block -- each names the protein it
-belongs to and can be written anywhere in the file.
+layer -- write each protein/ligand once, get every combination as a separate target), and
+standalone **constraint sentences** for the two/three-ended relationships (covalent bonds,
+distance constraints) that don't fit inside one block. Each names the protein it belongs to
+and can be written anywhere in the file.
 
 ```
 Settings:
@@ -440,10 +397,10 @@ Pocket contact: RECP1 residue 148
 Distance constraint: RECP1 residue 10 to RECP1 residue 80 within 8.0 Angstrom
 ```
 
-Every protein is crossed with every ligand (unless a protein sets `Ligands:` to scope
-itself to a subset, or `Ligands: none` for a single ligand-free/apo target), producing
-one `{protein}_{ligand}.yaml` per pair. See `example.md` for the full copy-paste
-template and `examples/` for complete working campaigns.
+Every protein is crossed with every ligand (unless a protein sets `Ligands:` to scope itself
+to a subset, or `Ligands: none` for a single ligand-free/apo target), producing one
+`{protein}_{ligand}.yaml` per pair. See `example.md` for the full copy-paste template and
+`examples/` for complete working campaigns.
 
 ## 🚀 Commands
 
@@ -459,26 +416,23 @@ python3 BoltzMaker.py boltz_input.md             # same as `all` (subcommand is 
 python3 BoltzMaker.py compare-sse boltz_input.md # apo-vs-holo secondary-structure motif shifts (see below)
 ```
 
-`new` interviews you (proteins, partners, ligands, and the three constraint sentence
-types) and writes the file for you -- it won't overwrite an existing file without asking
-first. It covers the common case only; rarer fields (modifications, cyclic, MSA
-override, templates, homo-oligomer copies) are left for hand-editing the file it writes.
-If `setup-plip` has been run, it also asks whether you have a reference structure with a
-ligand already bound (a co-crystal or homology model) for each protein -- if so, it runs
-cif2plip on it, lets you pick the relevant ligand if more than one is detected, and
-suggests the contacted residues as `Pocket contact:` constraints, remapped onto your
-target's own numbering via sequence alignment (BLOSUM62 + affine gaps) so the reference
-structure's residue numbers don't have to match your target's.
+`new` interviews you (proteins, partners, ligands, and the three constraint sentence types)
+and writes the file, refusing to overwrite an existing one without asking. It covers the common
+case only; rarer fields (modifications, cyclic, MSA override, templates, homo-oligomer copies)
+are left for hand-editing. If `setup-plip` has been run it also asks whether each protein has a
+reference structure with a ligand already bound (a co-crystal or homology model); if so it runs
+cif2plip on it, lets you pick the relevant ligand where more than one is detected, and suggests
+the contacted residues as `Pocket contact:` constraints, remapped onto your target's own
+numbering via sequence alignment (BLOSUM62 + affine gaps).
 
-`format` re-aligns trailing comments to a clean column and normalizes blank-line spacing
-around section/record boundaries, purely cosmetic (it validates the file parses first,
-and never changes meaning). Pass `--check` to report whether reformatting is needed
-without writing anything (exit 1 if so, e.g. for a pre-commit check).
+`format` re-aligns trailing comments to a clean column and normalises blank-line spacing
+around section/record boundaries -- purely cosmetic (it validates the file parses first, and
+never changes meaning). Pass `--check` to report whether reformatting is needed without
+writing anything (exit 1 if so, e.g. for a pre-commit check).
 
-Any field BoltzMaker doesn't recognize (a typo like `Predict afinity:` instead of
-`Predict affinity:`) prints a `WARNING` naming the block, its name, and the line number,
-and is otherwise silently dropped, so a misspelled field never just vanishes without a
-trace.
+Any field BoltzMaker doesn't recognise (a typo like `Predict afinity:`) prints a `WARNING`
+naming the block, its name and the line number, and is otherwise silently dropped, so a
+misspelled field never just vanishes without a trace.
 
 **Common options:**
 
@@ -486,36 +440,38 @@ trace.
 |---|---|---|
 | `--output-dir` | `settings.output_dir` | Override where generated YAMLs are written |
 | `--out-dir` | `./boltz_output` | Boltz's own `--out_dir`, next to the md file |
-| `--accelerator` | `auto` | `auto` / `gpu` / `cpu` |
+| `--accelerator` | `auto` | `auto` / `gpu` / `cpu` (cpu works but is really only for checking a campaign runs at all) |
 | `--limit N` | none | Cap how many pending targets `run` submits (smoke test before a full batch) |
 | `--max-retries` | `2` | Auto-retry a target that doesn't complete (e.g. an OOM), isolating to one target at a time -- see "Memory on Mac" below (`0` disables) |
+| `--diffusion-samples` | Boltz default | Structure samples per target. Each extra sample costs roughly its own share of diffusion time, and analysis only ever reads the first (`model_0`) -- raise it to inspect pose variability yourself, not to improve the report |
+| `--no-potentials` | off | Turn off Boltz's FK steering and physical-guidance coordinate update, which was hardcoded on. That guidance update is one of the places a diffusion trajectory can diverge to NaN |
 | `--strict` | off | Promote preflight WARN to FAIL |
 | `--skip-interactions` | off | Skip cif2plip interaction analysis during `analyze`, even if `setup-plip` has been run |
 | `--skip-sse` | off | Skip compare-sse apo-vs-holo analysis during `analyze`, even if a family has `Apo structure:` set |
 | `--json` | off | `preflight` only: emit the check results as a JSON array on stdout instead of the rich table, for scripting and tooling (this is what the hosted web app consumes). The banner is suppressed alongside it, exactly as it is for `format`, so stdout stays parseable |
 
-**Memory-control options** (see below for why these matter on Mac/unified-memory hardware):
+**Memory-control options** (see the next section for why these matter on unified-memory
+hardware):
 
 | Option | Default | Description |
 |---|---|---|
-| `--workers` | `2` | Matches Boltz's own default |
+| `--workers` | `0` | Boltz's own default is 2, but each worker duplicates large in-memory structures out of the same pool the model is using |
 | `--mps-watermark` | `1.0` | `PYTORCH_MPS_HIGH_WATERMARK_RATIO` cap |
 | `--max-parallel-samples` | `1` | Boltz `--max_parallel_samples` |
 | `--recycling-steps` | Boltz default | Passthrough |
 | `--sampling-steps` | Boltz default | Passthrough |
 | `--diffusion-samples-affinity` | Boltz default | Passthrough |
 | `--sampling-steps-affinity` | Boltz default | Passthrough |
-| `--max-msa-seqs` | Boltz default | Passthrough |
-| `--memory-warn-tokens` | `1000` | Preflight size-heuristic WARN threshold |
+| `--max-msa-seqs` | `4096` | Boltz's own default is 8192; halving the co-evolution feature block is one of the few levers that measurably cuts peak memory. Pass `8192` to restore Boltz's default |
+| `--memory-warn-tokens` | `1500` | Preflight size-heuristic WARN threshold |
 
 `run` is idempotent: targets with a complete prediction (cif + confidence json, and an
-affinity json if `predict_affinity` is on) are skipped on re-run, so an interrupted batch
-can just be re-run as-is.
+affinity json if `predict_affinity` is on) are skipped on re-run, so an interrupted batch can
+just be re-run as-is.
 
-**`compare-sse` options** (see the section below for what it does -- it now also runs
-automatically as part of `analyze`/`all` for every family with an `Apo structure:` set;
-the standalone command below is for re-running just this analysis on its own, e.g.
-after adding an apo structure without re-running `boltz predict`):
+**`compare-sse` options** (see **compare-sse** below for what it does; the standalone command is
+for re-running just this analysis, e.g. after adding an apo structure without re-running
+`boltz predict`):
 
 | Option | Default | Description |
 |---|---|---|
@@ -528,170 +484,143 @@ after adding an apo structure without re-running `boltz predict`):
 | `--no-pymol` | off | Skip writing `.pml` session scripts |
 | `--refresh-cache` | off | Bypass the GPCRdb/KLIFS/PDBe disk cache for this run |
 
-## 🛠️ Memory on Mac (unified-memory) hardware
+## 🛠️ Memory on Mac, and what we fixed in Boltz
 
-A real 4-chain GPCR+G-protein complex (~1250 combined residues/atoms) used **~65GB RAM on
-a 64GB M1 Max** during testing and swap-thrashed for 20+ minutes with zero progress before
-being killed, worth knowing about before running anything large. Mitigations built in:
+### Memory on Mac (unified-memory) hardware
 
-- `--mps-watermark` sets `PYTORCH_MPS_HIGH_WATERMARK_RATIO`, which caps how much memory
-  MPS will allocate relative to the device's recommended maximum. At the default `1.0`, an
-  oversized complex now raises a clean MPS out-of-memory error in the log instead of
-  silently spilling into swap. **It is a hard allocation ceiling, not a swap-avoidance
-  dial.** Lowering it "to be safe" is the wrong instinct: `0.7` on a 64GB M1 Max caps
-  allocation at 36GB against a ~34GB requirement, and every batch then OOMs immediately.
-  Lower it only above a peak you have actually measured.
-- `--workers` defaults to **0** and `--max-parallel-samples` to **1**. Boltz's own worker
-  default is 2, but each worker duplicates large in-memory structures, and on unified
-  memory that is paid for out of the same pool the model is using. Raising
-  `--max-parallel-samples` also buys no throughput on an M1 Max, where this stage is
+A real 4-chain GPCR+G-protein complex (~1250 combined residues/atoms) used **~65GB RAM on a
+64GB M1 Max** during testing and swap-thrashed for 20+ minutes with zero progress before
+being killed. Mitigations built in:
+
+- **`--mps-watermark`** sets `PYTORCH_MPS_HIGH_WATERMARK_RATIO`, capping how much memory MPS
+  allocates relative to the device's recommended maximum. At the default `1.0` an oversized
+  complex raises a clean MPS out-of-memory error instead of silently spilling into swap. **It
+  is a hard allocation ceiling, not a swap-avoidance dial.** Lowering it "to be safe" is the
+  wrong instinct: `0.7` on a 64GB M1 Max caps allocation at 36GB against a ~34GB requirement,
+  and every batch then OOMs immediately. Lower it only above a peak you have measured.
+- **`--workers` defaults to 0** and **`--max-parallel-samples` to 1**: both duplicate large
+  in-memory structures out of the same pool the model is using. Raising
+  `--max-parallel-samples` buys no throughput on an M1 Max either, where this stage is
   compute-bound rather than memory-bound -- it only multiplies peak memory.
-- `--max-msa-seqs` defaults to **4096** rather than Boltz's 8192, which halves the
-  co-evolution feature block. It is one of the few levers that measurably cuts peak memory
-  on large complexes, and it is a quality/memory trade rather than a free win -- pass
-  `8192` to restore Boltz's default if you have the headroom.
-- `preflight`'s `memory_heuristic` check WARNs when a target's total residue+ligand-atom
-  count crosses `--memory-warn-tokens` (default **1500**), citing the empirical data point
-  above. It's a rough heuristic, not a precise memory model, and it only blocks a run under
-  `--strict`. The default was raised from 1000 because a GPCR + G-protein campaign runs at
-  1307-1333 tokens, so 1000 warned on all 26 targets and separated nothing -- a warning
-  that fires on everything carries no signal.
-- An out-of-memory skip actually frees memory. Boltz's three OOM handlers call
-  `torch.cuda.empty_cache()`, which is a **silent no-op** on a machine with no CUDA -- so
-  on Apple silicon a skip reclaimed nothing, the allocator kept its cached blocks, and the
-  next target inherited the same pressure. One campaign OOM-skipped 11 targets in a row
-  that way. `patches/apply_boltz_patches.py` adds `torch.mps.empty_cache()` alongside it.
-- Every completed target's peak RSS is recorded to `.boltzmaker_target_memory.jsonl`, so
-  the size check can eventually be derived from what this machine actually did rather than
-  a hand-set token threshold -- which on a real campaign separated nothing, every target
-  falling between 1307 and 1333 tokens whether it succeeded or OOM'd.
-- `run`'s progress bar shows live memory usage (RSS summed across the whole `boltz
-  predict` process tree), and logs a warning if usage stays above 90% of system RAM for
-  60+ seconds with no new completed target: a sign of thrashing, not genuine progress.
-- `run`/`all` auto-retries (`--max-retries`, default 2) any target that doesn't
-  complete, isolating every still-incomplete target to its own single-target `boltz
-  predict` invocation from the first retry onward -- a real 4-target cascade on
-  `5ht2_gq_panel` (an OOM on 2 of 6 large targets run together crashed the shared
-  affinity phase for 2 more that had already succeeded) recovered cleanly this way. This
-  means a large campaign can be started and left unattended: a transient OOM no longer
-  needs a human to notice, wait, and manually re-run just the affected targets.
-- That isolation is enforced against Boltz's *manifest*, not just the staging directory.
-  Staging one YAML is not enough: `boltz predict` filters an already-processed input out
-  as "All inputs are already processed", then rebuilds the manifest from every record in
+- **`--max-msa-seqs` defaults to 4096** rather than Boltz's 8192, halving the co-evolution
+  feature block. A quality/memory trade rather than a free win, and one of the few levers that
+  measurably cuts peak memory on a large complex.
+- **`preflight`'s `memory_heuristic`** WARNs when a target's total residue+ligand-atom count
+  crosses `--memory-warn-tokens` (default **1500**), citing the data point above. A rough
+  heuristic, not a memory model, and it only blocks a run under `--strict`. Raised from 1000
+  because a GPCR + G-protein campaign runs at 1307-1333 tokens, so 1000 warned on all 26
+  targets and separated nothing: a warning that fires on everything carries no signal.
+- **Peak RSS is recorded** per completed target to `.boltzmaker_target_memory.jsonl`, so the
+  size check can eventually come from what this machine actually did rather than a hand-set
+  token threshold that separated nothing whether a target succeeded or OOM'd.
+- **`run`'s progress bar shows live memory** (RSS summed across the whole `boltz predict`
+  process tree), and warns if usage stays above 90% of system RAM for 60+ seconds with no new
+  completed target: a sign of thrashing, not progress.
+- **`run`/`all` auto-retries** (`--max-retries`, default 2) any target that doesn't complete,
+  isolating every still-incomplete target to its own single-target `boltz predict` invocation
+  from the first retry onward. A real 4-target cascade on `5ht2_gq_panel` (an OOM on 2 of 6
+  large targets run together crashed the shared affinity phase for 2 more that had already
+  succeeded) recovered cleanly this way, so a large campaign can be left unattended.
+- **That isolation is enforced against Boltz's *manifest***, not just the staging directory.
+  Staging one YAML is not enough: `boltz predict` filters an already-processed input out as
+  "All inputs are already processed", then rebuilds the manifest from every record in
   `<out_dir>/boltz_results_*/processed/records/` and iterates that. A single-target retry
-  therefore re-ran the whole campaign in one process, and one target raising took every
-  target queued behind it down with it -- 20 invocations over 14.5 hours produced zero
-  structures before this was found. Each batch now parks the other records for its
-  duration, so the manifest matches what was staged.
+  therefore re-ran the whole campaign in one process, and one target raising took every target
+  behind it down with it -- 20 invocations over 14.5 hours produced zero structures before this
+  was found. Each batch now parks the other records for its duration.
 
-If a target still fails after every automatic retry, that's a real finding (this
-hardware may not be viable for a complex that size), not something to force through.
+If a target still fails after every automatic retry, that's a real finding (this hardware may
+not be viable for a complex that size), not something to force through.
 
-## 🩺 What we fixed in Boltz, in plain English
+### 🩺 What we fixed in Boltz, in plain English
 
-Boltz is excellent software, but a few of its assumptions do not hold on an Apple
-Silicon Mac, and two of them are the kind that waste days rather than minutes.
-`patches/apply_boltz_patches.py` repairs them. It runs automatically from
-`run_campaign.sh`, is safe to re-run, and keeps a `.orig` of every file it touches.
-`preflight` shows a `boltz_patches` row so you can see at a glance whether they are
-in place. **Every one of these was found by measuring a real campaign, not by
-reading the code.**
+Boltz is excellent software, but a few of its assumptions do not hold on an Apple Silicon Mac,
+and two of them waste days rather than minutes. **Every one of these was found by measuring a
+real campaign, not by reading the code.**
 
-**1. Memory that was never given back.** When a prediction ran out of memory, Boltz
-tried to release its GPU memory by asking the NVIDIA graphics system to let go.
-There is no NVIDIA hardware in a Mac, so that request did nothing at all and the
-memory stayed held. Each failure therefore made the next one likelier: one campaign
-skipped eleven targets in a row this way. Boltz now asks Apple's graphics system
-instead.
+**1. Memory that was never given back.** On running out of memory Boltz released its GPU memory
+by asking the NVIDIA graphics system to let go (`torch.cuda.empty_cache()`). There is no NVIDIA
+hardware in a Mac, so that did nothing and the memory stayed held, making each failure likelier
+than the last: one campaign skipped eleven targets in a row. The patch adds
+`torch.mps.empty_cache()` alongside it, so an out-of-memory skip actually frees memory.
 
-**2. Memory held between targets.** Even when a target *succeeded*, its working
-memory was kept rather than returned, so the next target started with the tank
-half full. Measured on a live run: 47GB held with only 5.5GB actually in use,
-against a 55.7GB ceiling. Returning it after each target frees about **28GB**, which
-is the difference between the next target fitting and failing. This is bookkeeping
-only -- no prediction changes.
+**2. Memory held between targets.** Even when a target *succeeded* its working memory was kept
+rather than returned, so the next target started with the tank half full. Measured on a live
+run: 47GB held with only 5.5GB in use, against a 55.7GB ceiling. Returning it after each target
+frees about **28GB** -- the difference between the next target fitting and failing. Bookkeeping
+only; no prediction changes.
 
-**2b. And the part that cannot be returned.** Some memory never comes back while the
-process lives, however politely you ask: on a measured run the amount held floored at
-~20GB after the first target and climbed ~1.9GB with each one after, while a single
-target in a fresh process needed up to 47.6GB of the 55.7GB available. Left alone the
-two eventually meet, which is why one run had **no** memory failures in its first four
-targets and **three** in its last four. Only ending the process frees it, so BoltzMaker
-now starts a fresh one every few targets -- `Targets per invocation` in Settings,
-default 4. Boltz skips work that is already done, so a fresh process costs one model
-load (~4 minutes against ~45 minutes of prediction) and recomputes nothing. Set it to
-0 for the old behaviour of one long-lived process.
+**2b. And the part that cannot be returned.** Some memory never comes back while the process
+lives, however politely you ask: on a measured run the amount held floored at ~20GB after the
+first target and climbed ~1.9GB per target after, while a single target in a fresh process
+needed up to 47.6GB of the 55.7GB available. Left alone the two eventually meet, which is why
+one run had **no** memory failures in its first four targets and **three** in its last four.
+Only ending the process frees it, so BoltzMaker starts a fresh one every few targets --
+`Targets per invocation`, default 4. Boltz skips work already done, so a fresh process costs one
+model load (~4 minutes against ~45 minutes of prediction) and recomputes nothing. Set it to 0
+for the old behaviour of one long-lived process.
 
-**3. Half-precision where full precision was intended.** Boltz deliberately forces
-its most delicate calculations to run at full precision, because they overflow
-otherwise. It does this with an instruction that names NVIDIA hardware explicitly,
-so on a Mac all **19** of those protections were silently doing nothing and the
-delicate steps ran at half precision anyway.
+**3. Half-precision where full precision was intended.** Boltz forces its most delicate
+calculations to full precision because they overflow otherwise, but does so with an instruction
+naming NVIDIA hardware explicitly -- so on a Mac all **19** of those protections were silently
+doing nothing and the delicate steps ran at half precision anyway.
 
-**4. One bad target killing all the others.** A numerical failure in a single target
-aborted the entire run, and every target queued behind it was never attempted --
-they simply never happened, with nothing in the output to say so. A failure is now
-contained to the target that caused it.
+**4. One bad target killing all the others.** A numerical failure in a single target aborted the
+entire run, and every target queued behind it was never attempted, with nothing in the output to
+say so. A failure is now contained to the target that caused it.
 
-**5. The affinity step tripping over a missing file.** After the structures are
-built, Boltz predicts binding affinity for all of them at once. If any target had
-been skipped, that step looked for a file which was never written and crashed --
-taking down the results of every target that had succeeded. It now skips the
-incomplete ones and carries on.
+**5. The affinity step tripping over a missing file.** Boltz predicts binding affinity for all
+structures at once after they are built. If any target had been skipped, that step looked for a
+file which was never written and crashed, taking down the results of every target that had
+succeeded. It now skips the incomplete ones and carries on.
 
-**6. Steering that could destroy a structure.** Boltz nudges atoms with simulated
-physical forces to keep the geometry sensible. When two atoms end up very close, the
-repulsive force between them becomes enormous, and after twenty rounds of nudging it
-can overflow to infinity -- which is then added to *every* atom's position, turning
-the whole structure into nonsense. One target failed this way twenty times in a row.
-An unusable force is now ignored rather than applied, and the run reports how many
-times it had to do that: a handful is noise, hundreds means that structure's geometry
-was less carefully steered than its siblings and deserves a second look.
+**6. Steering that could destroy a structure.** Boltz nudges atoms with simulated physical
+forces to keep the geometry sensible. When two atoms end up very close the repulsive force
+becomes enormous, and after twenty rounds of nudging it can overflow to infinity -- which is
+then added to *every* atom's position, turning the whole structure into nonsense. One target
+failed this way twenty times in a row. An unusable force is now ignored rather than applied, and
+the run reports how often it had to: a handful is noise, hundreds means that structure was less
+carefully steered than its siblings and deserves a second look.
 
-Guards 4, 5 and 6 only ever act on values that are *already* broken, so any target
-that would have worked before produces byte-for-byte the same structure and the same
-affinity. They can only rescue targets that previously produced nothing.
+Guards 4, 5 and 6 only ever act on values that are *already* broken, so any target that would
+have worked before produces byte-for-byte the same structure and affinity. They can only rescue
+targets that previously produced nothing.
 
-**6b. Steering that pulled a molecule apart, quietly.** Guard 6 stops an *infinite*
-force being applied. It turns out that was only half the problem: alongside those
-infinities sit finite but enormous values, and those were applied. One compound came
-out with four of its atoms 49, 58, 737 and 2147 angstroms from the rest of the
-molecule -- the same four atoms, to within a few angstroms, in three separate runs.
-The protein was fine. Every score was excellent: 0.80 confidence, and top of the
-binder ranking. Nothing in the report mentioned that the ligand was no longer a
-molecule, because nothing in the report looked at its geometry.
+**6b. Steering that pulled a molecule apart, quietly.** Guard 6 stops an *infinite* force being
+applied; that was half the problem. Alongside those infinities sit finite but enormous values,
+and those were applied. One compound came out with four of its atoms 49, 58, 737 and 2147
+angstroms from the rest of the molecule -- the same four atoms, to within a few angstroms, in
+three separate runs. The protein was fine and every score was excellent: 0.80 confidence, top of
+the binder ranking. Nothing in the report mentioned the ligand was no longer a molecule, because
+nothing in the report looked at its geometry. Two limits now apply: a push far beyond anything
+else in that step is treated as a singularity and scaled back, keeping its direction; and no
+single step may move an atom more than a tenth of a chemical bond. Together they take that
+compound from 2154 angstroms across to 16.5 -- the same answer, to within two angstroms, as
+running it with steering off entirely. The instability is still there and still reported; it
+simply can no longer throw atoms across the room.
 
-Two limits now apply. A push far beyond anything else happening in that same step is
-treated as a singularity and scaled back, keeping its direction; and no single step
-may move an atom more than a tenth of a chemical bond. Together they take that
-compound from 2154 angstroms across to 16.5 -- the same answer, to within two
-angstroms, as running it with the steering switched off entirely. The instability is
-still there and still reported; it is simply no longer able to throw atoms across the
-room.
-
-**7. Patches that were only applied one way in.** All of the above are edits to the
-installed Boltz, and they used to be applied only by `run_campaign.sh`. Start a
-campaign directly with `BoltzMaker.py all`, or rebuild the environment -- installing
-Boltz puts back its own untouched files -- and everything above quietly reverted, with
-nothing but a warning line in the preflight table that nobody is awake at 3am to read.
-BoltzMaker now applies them itself before running, every time. It is a no-op when they
-are already in place, and if a repair *was* needed the preflight row says so
+**7. Patches that were only applied one way in.** These are edits to the installed Boltz, and
+used to be applied only by `run_campaign.sh` -- so starting a campaign directly with
+`BoltzMaker.py all`, or rebuilding the environment (installing Boltz puts back its own untouched
+files), quietly reverted everything above, with nothing but a warning line in the preflight table
+that nobody is awake at 3am to read. BoltzMaker now applies them itself before every run: a no-op
+when already in place, and if a repair *was* needed the preflight row says so
 (`repaired 3 this run`) rather than passing silently.
 
-**8. A run that hangs forever instead of failing.** The worst failure was the one that
-did not look like a failure: Boltz goes quiet, its worker sits in a state the operating
-system will not interrupt, it keeps its GPU memory, and it never exits or errors. Seen
-on a live campaign: 24 minutes of silence holding 39.8GB with no work being done, which
-would have run to morning. BoltzMaker now watches how long it has been since Boltz last
-said anything, and after an hour treats it as wedged, stops it, and lets the retry
-ladder rerun the affected targets one at a time in fresh processes. Nothing already
-computed is lost. This used to require a separate watchdog program running alongside;
-it is now part of the run, so an unattended campaign needs nothing watching it.
+**8. A run that hangs forever instead of failing.** The worst failure was the one that did not
+look like a failure: Boltz goes quiet, its worker sits in a state the operating system will not
+interrupt, it keeps its GPU memory, and it never exits or errors. Seen on a live campaign: 24
+minutes of silence holding 39.8GB with no work being done, which would have run to morning.
+BoltzMaker now watches how long since Boltz last said anything, and after an hour treats it as
+wedged, stops it, and lets the retry ladder rerun the affected targets one at a time in fresh
+processes. Nothing already computed is lost. This used to need a separate watchdog program
+alongside; it is now part of the run, so an unattended campaign needs nothing watching it.
 
 ## ⚙️ Progress, and how long a run will take
 
 Two rows during `run`, laid out as a metrics rail: a state mark, a label, the bar, then every
-measurable value right-aligned in a fixed-width column.
+measurable value right-aligned in a fixed-width column of tabular figures, so digits sit under
+digits and a phase name changing length cannot drag the row sideways.
 
 ```
 ▶ targets    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━  3/15  2h14m   ~3h40m
@@ -700,146 +629,207 @@ measurable value right-aligned in a fixed-width column.
 
 The top row is the campaign: targets done, elapsed, and the estimate. The second is the
 **phase** Boltz is in (MSA generation / structure prediction / affinity prediction), parsed
-from its log output, with its own clock and the memory gauge.
-
-Only the bar is elastic. Everything else has a fixed width and is right-aligned in tabular
-figures, so digits sit under digits and a phase name changing length no longer drags the row
-sideways. The state mark replaces the second spinner: <span>▶</span> running,
-<span>⏸</span> paused, <span>■</span> stopping, always in the same column.
+from its log output, with its own clock and the memory gauge. Only the bar is elastic. The state
+mark replaces the second spinner: <span>▶</span> running, <span>⏸</span> paused,
+<span>■</span> stopping, always in the same column.
 
 **The memory gauge is filled against the point this machine starts to hurt, not against
-installed RAM** -- the same `MEMORY_THRASH_FRACTION` the swap-thrash warning uses. A 4-chain
-GPCR complex took ~65GB on a 64GB Mac and thrashed for 20 minutes with no progress; measured
-against total memory that run would have looked merely "quite full" until the moment it died.
-The gauge turns amber at 60% of that ceiling and red at 85%, so it changes colour before the
-log starts complaining rather than after.
+installed RAM** -- the same `MEMORY_THRASH_FRACTION` the swap-thrash warning uses. Measured
+against total memory, the 4-chain GPCR run above would have looked merely "quite full" until
+the moment it died. The gauge turns amber at 60% of that ceiling and red at 85%, so it changes
+colour before the log starts complaining rather than after.
 
 **Boltz exposes no diffusion- or recycling-step-level progress** anywhere in its output
-(verified against the installed package's source), so that is the finest granularity
-available -- and on a single-target campaign it is not fine at all: Boltz's own progress
-bar counts dataloader items, one target is one item, so it renders `0/1` at the start,
-`1/1` at the end, and nothing whatsoever in between. A run can therefore sit at `0/1` for
-an hour while working perfectly.
+(verified against the installed package's source), so that is the finest granularity available
+-- and on a single-target campaign it is not fine at all: Boltz's own progress bar counts
+dataloader items, one target is one item, so it renders `0/1` at the start, `1/1` at the end,
+and nothing in between. A run can sit at `0/1` for an hour while working perfectly. Two things
+follow, both deliberate:
 
-Two things follow, and both are deliberate:
-
-- The inner bar **pulses** rather than showing a static empty bar, and carries our own
-  "N in this phase" clock. Boltz's `it/s` figure is shown only while it is actually being
-  refreshed; once it goes stale (60s without an update) it is replaced by that clock,
-  because a rate string written once at the start and displayed for an hour is a stale
-  snapshot presented as live data.
-- The ETA is **estimated, and says where the estimate came from**. Once a target completes,
-  it is measured from this run. Before that, it comes from the median seconds-per-target of
+- The inner bar **pulses** rather than showing a static empty bar, and carries our own "N in
+  this phase" clock. Boltz's `it/s` figure is shown only while it is actually being refreshed;
+  once stale (60s without an update) it is replaced by that clock, because a rate string
+  written once at the start and displayed for an hour is a stale snapshot presented as live
+  data.
+- The ETA is **estimated, and says where the estimate came from**. Once a target completes it
+  is measured from this run; before that it comes from the median seconds-per-target of
   previous runs of the same campaign on the same accelerator, read from
-  `.boltzmaker_run_history.jsonl` (median, not mean, so one swap-thrashing run does not
-  set expectations for every run after it). With no history at all it says so rather than
-  inventing a number.
+  `.boltzmaker_run_history.jsonl` (median, not mean, so one swap-thrashing run does not set
+  expectations for every run after). With no history it says so rather than inventing a number.
 
-Sizing a first run on new hardware is therefore genuinely unknown until one target lands.
-`--limit 1` is the cheapest way to find out: it runs a single target, which both gives you
-a real number and writes the history entry every later run estimates from.
+Sizing a first run on new hardware is therefore unknown until one target lands. `--limit 1` is
+the cheapest way to find out: one target gives you a real number and writes the history entry
+every later run estimates from.
 
 ### Controls while a run is going
 
 On a real terminal, `run` takes two single keypresses. (Under `nohup`, a pipe or CI there is
-no keyboard to read, and it says so rather than appearing to offer them.)
+no keyboard to read, and it says so rather than appearing to offer them.) **`p` pauses and
+resumes**: a real `SIGSTOP` of Boltz and every worker it started, not a soft flag, so the
+processes freeze exactly where they stood and `p` again continues them mid-diffusion, with
+nothing discarded and nothing recomputed. **`q` quits**, stopping Boltz and all its worker
+processes, writing the run-history entry and exiting cleanly -- Ctrl-C takes the same path.
 
-| Key | What it does |
-|---|---|
-| `p` | **Pause / resume.** A real `SIGSTOP` of Boltz and every worker it started, not a soft flag: the processes are frozen exactly where they stood and `p` again continues them mid-diffusion. Nothing is discarded and nothing is recomputed. |
-| `q` | **Quit.** Stops Boltz and all its worker processes, writes the run-history entry, and exits cleanly. Identical to Ctrl-C, which takes the same path. |
-
-Two things worth knowing about pause. A paused run **keeps everything it holds** -- RAM, and
-the GPU allocations with it -- because that is what makes it resumable in place. It is the
-right tool for "I need the machine for ten minutes", and the wrong one for "pause this until
-tomorrow"; for that, quit and re-run, since `run` skips targets that already completed.
-
-Paused time is also excluded from the ETA and recorded separately in the run history
+A paused run **keeps everything it holds** -- RAM, and the GPU allocations with it -- because
+that is what makes it resumable in place. Right for "I need the machine for ten minutes", wrong
+for "pause this until tomorrow"; for that, quit and re-run, since `run` skips completed
+targets. Paused time is excluded from the ETA and recorded separately in the run history
 (`working_seconds` alongside `duration_seconds`), so a run paused over lunch does not teach
 every later run that targets take an extra hour.
 
-Quitting tears down the **whole process tree**, not just the process BoltzMaker launched.
-Boltz runs its dataloader workers as children, and terminating only the parent left them
-alive holding their share of RAM and the GPU -- measured on a real two-worker tree, and now
-covered by a test.
+Quitting tears down the **whole process tree**, not just the process BoltzMaker launched. Boltz
+runs its dataloader workers as children, and terminating only the parent left them alive holding
+their share of RAM and the GPU -- measured on a real two-worker tree, and now covered by a test.
 
 ## 📊 Outputs
 
-Written next to `boltz_input.md`:
+Written next to `boltz_input.md`. Anything marked optional appears only when the feature that
+writes it has run.
 
-| Output | Description |
+| Output | What it is |
 |---|---|
 | `boltz_run_<timestamp>.log` | Raw `boltz predict` output for the run |
 | `boltz_output/` | Boltz's own prediction output tree |
 | `boltz_cif/` | Every completed target's `*_model_0.cif`, flattened into one folder |
-| `boltz_summary.csv` / `boltz_summary.xlsx` | One row per target: every scalar field from the confidence/affinity JSONs, computed pIC50, the input ligand SMILES, and `flags`/`notes` columns (`LOW_CONFIDENCE`, `HIGH_CONFIDENCE_POOR_AFFINITY`, `LOW_CONFIDENCE_STRONG_AFFINITY`, `LOW_POCKET_PLDDT`, `MISSING_OUTPUTS`). The XLSX adds a `selectivity` sheet (ligand x family pIC50 pivot) whenever a campaign spans more than one protein family. When `setup-plip` has run, also gets a `plip_status` column (`ok` / `no_interactions` / `failed` / `ambiguous_ligand` / `skipped_no_env`) and a `plip_<type>_count` column per interaction type detected (hydrophobic, hydrogen_bonds, salt_bridges, etc.). |
-| `boltz_summary_view.csv` | The same columns shown in the dashboard's "Summary table" (see below) -- a trimmed, renamed subset of `boltz_summary.csv`, for anyone who wants the at-a-glance view in a spreadsheet rather than every raw field |
-| `boltz_ligand_grid.pdf` (optional) | A print/share-friendly PDF of the dashboard's "Ligand structures" grid -- same 5x5 pagination, same rendered structures, severity borders and scaffold highlighting as the on-screen version, in the style of [smiles2grid](https://github.com/bellcheddar/smiles2grid)'s own PDF output. Only written when a campaign has at least one SMILES ligand to render. |
-| `boltz_plip/` (optional) | Per-target cif2plip output: the converted PDB, PLIP's XML/TXT reports, the ray-traced binding-site PNG, and the PyMOL `.pse` session -- cached here so re-running `analyze` doesn't re-profile a target that's already been done |
-| `boltz_interactions.csv` (optional) | Long format, one row per detected contact across every target: interaction type, residue, distance -- the raw data behind the dashboard's fingerprint heatmap and per-target contact tables |
-| `boltz_dashboard_sessions/` (optional) | Each target's PyMOL `.pse` session, copied here and linked from the dashboard -- this is the one thing that makes `boltz_dashboard.html` no longer a single self-contained file once interaction analysis has run; without `setup-plip`, the dashboard stays exactly as self-contained as before |
-| `boltz_dashboard.html` | Posts its own real content height to any parent window via `postMessage` on load and resize, so a page embedding it in an iframe (e.g. `findings.md`'s "Interactive dashboard" section) can size the iframe to fit the actual content instead of guessing a fixed height -- a cross-origin iframe can't otherwise be measured/resized from the embedding page's own JS. A campaign summary table with a third "Details" column alongside Field/Value -- a linked path to the input file, each protein/partner's id and sequence length, each ligand's id and SMILES-vs-CCD source, the full list of target stems, which specific ligands got flagged in ligand-chemistry review (linking to the card below), and a plain-English gloss for each of the more cryptic run parameters (accelerator, MPS watermark, recycling/sampling steps, etc.) -- tracked across every `run` invocation in a small hidden sidecar file. Then a "Summary table" directly below it: grouped into named column bands (Identity, Confidence, Affinity, Interactions, Structure) with short human headers instead of raw JSON field names, redundant/granular columns (per-chain and per-chain-pair confidence breakdowns, individual ensemble sub-model values) hidden by regex pattern rather than a fixed list -- so it scales correctly to campaigns with more than two chains -- and two download links, one for the full underlying CSV and one for a CSV matching just this trimmed/renamed view. The "Target" column shows a `{run}_{group}_{partners}_{ligand}_{pocket}` display name (e.g. `2_5HT2A_GNAQ+GNB1+GNG2_RISP_41Y`, partners omitted when there are none, `apo` in place of a ligand for a ligand-free target, which takes no pocket suffix) rather than the internal per-variant family id/stem (`H2ANG_RISP`, `H2AAP`) -- and this isn't just a table label: the same display name (or its family-level `{group}_{partners}` form, with no ligand, for whole-family contexts) replaces the internal id in every chart tick/legend/point label (ranked pIC50, ranked confidence, the pIC50-vs-confidence-score and pIC50-vs-binder-probability scatters, interaction counts, the residue-interaction fingerprint heatmap), every per-target/per-family card title, the campaign-summary target list, and the selectivity pivot's columns (both the dashboard heatmap and the XLSX `selectivity` sheet) -- see **compare-sse** below for the same treatment there. The leading run number and the trailing pocket code both earn their place in a matrix campaign, where one ligand is predicted several times and the run number alone reads as an index rather than as a condition: `2_..._ORFO_41Y` against `3_..._ORFO_V6G` says what was done differently, where `2_..._ORFO` and `3_..._ORFO` say only that there were two of them. The suffix is derived from the same value the "Pocket" column shows (the pocket code, or `Unc` when the target ran unconstrained), so a name and its column cannot drift apart. The raw per-variant ids stay alongside the display name in every underlying CSV/XLSX `targets` sheet, for cross-referencing against real output filenames. A "Partner" column lists each target's co-folded partner chain(s) (hidden when the campaign has none), and rows are grouped by `Group:`/family id with a blue top border marking each new group -- the same blue used for column-group boundaries, just rotated. The "Flags" column is renamed "Summary" and icon-based: a bullseye (affinity) and a shield (confidence) icon per row, each tinted green/amber/red by tier (exact value and interpretation on hover), reusing the existing `LOW_CONFIDENCE_THRESHOLD` and a symmetric buffer around Boltz's documented 0.5 binder decision boundary -- Boltz's own docs define these metrics' [0, 1] range but publish no official tri-colour bands. A `MISSING_OUTPUTS` failure collapses the cell to a single red cross; a legend to the right of the download links spells out all six tier/icon combinations. Always shown now (previously hidden entirely when nothing was flagged), so a clean campaign reads as a row of green icons rather than a column that silently disappears. A ligand-free (apo) target's ligand/affinity/interface/interaction columns (including the bullseye) show an explicit `N/A` rather than a blank cell or a misleading `0.00`, since there's no ligand or inter-chain interface for those to describe. Then a "Ligand preparation" card (the same stereocentre/protonation-state/disconnected-fragment checks as `preflight`'s `ligand_preparation` check, shown per-ligand rather than as a single summary line), then a "Ligand structures" card: a paginated 5x5 grid of every ligand's rendered 2D structure (building on [smiles2grid](https://github.com/bellcheddar/smiles2grid)'s design, adapted for a single campaign's scale), with stereocentre/ionizable-group findings highlighted directly on each structure, ligands sharing a Bemis-Murcko scaffold (or, failing that, a verified whole-group maximum-common-substructure) grouped and colour-highlighted together with their depictions aligned to a common orientation, and a captioned legend (badge-by-badge: what S/A/N/Ph/SO3/salt each mean, plus the cluster colour key) stating exactly what was found and on how many ligands -- never an unexplained highlight -- plus "Download PDF" (the same grid as a print/share-friendly file, `boltz_ligand_grid.pdf`) and "Download SMILES" (`boltz_ligands.csv`: ID, SMILES, stereocentre/ionizable-group/fragment findings, MW, cLogP, TPSA) links side by side on one line, matching the Summary table's own download-links style. Then interactive [Plotly](https://plotly.com/javascript/) charts in a grid (ranked pIC50, ranked confidence, a "pIC50 vs confidence score" scatter, interaction counts by type, then a "pIC50 vs binder probability" scatter (binder probability on x, pIC50 on y) -- hover/zoom/pan; plotly.js itself is vendored and inlined into the file rather than CDN-loaded, so the dashboard has no runtime dependency on an external script host). The two scatter charts colour each point by tier via a continuous colourscale + colorbar legend (the same style as the Family x ligand selectivity heatmap's own colorbar) -- confidence tier (matching the Summary table's shield icon) for pIC50-vs-confidence-score, affinity tier (matching the bullseye icon) for pIC50-vs-binder-probability -- and, when a `Ligand:` block sets the optional `Role: agonist`/`Role: antagonist` field, shape-code points by pharmacology (circle = agonist, diamond = antagonist) with a legend positioned inside the plot area's top-left corner (not Plotly's default outside-right position, which would otherwise collide with the colorbar); campaigns that don't set `Role:` see a single unshaped trace, unchanged from before. When `setup-plip` has run: a per-family residue-interaction fingerprint heatmap (also interactive Plotly -- shown for every family with interaction data, even a single ligand, though the similarity-based reordering that helps SAR ranking within a series only kicks in from 3+ ligands) and, per target, its binding-site image (residues labelled and interaction distances shown -- PLIP's own images have neither, so these are re-rendered from its PyMOL session with both added, with a "Download image" link of its own) next to an interactive, auto-rotating [3Dmol.js](https://3dmol.org) view of the same predicted structure (built directly from the mmCIF, ligand highlighted), side by side with a table of that target's contacts (with its own "Download CSV" link) plus a download link for the full PyMOL session. Finally, a "Secondary structure shifts" card (see **compare-sse** below): a "Family coverage" table (every protein family in the campaign, with its status -- `OK` and a target/motif count, or a plain-English reason it was skipped, e.g. "No apo structure configured"), an "Overall shift statistics" summary, and, when there's data, the full per-motif table plus its own Plotly charts. |
-| `reference/` (optional, yours) | Experimental mmCIF structures you drop in yourself. Their presence is what turns on the dashboard's **Ligand pose vs experiment** panel (see below); the same files already serve `Pocket contact:` and `Apo structure:` |
+| `boltz_summary.csv` / `boltz_summary.xlsx` | One row per target -- see below |
+| `boltz_summary_view.csv` | The dashboard's "Summary table" columns: a trimmed, renamed subset of `boltz_summary.csv`, for anyone who wants the at-a-glance view in a spreadsheet rather than every raw field |
+| `boltz_ligands.csv` | ID, SMILES, stereocentre/ionizable-group/fragment findings, MW, cLogP, TPSA |
+| `boltz_dashboard.html` | The interactive report -- see below |
+| `boltz_ligand_grid.pdf` (optional) | A print/share-friendly PDF of the dashboard's "Ligand structures" grid: same 5x5 pagination, rendered structures, severity borders and scaffold highlighting as on screen, in the style of [smiles2grid](https://github.com/bellcheddar/smiles2grid)'s own PDF output. Only written when a campaign has at least one SMILES ligand |
+| `boltz_plip/` (optional) | Per-target cif2plip output: the converted PDB, PLIP's XML/TXT reports, the ray-traced binding-site PNG, and the PyMOL `.pse` session -- cached here so re-running `analyze` doesn't re-profile a target already done |
+| `boltz_interactions.csv` (optional) | Long format, one row per detected contact across every target: interaction type, residue, distance -- the raw data behind the fingerprint heatmap and per-target contact tables |
+| `boltz_dashboard_sessions/` (optional) | Each target's PyMOL `.pse` session, linked from the dashboard. This is the one thing that stops `boltz_dashboard.html` being a single self-contained file once interaction analysis has run; without `setup-plip` it stays exactly as self-contained as before |
 | `boltz_pose_pairs/` | Two single-ligand mmCIFs per comparison (predicted, superposed into the experimental frame; and experimental) plus an `index.json` of the distances -- what the dashboard's pair viewer draws, carried in the `.bmz` |
-| `boltz_sse_comparison.csv` / `.html` | Written automatically by `analyze`/`all` whenever any family has `Apo structure:` set (or on demand via the standalone `compare-sse` command). One row per family/target/motif: Ca RMSD, centroid shift, helix-axis rotation/kink angles, SSE boundary shift, flagged phi/psi residues, and (kinases) DFG-in/out and alphaC-in/out states -- a metric that genuinely wasn't computed for a motif shows as `N/A`, not a blank cell. The Family/Target columns, chart legends, and family-coverage table all show the same `{group}_{partners}` / `{group}_{partners}_{ligand}` display names used throughout the main dashboard; the CSV also keeps the raw `family_id`/`target_stem` columns alongside for cross-referencing. The HTML is a standalone dashboard (family coverage, overall shift statistics, Plotly bar chart + motif x target heatmap); the same content is also embedded directly into `boltz_dashboard.html` (see below) |
-| `boltz_sse_family_status.json` | One entry per protein family: `ok` (with a target/motif count) / `no_apo_structure` / `apo_not_found` / `annotation_failed` / `no_predicted_structures` -- the machine-readable form of the dashboard's "Family coverage" table, so a family with no `Apo structure:` configured reads as "not configured" rather than silently missing |
-| `boltz_sse_comparison_sessions/` (optional) | A plain-text PyMOL `.pml` script per target -- colours/labels each motif, highlights the ones with a significant shift |
+| `boltz_sse_comparison.csv` / `.html` | One row per family/target/motif: Ca RMSD, centroid shift, helix-axis rotation/kink angles, SSE boundary shift, flagged phi/psi residues, and (kinases) DFG-in/out and alphaC-in/out states. Written automatically whenever any family has `Apo structure:` set. Family/Target columns, chart legends and the family-coverage table use the dashboard's display names; the CSV keeps the raw `family_id`/`target_stem` columns alongside for cross-referencing. The HTML is a standalone dashboard whose content is also embedded into `boltz_dashboard.html`. See **compare-sse** below for what the metrics mean |
+| `boltz_sse_family_status.json` | One entry per protein family: `ok` (with a target/motif count) / `no_apo_structure` / `apo_not_found` / `annotation_failed` / `no_predicted_structures` -- the machine-readable form of the "Family coverage" table, so a family with no `Apo structure:` reads as "not configured" rather than silently missing |
+| `boltz_sse_comparison_sessions/` (optional) | A plain-text PyMOL `.pml` script per target: colours/labels each motif, highlights the ones with a significant shift |
+| `reference/` (optional, yours) | Experimental mmCIF structures you drop in yourself. Their presence is what turns on the dashboard's **Ligand pose vs experiment** panel (see below); the same files already serve `Pocket contact:` and `Apo structure:` |
+
+### `boltz_summary.csv` / `.xlsx`
+
+One row per target: every scalar field from the confidence/affinity JSONs, computed pIC50,
+the input ligand SMILES, and `flags`/`notes` columns (`LOW_CONFIDENCE`,
+`HIGH_CONFIDENCE_POOR_AFFINITY`, `LOW_CONFIDENCE_STRONG_AFFINITY`, `LOW_POCKET_PLDDT`,
+`MISSING_OUTPUTS`). The XLSX adds a `selectivity` sheet (ligand x family pIC50 pivot) whenever
+a campaign spans more than one protein family. When `setup-plip` has run there is also a
+`plip_status` column (`ok` / `no_interactions` / `failed` / `ambiguous_ligand` /
+`skipped_no_env`) and a `plip_<type>_count` column per interaction type detected
+(hydrophobic, hydrogen_bonds, salt_bridges, etc.).
+
+### Inside `boltz_dashboard.html`
+
+Panels, in order:
+
+| Panel | What it shows |
+|---|---|
+| **Campaign summary** | Field / Value / **Details**: a linked path to the input file, each protein/partner's id and sequence length, each ligand's id and SMILES-vs-CCD source, the full list of target stems, which ligands were flagged in ligand-chemistry review (linked to the card below), and a plain-English gloss for each of the more cryptic run parameters (accelerator, MPS watermark, recycling/sampling steps). Tracked across every `run` invocation in a small hidden sidecar file |
+| **Summary table** | One row per target, in named column bands (Identity, Confidence, Affinity, Interactions, Structure) -- details below |
+| **Ligand preparation** | The same stereocentre / protonation-state / disconnected-fragment checks as `preflight`'s `ligand_preparation`, shown per ligand rather than as one summary line |
+| **Ligand structures** | A paginated 5x5 grid of every ligand's rendered 2D structure, findings and shared scaffolds highlighted on the structures themselves, with a captioned legend and "Download PDF" / "Download SMILES" links side by side, matching the Summary table's download-links style. See **Ligand validation & scaffold highlighting** below |
+| **Charts** | An interactive [Plotly](https://plotly.com/javascript/) grid: ranked pIC50, ranked confidence, a "pIC50 vs confidence score" scatter, interaction counts by type, and a "pIC50 vs binder probability" scatter (binder probability on x, pIC50 on y). Hover/zoom/pan; plotly.js is vendored and inlined rather than CDN-loaded, so the dashboard has no runtime dependency on an external script host |
+| **Selectivity heatmap** | The family x ligand pIC50 pivot, mirroring the XLSX `selectivity` sheet |
+| **Interaction fingerprints** (PLIP) | A per-family residue-interaction heatmap (also interactive Plotly), shown for every family with interaction data even a single ligand -- though the similarity-based reordering that helps SAR ranking within a series only kicks in from 3+ ligands |
+| **Per-target binding site** (PLIP) | Its binding-site image (residues labelled and interaction distances shown -- PLIP's own images have neither, so these are re-rendered from its PyMOL session with both added, with a "Download image" link) next to an interactive, auto-rotating [3Dmol.js](https://3dmol.org) view of the same predicted structure (built from the mmCIF, ligand highlighted), side by side with a table of that target's contacts (own "Download CSV") plus a download link for the full PyMOL session |
+| **Secondary structure shifts** | The compare-sse card, embedded whole: family coverage, overall shift statistics, and the per-motif table with its Plotly charts. See **compare-sse** below |
+
+**Display names, not internal ids.** The "Target" column shows
+`{run}_{group}_{partners}_{ligand}_{pocket}` (e.g. `2_5HT2A_GNAQ+GNB1+GNG2_RISP_41Y`) rather than
+the internal per-variant family id/stem (`H2ANG_RISP`, `H2AAP`), partners omitted when there are
+none and `apo` in place of a ligand for a ligand-free target, which takes no pocket suffix. The
+same name -- or its family-level `{group}_{partners}` form -- replaces the internal id in every
+chart tick, legend and point label, every per-target/per-family card title, the campaign-summary
+target list, the selectivity pivot's columns in both the dashboard heatmap and the XLSX sheet,
+and compare-sse. The raw ids stay alongside it in every underlying CSV/XLSX `targets` sheet, for
+cross-referencing against real output filenames.
+
+The leading run number and trailing pocket code earn their place in a matrix campaign, where one
+ligand is predicted several times and a run number alone reads as an index rather than a
+condition: `2_..._ORFO_41Y` against `3_..._ORFO_V6G` says what was done differently, where
+`2_..._ORFO` and `3_..._ORFO` say only that there were two of them. The suffix comes from the
+same value the "Pocket" column shows (the pocket code, or `Unc` when unconstrained), so a name
+and its column cannot drift apart.
+
+**The Summary table's own details.** Short human headers replace raw JSON field names, and
+redundant/granular columns (per-chain and per-chain-pair confidence breakdowns, individual
+ensemble sub-model values) are hidden by regex pattern rather than a fixed list, so it scales
+past two chains. Two download links sit above it: the full underlying CSV, and one matching just
+this trimmed/renamed view. A "Partner" column lists each target's co-folded partner chain(s)
+(hidden when there are none), and rows are grouped by `Group:`/family id with a blue top border
+marking each new group.
+
+**The "Flags" column is now "Summary", and icon-based:** a bullseye (affinity) and a shield
+(confidence) per row, each tinted green/amber/red by tier, with the exact value and
+interpretation on hover. The tiers reuse the existing `LOW_CONFIDENCE_THRESHOLD` and a symmetric
+buffer around Boltz's documented 0.5 binder decision boundary, because Boltz's own docs define
+these metrics' [0, 1] range but publish no official tri-colour bands. A `MISSING_OUTPUTS` failure
+collapses the cell to a single red cross, and a legend right of the download links spells out all
+six tier/icon combinations. It is always shown (previously hidden entirely when nothing was
+flagged), so a clean campaign reads as a row of green icons rather than a column that silently
+disappears. A ligand-free (apo) target's ligand/affinity/interface/interaction columns, the
+bullseye included, show an explicit `N/A` rather than a blank cell or a misleading `0.00`.
+
+**Chart colour and shape.** The two scatters colour each point by tier via a continuous
+colourscale + colorbar legend, in the selectivity heatmap's style: confidence tier for
+pIC50-vs-confidence-score, affinity tier for pIC50-vs-binder-probability, matching the shield and
+bullseye icons respectively. When a `Ligand:` block sets `Role: agonist`/`Role: antagonist`,
+points are also shape-coded (circle = agonist, diamond = antagonist), the legend sitting inside
+the plot area's top-left corner rather than Plotly's default outside-right, where it would
+collide with the colorbar. Campaigns that don't set `Role:` see a single unshaped trace.
+
+**Embedding.** The dashboard posts its own content height to any parent window via `postMessage`
+on load and resize, so a page embedding it in an iframe (e.g. `findings.md`'s "Interactive
+dashboard" section) can size the iframe to the actual content -- a cross-origin iframe cannot
+otherwise be measured from the embedding page's JS.
 
 ## 🔬 Ligand validation & scaffold highlighting
 
 Two related but distinct checks run over every SMILES ligand before you commit hours of
-`boltz predict` time to them, and both surface directly in the dashboard.
-
-**Why this exists:** Boltz folds whatever chemistry it's given -- an undefined
-stereocentre, an unintended protonation state, or a stray counterion left in a SMILES
-string doesn't raise an error, it just silently changes the predicted pose and affinity.
-These are exactly the mistakes a non-specialist (or a tired specialist) makes typing
-SMILES by hand, and they're invisible until you're staring at a confusing result with no
-idea the input was ever wrong.
+`boltz predict` time, and both surface in the dashboard. Boltz folds whatever chemistry it is
+given: an undefined stereocentre, an unintended protonation state or a stray counterion raises
+no error, it silently changes the predicted pose and affinity. These are exactly the mistakes a
+non-specialist (or a tired specialist) makes typing SMILES by hand, and they're invisible until
+you're staring at a confusing result with no idea the input was ever wrong.
 
 ### Ligand preparation (validity checks)
 
-At parse time, every ligand SMILES is canonicalized (RDKit) so the same molecule is
-represented consistently everywhere downstream -- the generated YAML, the summary table,
-and cif2plip's own ligand-matching (see the InChIKey-based matching note in
-[CHANGELOG.md](CHANGELOG.md)). Then, both at `preflight` (as the `ligand_preparation`
-check) and again in the dashboard's "Ligand preparation" card, each ligand is checked for:
+At parse time every ligand SMILES is canonicalised (RDKit) so the same molecule is represented
+consistently everywhere downstream -- the generated YAML, the summary table, and cif2plip's own
+ligand-matching (see the InChIKey-based matching note in [CHANGELOG.md](CHANGELOG.md)). Then,
+both at `preflight` (as the `ligand_preparation` check) and in the dashboard's "Ligand
+preparation" card, each ligand is checked for **undefined stereocentres**
+(`Chem.FindMolChiralCenters(includeUnassigned=True)`: a stereocentre exists but the SMILES
+doesn't say which enantiomer/diastereomer, so Boltz will fold *some* version of it, possibly not
+the one you intended), **disconnected fragments** (`Chem.GetMolFrags()` returning more than one
+-- likely a salt or counterion left in the SMILES, e.g. a sodium carboxylate written as two
+components), and **ionizable groups** (SMARTS matches for carboxylic acid, primary/secondary
+amine, phenol and sulfonic acid, whose protonation state at physiological pH a plain SMILES
+doesn't specify -- worth a deliberate choice, not a default assumption).
 
-| Check | How | What it means |
-|---|---|---|
-| Undefined stereocentres | `Chem.FindMolChiralCenters(includeUnassigned=True)` | A stereocentre exists in the molecule but the SMILES doesn't specify which enantiomer/diastereomer -- Boltz will fold *some* version of it, possibly not the one you intended |
-| Disconnected fragments | `Chem.GetMolFrags()` returns more than one fragment | Likely a salt or counterion left in the SMILES (e.g. a sodium carboxylate written as two components) |
-| Ionizable groups | SMARTS match: carboxylic acid, primary/secondary amine, phenol, sulfonic acid | The group's protonation state at physiological pH isn't specified by a plain SMILES -- worth a deliberate choice, not a default assumption |
-
-All of this is advisory, not a hard failure -- these can be legitimate, deliberate
-modelling choices -- but they're the kind of thing worth a second look before trusting
-downstream numbers.
+All advisory, not a hard failure -- these can be legitimate modelling choices -- but worth a
+second look before trusting downstream numbers.
 
 ### Scaffold highlighting (the "Ligand structures" grid)
 
-Separately, the dashboard's ligand grid tries to answer a different question: *do any of
-these ligands share a chemical core?* This matters most for SAR (structure-activity
-relationship) campaigns, where a chemist is usually testing close analogues on purpose,
-and seeing the shared scaffold at a glance (with the parts that differ jumping out) is
-more useful than reading each SMILES individually. Two tiers, in order, and nothing is
-highlighted unless one of them actually finds something real:
+The ligand grid answers a different question: *do any of these ligands share a chemical core?*
+This matters most for SAR campaigns, where a chemist is testing close analogues on purpose and
+seeing the shared scaffold at a glance (with the parts that differ jumping out) beats reading
+each SMILES individually. Two tiers, in order, and nothing is highlighted unless one of them
+finds something real:
 
-1. **Exact Bemis-Murcko scaffold match** -- ligands whose ring systems + connecting
-   linkers are chemically identical are grouped, threshold-free. This is the dominant
-   case for a real SAR series.
-2. **Fallback for near-analogues:** ligands left over are grouped by Morgan/Tanimoto
-   fingerprint similarity, then a maximum common substructure (MCS) is computed across
-   the *whole* group and verified to actually match every member -- so the claim is a
-   proven substructure match, not just an assigned similarity score.
+1. **Exact Bemis-Murcko scaffold match** -- ligands whose ring systems + connecting linkers are
+   chemically identical are grouped, threshold-free. The dominant case for a real SAR series.
+2. **Fallback for near-analogues** -- leftovers are grouped by Morgan/Tanimoto fingerprint
+   similarity, then a maximum common substructure (MCS) is computed across the *whole* group and
+   verified to match every member, so the claim is a proven substructure match rather than an
+   assigned similarity score.
 
-Small or trivial shared fragments (below 8 heavy atoms -- e.g. "they all contain a
-benzene ring") are deliberately not highlighted; a group has to share something
-structurally meaningful to be called out. Ligands in the same scaffold group also have
-their 2D depiction aligned to a common orientation, so the shared core is drawn in the
-same position across cells and visually "snaps together."
+Shared fragments below 8 heavy atoms (e.g. "they all contain a benzene ring") are deliberately
+not highlighted. Ligands in the same group also have their 2D depiction aligned to a common
+orientation, so the shared core is drawn in the same position across cells and visually snaps
+together.
 
-**What's highlighted and how**, directly on each rendered structure -- the same badges
-shown on each ligand cell and spelled out in the panel's own legend:
+**What's highlighted and how**, directly on each rendered structure -- the same badges shown on
+each cell and spelled out in the panel's legend:
 
 | Badge | Colour | Meaning |
 |---|---|---|
@@ -851,103 +841,90 @@ shown on each ligand cell and spelled out in the panel's own legend:
 | `salt` | 🟥 Red | Disconnected fragment (salt/counterion) -- flagged on the border and badge only, not atom-highlighted (there's no single meaningful atom to point at) |
 | -- | one of six colour-blind-safe palette colours | Atoms in a shared scaffold/substructure -- consistent per group, with a legend entry naming the group and how many ligands share it (e.g. "shared scaffold -- 3/5 ligands") |
 
-A specific finding (stereocentre, ionizable group) always takes priority over the softer
-scaffold highlight if they overlap on the same atom, since it's the more actionable
-signal. If no ligand shares a real scaffold with any other, the panel says so plainly
-("no shared scaffold or substructure detected") rather than forcing a highlight onto
-something coincidental. CCD-code ligands have no SMILES to render and show a plain
-placeholder instead of an empty cell.
+The legend is captioned badge by badge, stating what was found and on how many ligands -- never
+an unexplained highlight. A specific finding (stereocentre, ionizable group) takes priority over
+the softer scaffold highlight where they overlap on an atom, being the more actionable signal.
+If no ligand shares a real scaffold with any other, the panel says so plainly ("no shared
+scaffold or substructure detected") rather than forcing a highlight onto something coincidental.
+CCD-code ligands have no SMILES to render and show a plain placeholder instead of an empty cell.
 
 ## 🎯 Ligand pose vs experiment: the prediction against reality
 
-Every other score on the dashboard is Boltz grading its own work. This one is not: it
-compares the docked ligand with the same molecule in an experimentally determined
-structure, and it is the only panel that can tell you the prediction is wrong.
-
-**Why this exists.** On a real GLP1R campaign, orforglipron was predicted into the
-receptor's own transmembrane site with `ligand_iptm` 0.940 and a confidence score of
-0.836 -- comfortably green on both icons. Superposed on 7E14, the crystal structure of
-that same complex, the predicted ligand sat **9.4 A** from where the experiment puts it:
-correct pocket, correct conformation, rotated end for end. No metric Boltz emits noticed,
-because none of them is a comparison with reality. A campaign scoring itself has no way
-to find that class of error.
+Every other score on the dashboard is Boltz grading its own work. This one is not: it compares
+the docked ligand with the same molecule in an experimentally determined structure, and it is
+the only panel that can tell you the prediction is wrong. On a real GLP1R campaign, orforglipron
+was predicted into the receptor's own transmembrane site with `ligand_iptm` 0.940 and a
+confidence score of 0.836 -- comfortably green on both icons -- yet superposed on 7E14, the
+crystal structure of that same complex, the predicted ligand sat **9.4 A** from where the
+experiment puts it: correct pocket, correct conformation, rotated end for end. No metric Boltz
+emits noticed, because none of them is a comparison with reality.
 
 **How to use it.** Drop experimental mmCIF files into a `reference/` folder next to
-`boltz_input.md`. The panel appears in `boltz_dashboard.html` (and in the hosted Analysis
-view) whenever a campaign has one; without `reference/` it stays silent rather than
-showing an empty card. Nothing else to configure: the same files you already downloaded
-for `Pocket contact:` and `Apo structure:` are the ones it reads.
+`boltz_input.md` -- the same files you downloaded for `Pocket contact:` and `Apo structure:`,
+nothing else to configure. The panel then appears in `boltz_dashboard.html` and in the hosted
+Analysis view; without `reference/` it stays silent rather than showing an empty card.
 
-**Three numbers, because they fail independently:**
+**Three numbers, because they fail independently.** **Site (A)** is the distance between the two
+ligand centroids after superposing the receptor: did it find the pocket at all. **Pose (A)** is
+the symmetry-corrected RMSD in place, after that same superposition: did it find the binding
+mode. **Conformer (A)** is the symmetry-corrected RMSD with the two ligands superposed on each
+other: is the molecule's own shape right.
 
-| Column | What it measures | Reads as |
-|---|---|---|
-| **Site (A)** | Distance between the two ligand centroids, after superposing the receptor | Did it find the pocket at all |
-| **Pose (A)** | Symmetry-corrected RMSD in place, after superposing the receptor | Did it find the binding mode |
-| **Conformer (A)** | Symmetry-corrected RMSD with the two ligands superposed on each other | Is the molecule's own shape right |
+The orforglipron case reads 3.05 / 9.43 / 3.08, legible at a glance as "right pocket, right
+shape, wrong orientation"; collapsed into one figure it would be legible as nothing. Two icons
+carry the summary in the dashboard's own visual language -- a **bullseye** for the site, a **pose
+mark** for the binding mode -- each tinted green under 2 A, amber to 5 A, red beyond, 2 A being
+the long-standing convention for "this reproduces the crystal structure".
 
-The orforglipron case reads 3.05 / 9.43 / 3.08, which is legible at a glance as "right
-pocket, right shape, wrong orientation". Collapsed into one figure it would be legible as
-nothing. Two icons carry the summary in the same visual language as the rest of the
-dashboard: a **bullseye** for the site and a **pose mark** for the binding mode, each
-tinted green under 2 A, amber to 5 A, red beyond -- 2 A being the long-standing
-convention for "this reproduces the crystal structure".
+**Atoms are paired by molecular graph, not by proximity.** A 65-atom drug has equivalent methyls
+and flippable rings; pairing each predicted atom with whichever experimental atom is nearest
+quietly flatters a wrong pose by matching it to itself. RDKit assigns bond orders from the
+campaign's own SMILES and enumerates the substructure matches, so a symmetry-equivalent
+placement scores as correct and a genuinely different one does not.
 
-**Atoms are paired by molecular graph, not by proximity.** A 65-atom drug has equivalent
-methyls and flippable rings; pairing each predicted atom with whichever experimental atom
-happens to be nearest quietly flatters a wrong pose by matching it to itself. RDKit
-assigns bond orders from the campaign's own SMILES and enumerates the substructure
-matches, so a symmetry-equivalent placement scores as correct and a genuinely different
-one does not.
+**Which experimental ligand a target is compared against** is worked out rather than configured.
+A constrained target names its pocket after the ligand it was derived from (`GLP1R_ORFO_V6G` ->
+V6G), so that is the answer. An unconstrained target -- the baseline, and the comparison most
+worth having -- is matched by heavy-atom element composition against every ligand in
+`reference/`, so the same molecule is found wherever it sits.
 
-**Which experimental ligand a target is compared against** is worked out rather than
-configured. A constrained target names its pocket after the ligand it was derived from
-(`GLP1R_ORFO_V6G` -> V6G), so that is the answer. An unconstrained target -- the baseline,
-and the comparison most worth having -- is matched by heavy-atom element composition
-against every ligand in `reference/`, so the same molecule is found wherever it sits.
+**One small viewer per pair, grouped by pocket.** The table says a pose is 9.4 A wrong; it cannot
+say *how*. "Rotated end for end" is obvious in one glance at two overlaid ligands and invisible
+in a column of angstroms, so the hosted Analysis view draws each comparison as its own frame
+holding exactly two ligands as sticks -- the prediction in red, the experimental one in grey --
+superposed through their receptors and zoomed to fit, with spin and reset. Tiles are grouped
+under the pocket they were run against, unconstrained last, so the comparison the matrix exists
+for reads down one column. On the GLP1R campaign the V6G tiles show two molecules interleaved in
+one volume pointing different ways, and the unconstrained tiles show them in different places
+entirely: the two failure modes, told apart without reading a number.
 
-**One small viewer per pair, grouped by pocket.** The table says a pose is 9.4 A
-wrong; it cannot say *how*. "Rotated end for end" is obvious in one glance at two
-overlaid ligands and invisible in a column of angstroms, so the hosted Analysis view
-draws each comparison as its own frame holding exactly two ligands as sticks -- the
-prediction in red, the experimental one in grey -- superposed through their receptors
-and zoomed to fit, with spin and reset. Tiles are grouped under the pocket they were
-run against, unconstrained last, so the comparison the matrix exists for reads down a
-single column. On the GLP1R campaign the V6G tiles show two molecules interleaved in
-one volume pointing different ways, and the unconstrained tiles show them in different
-places entirely: the two failure modes, told apart without reading a number.
+Each pair is written at analyze time as two single-ligand mmCIFs (`boltz_pose_pairs/`, carried in
+the `.bmz`), because the superposition needs RDKit, the reference files and the predicted
+complex, none of which are on the server -- so the viewer draws exactly the coordinates the
+numbers were measured from, not a second superposition that could disagree with the table above
+it. **Viewers are pooled, not one per tile:** a browser allows a limited number of live WebGL
+contexts and exceeding it does not raise, it silently kills the oldest, turning early frames
+black while later ones look fine. Frames are created as they scroll into view and disposed
+least-recently-seen-first, so thirty comparisons cost the same as four.
 
-BoltzMaker writes each pair as two single-ligand mmCIFs (`boltz_pose_pairs/`,
-carried in the `.bmz`), because the superposition needs RDKit, the reference files and
-the predicted complex -- all of which live on the machine that ran the prediction, and
-none of which are on the server. So the viewer draws exactly the coordinates the
-numbers were measured from, rather than a second superposition that could disagree
-with the table above it.
+**A reference of a different protein is refused, not reported on.** Receptor residues are matched
+on number with the residue type required to agree, and a reference must match at least 70% of the
+numbering overlap to be accepted as this protein. Measured against 7E14: GLP1R matched at 0.90,
+GIPR at 0.11. Without that gate the panel compares a GIPR prediction to a GLP1R crystal structure
+and presents the disagreement as a finding. Each reference chain is tried separately rather than
+pooled, because a complex numbers its G-protein chains from 1 as well, and pooling lets the last
+chain read overwrite the receptor's own residues.
 
-**Viewers are pooled, not one per tile.** A browser allows a limited number of live
-WebGL contexts and exceeding it does not raise -- it silently kills the oldest, so
-early frames turn black while later ones look fine. Frames are created as they scroll
-into view and disposed least-recently-seen-first, so a campaign with thirty
-comparisons costs the same as one with four.
+### 🔭 How tight should a pocket be? What the measurements say
 
-**A reference of a different protein is refused, not reported on.** Receptor residues are
-matched on number with the residue type required to agree, and a reference must match at
-least 70% of the numbering overlap before it is accepted as being of this protein.
-Measured against 7E14: GLP1R matched at 0.90, GIPR at 0.11. Without that gate the panel
-compares a GIPR prediction to a GLP1R crystal structure and presents the disagreement as
-a finding. Each reference chain is also tried separately rather than pooled, because a
-complex numbers its G-protein chains from 1 as well, and pooling lets the last chain read
-overwrite the receptor's own residues.
+Pointed at a real question, the panel found this: **`Pocket distance:` decides whether a
+constrained prediction reproduces the crystal pose, and 8 A is too loose.**
 
-## 🔭 How tight should a pocket be? What the measurements say
-
-The panel above exists to catch a wrong pose. This is what it found when pointed at a
-real question: **`Pocket distance:` is the setting that decides whether a constrained
-prediction reproduces the crystal pose, and 8 A is too loose.**
-
-Six conditions, all GLP1R + orforglipron scored against 7E14, one diffusion sample
-each, no templates. "Contacts" is the number of receptor residues named in the
-constraint; "shell" is the distance from the experimental ligand they were derived at.
+Six conditions, all GLP1R + orforglipron scored against 7E14, one diffusion sample each, no
+templates. "Contacts" is the number of receptor residues named in the constraint; "shell" is the
+distance from the experimental ligand they were derived at. The campaign is public as
+[`GLP1R_GIPR_pocket_matrix`](https://boltzmaker.mdeller.com/runs/niSiE5MfGFyddSjGLmeYBA/explore),
+so every row below can be read in the live report.
 
 | Pocket | Shell | Contacts | `Pocket distance` | Site (Å) | Pose (Å) | Conformer (Å) | Confidence | Ligand ipTM |
 |---|---|---|---|---|---|---|---|---|
@@ -958,60 +935,57 @@ constraint; "shell" is the distance from the experimental ligand they were deriv
 | V6G | 8 Å | 62 | 8 Å | 3.08 | 9.51 | 3.08 | 0.836 | 0.940 |
 | unconstrained | -- | sparse sweep | 8 Å | 11.02 | 13.41 | 3.43 | 0.765 | 0.754 |
 
-**The distance is the lever, and P80 isolates it.** P80 and V6G name the *identical 62
-residues*. Nothing differs between them but 4 Å against 8 Å, and the pose goes from
-9.51 Å -- the right pocket, the wrong way round -- to 2.56 Å, a reproduction of the
-experiment. That is a single-variable result, which none of the other comparisons are.
+**The distance is the lever, and P80 isolates it.** P80 and V6G name the *identical 62 residues*.
+Nothing differs between them but 4 Å against 8 Å, and the pose goes from 9.51 Å -- the right
+pocket, the wrong way round -- to 2.56 Å, a reproduction of the experiment. That is a
+single-variable result, which none of the other comparisons are.
 
-**Do not tune the residue count.** At a fixed 4 Å it does not order the outcome: 13
-contacts gives 3.70 Å, 25 gives 8.96 Å, 38 gives 2.04 Å, 62 gives 2.56 Å. Outcomes are
-bimodal -- a run either lands (2.0-3.7 Å, conformer 1.3-1.7) or it does not (9-9.5 Å,
-conformer 3.1-3.4) -- and P45 fails the same way V6G does, getting the ligand's own
-conformation wrong as well as its placement. With one sample per condition there is no
-separating "25 contacts is bad" from "P45 was a bad draw", so the honest summary is
-that **at 4 Å three of four pocket definitions reproduced the crystal pose, and at 8 Å
-none did.**
+**Do not tune the residue count.** At a fixed 4 Å it does not order the outcome: 13 contacts gives
+3.70 Å, 25 gives 8.96 Å, 38 gives 2.04 Å, 62 gives 2.56 Å. Outcomes are bimodal -- a run either
+lands (2.0-3.7 Å, conformer 1.3-1.7) or it does not (9-9.5 Å, conformer 3.1-3.4) -- and P45 fails
+the same way V6G does, getting the ligand's own conformation wrong as well as its placement. With
+one sample per condition there is no separating "25 contacts is bad" from "P45 was a bad draw",
+so the honest summary is that **at 4 Å three of four pocket definitions reproduced the crystal
+pose, and at 8 Å none did.**
 
-**The confidence columns are the argument for this panel.** Across poses spanning 2.04
-to 9.51 Å, `confidence_score` moves 0.834 to 0.849 -- a spread of 0.015 that does not
-even put the worst pose last. Ligand ipTM orders the three good runs correctly (0.939 <
-0.976 < 0.987 for 3.70 > 2.56 > 2.04 Å) and then hands P45's 8.96 Å a 0.952, placing a
-failure mid-pack. Both scores do drop sharply for the unconstrained run (0.765 / 0.754),
-so they can tell "on the receptor but not in the site" from "in the site" -- they simply
-cannot tell a right pose from a wrong one once the ligand is in the pocket. Only the
-comparison with an experiment can.
+**The confidence columns are the argument for this panel.** Across poses spanning 2.04 to 9.51 Å,
+`confidence_score` moves 0.834 to 0.849 -- a spread of 0.015 that does not even put the worst pose
+last. Ligand ipTM orders the three good runs correctly (0.939 < 0.976 < 0.987 for 3.70 > 2.56 >
+2.04 Å) and then hands P45's 8.96 Å a 0.952, placing a failure mid-pack. Both scores do drop
+sharply for the unconstrained run (0.765 / 0.754), so they can tell "on the receptor but not in
+the site" from "in the site" -- they simply cannot tell a right pose from a wrong one once the
+ligand is in the pocket. Only the comparison with an experiment can.
 
-**Affinity is not in this table**, because the pose series was run with
-`Predict affinity: no` -- it was a geometry test. The one row that has it is the
-unconstrained baseline (binder p 0.496, pIC50 8.98), and the campaign it came from
-already measured binder probability at r = +0.07 against pIC50 across 24 targets, moving
-with the pocket condition rather than the chemistry.
+**Affinity is not in this table**, because the pose series was run with `Predict affinity: no` --
+it was a geometry test. The one row that has it is the unconstrained baseline (binder p 0.496,
+pIC50 8.98), and the campaign it came from already measured binder probability at r = +0.07
+against pIC50 across 24 targets, moving with the pocket condition rather than the chemistry.
 
-### What to set
+#### What to set
 
 Use **`Pocket distance: 4`** for a named pocket. Leave the contact list as whatever your
-reference structure gives you; deriving it at a 6-8 Å shell is fine and the difference
-between those two was within the noise of this experiment.
+reference structure gives you; deriving it at a 6-8 Å shell is fine and the difference between
+those two was within the noise of this experiment.
 
-This does **not** apply to the ligand-free "stay on your own receptor" sweep that
-unconstrained targets get -- that is fixed at `CONFINE_DISTANCE_A` (8 Å) and is
-deliberately not coupled to `Pocket distance:`. The two constraints ask different
-questions: a pocket asks *which site*, where tightening is the whole point, while the
-sweep asks *which protein* of residues scattered the length of the chain, where no
-ligand can be near all of them and the number only scales the pull. Coupling them meant
-tightening a pocket silently re-tuned the baseline arm it was about to be compared with.
+This does **not** apply to the ligand-free "stay on your own receptor" sweep that unconstrained
+targets get -- that is fixed at `CONFINE_DISTANCE_A` (8 Å) and deliberately not coupled to
+`Pocket distance:`. The two constraints ask different questions: a pocket asks *which site*,
+where tightening is the whole point, while the sweep asks *which protein* of residues scattered
+the length of the chain, where no ligand can be near all of them and the number only scales the
+pull. Coupling them meant tightening a pocket silently re-tuned the baseline arm it was about to
+be compared with.
 
-### Does the restraint just manufacture the pose?
+#### Does the restraint just manufacture the pose?
 
-The series above shows a tight pocket reproducing a crystal pose. That is only worth
-something if the restraint can also **fail**. Point it at the wrong site and a pose panel
-that still reports 2 Å would be measuring the constraint, not the prediction.
+The series above shows a tight pocket reproducing a crystal pose. That is only worth something if
+the restraint can also **fail**: point it at the wrong site and a pose panel that still reports
+2 Å would be measuring the constraint, not the prediction.
 
-A later two-receptor campaign runs that control. Every ligand is predicted three times
--- restrained to one pocket, restrained to the other, and unrestrained -- so each of the
-two ligands that has an experimental structure gets its own site, a wrong site and no
-site at all, all at `Pocket distance: 4`. Pocket `V6G` comes from 7E14, pocket `41Y` from
-7RBT; each is the site its own ligand actually occupies.
+A later two-receptor campaign runs that control. Every ligand is predicted three times --
+restrained to one pocket, restrained to the other, and unrestrained -- so each of the two ligands
+with an experimental structure gets its own site, a wrong site and no site at all, all at
+`Pocket distance: 4`. Pocket `V6G` comes from 7E14, pocket `41Y` from 7RBT; each is the site its
+own ligand actually occupies.
 
 | Ligand | Restrained to | Site (Å) | Pose (Å) | Conformer (Å) |
 |---|---|---|---|---|
@@ -1022,50 +996,44 @@ site at all, all at `Pocket distance: 4`. Pocket `V6G` comes from 7E14, pocket `
 | 41Y | **the wrong site** (V6G) | 22.88 | 24.93 | 1.78 |
 | orforglipron | **the wrong site** (41Y) | 28.23 | 29.40 | 3.67 |
 
-**The ordering is the result.** Own site beats unconstrained beats wrong site, by an order
-of magnitude at each step, on two different ligands against two different receptors. A
-restraint that fabricated a comfortable pose wherever it was aimed would put the
-wrong-site rows near the own-site rows; instead they are the worst numbers in the
-campaign, worse than having no constraint at all. So the pocket is steering, not
-scoring -- and the panel is measuring the prediction.
+**The ordering is the result.** Own site beats unconstrained beats wrong site, by an order of
+magnitude at each step, on two different ligands against two different receptors. A restraint
+that fabricated a comfortable pose wherever it was aimed would put the wrong-site rows near the
+own-site rows; instead they are the worst numbers in the campaign, worse than having no
+constraint at all. So the pocket is steering, not scoring -- and the panel is measuring the
+prediction.
 
-Two details worth keeping. The conformer column stays low for 41Y even when it is 24.93 Å
-from home (0.81, 1.78): the molecule's own shape is right and only its placement is
-wrong, which is exactly the decomposition the three columns exist for. And these numbers
-come from a different campaign than the tightness table above, which is why
-orforglipron's own-site pose reads 2.79 Å here against 2.56 Å there -- one diffusion
-sample per condition, so treat sub-Å differences between campaigns as noise and the
+The conformer column stays low for 41Y even when it is 24.93 Å from home (0.81, 1.78): the
+molecule's own shape is right and only its placement is wrong, exactly the decomposition the
+three columns exist for. These numbers also come from a different campaign than the tightness
+table above, which is why orforglipron's own-site pose reads 2.79 Å here against 2.56 Å there --
+one diffusion sample per condition, so treat sub-Å differences between campaigns as noise and the
 order-of-magnitude steps as the finding.
 
-**A pocket code is a PDB chemical component id, so look it up.** `41Y` was carried through
-that campaign as nothing but a pocket label. Its formal definition is a molecule --
-`C32H41FN2O2`, appearing in exactly one PDB entry -- and it turned out to be the same
-compound as one of the campaign's own ligands, which meant that ligand had an
-experimental structure nobody had fetched. Downloading 7RBT into `reference/` doubled the
-pose panel's coverage and supplied the second ligand in the table above. If a pocket is
-named after a component id, resolve it against the chemical component dictionary before
-assuming the campaign has no experiment to check itself against.
+**A pocket code is a PDB chemical component id, so look it up.** `41Y` was carried through that
+campaign as nothing but a pocket label. Its formal definition is a molecule -- `C32H41FN2O2`,
+appearing in exactly one PDB entry -- and it turned out to be the same compound as one of the
+campaign's own ligands, which meant that ligand had an experimental structure nobody had fetched.
+Downloading 7RBT into `reference/` doubled the pose panel's coverage and supplied the second
+ligand in the table above. If a pocket is named after a component id, resolve it against the
+chemical component dictionary before assuming the campaign has no experiment to check itself
+against.
 
 ## 🧬 compare-sse: apo vs holo secondary-structure shifts
 
-**Why this exists:** a confidence score tells you *what* Boltz predicted, not *how the
-protein moved* in response to ligand binding -- a real structural question whenever you
-have both a reference apo (unbound) structure and a predicted holo one for the same
-protein. `compare-sse` answers it in terms a structural biologist actually reasons in
-("TM6 swung out 4.2 Angstrom", "the DFG motif flipped from in to out"), not raw DSSP
-fragment coordinates.
+**Why this exists:** a confidence score tells you *what* Boltz predicted, not *how the protein
+moved* in response to ligand binding -- a real structural question whenever you have both a
+reference apo (unbound) structure and a predicted holo one for the same protein. `compare-sse`
+answers it in terms a structural biologist actually reasons in ("TM6 swung out 4.2 Angstrom",
+"the DFG motif flipped from in to out"), not raw DSSP fragment coordinates.
 
-It's a core part of `analyze`/`all`: any family with an `Apo structure:` field set (see
-**boltz_input.md format** above) gets compared automatically, no separate command
-needed, and the result is embedded directly into `boltz_dashboard.html`. A family with
-no apo structure configured isn't silently skipped either -- the dashboard's "Family
-coverage" table says so explicitly, alongside any family that *was* compared. Pass
-`--skip-sse` to `analyze`/`all` to opt out, or use the standalone `compare-sse` command
-below to re-run just this analysis on its own (its own `--family`/`--target` flags let
-you target one family/target instead of the whole campaign).
+It is a core part of `analyze`/`all`: any family with `Apo structure:` set is compared
+automatically and the result embedded into `boltz_dashboard.html`. A family with no apo structure
+isn't silently skipped -- the "Family coverage" table says so explicitly. Pass `--skip-sse` to opt
+out, or use the standalone command to re-run just this analysis (`--family`/`--target` scope it).
 
-Motifs are annotated by one of three pluggable sources, auto-selected per family (or set
-explicitly with `Family type:`):
+Motifs are annotated by one of three pluggable sources, auto-selected per family or set
+explicitly with `Family type:`:
 
 | Family type | Motifs | Source |
 |---|---|---|
@@ -1073,9 +1041,9 @@ explicitly with `Family type:`):
 | `kinase` | hinge, gatekeeper, catalytic loop (HRD), DFG motif, alphaC-Glu, catalytic Lys | [KLIFS](https://klifs.net)'s public REST API (its fixed 85-residue pocket alignment) |
 | `auto` (default) | whichever of the above applies, else... | ...falls back to Pfam domain boundaries via [PDBe](https://www.ebi.ac.uk/pdbe)'s SIFTS residue mapping -- the universal last resort for any protein outside the two families above |
 
-Apo is superposed onto holo using only the family's stable, non-binding-site-adjacent
-residues (via gemmi's `superpose_positions`), so a ligand-induced local shift can't skew
-the global fit. Each motif then gets:
+Apo is superposed onto holo using only the family's stable, non-binding-site-adjacent residues
+(via gemmi's `superpose_positions`), so a ligand-induced local shift can't skew the global fit.
+Each motif then gets:
 
 | Metric | What it means |
 |---|---|
@@ -1086,257 +1054,244 @@ the global fit. Each motif then gets:
 | Flagged phi/psi residues | Per-residue backbone dihedral outliers above `--phi-psi-threshold` |
 | DFG-in/out, alphaC-in/out (kinases only) | A coarse Ca-Ca distance classifier, not a full dihedral model -- good for detecting a state *change* between apo and holo, not publication-grade conformational classification |
 
-A metric that genuinely wasn't computed for a given motif (e.g. axis rotation for a
-loop, DFG state for a non-kinase family, boundary shift with no DSSP data available)
-shows as an explicit `N/A` in both the CSV and every dashboard table, not a blank cell.
+A metric that genuinely wasn't computed for a motif (axis rotation for a loop, DFG state for a
+non-kinase family, boundary shift with no DSSP data) shows as an explicit `N/A` in both the CSV
+and every dashboard table, not a blank cell.
 
-Above the per-motif table, both `boltz_dashboard.html`'s embedded card and the
-standalone `boltz_sse_comparison.html` show:
-
-| Section | Content |
-|---|---|
-| Family coverage | One row per protein family: `OK` (with a target/motif count) / `No apo structure configured` / `Apo structure file not found` / `No motif annotation available` / `No predicted (holo) structures yet` |
-| Overall shift statistics | Targets/motifs compared; mean/median/max Ca RMSD (and which target + motif had the largest shift); mean centroid shift; total flagged phi/psi residues; kinase DFG/alphaC state-change counts |
+Above the per-motif table, both the dashboard's embedded card and the standalone
+`boltz_sse_comparison.html` show a **family coverage** row per protein family -- `OK` (with a
+target/motif count), `No apo structure configured`, `Apo structure file not found`,
+`No motif annotation available` or `No predicted (holo) structures yet` -- and **overall shift
+statistics**: targets/motifs compared; mean/median/max Ca RMSD, with which target and motif had
+the largest shift; mean centroid shift; total flagged phi/psi residues; and kinase DFG/alphaC
+state-change counts.
 
 ```sh
 python3 BoltzMaker.py compare-sse boltz_input.md
 ```
 
-Writes, next to `boltz_input.md` (or `--out-dir`): `boltz_sse_comparison.csv` (one row
-per family/target/motif) and `boltz_sse_family_status.json` (the family-coverage table
-above, machine-readable), a standalone self-contained `boltz_sse_comparison.html`
-(Plotly bar chart + motif x target heatmap, vendored the same way as the main
-dashboard), and `boltz_sse_comparison_sessions/<target>.pml` -- a plain-text PyMOL
-script per target that colours/labels each motif and highlights the ones with a
-significant shift. It's just text: opens in any local PyMOL install, no `pymol`
-dependency in BoltzMaker's own venv.
+Writes, next to `boltz_input.md` (or `--out-dir`): `boltz_sse_comparison.csv`,
+`boltz_sse_family_status.json`, a standalone self-contained `boltz_sse_comparison.html` (Plotly
+bar chart + motif x target heatmap, vendored the same way as the main dashboard), and
+`boltz_sse_comparison_sessions/<target>.pml` -- a plain-text PyMOL script per target that
+colours/labels each motif and highlights significant shifts. It's just text: opens in any local
+PyMOL install, no `pymol` dependency in BoltzMaker's own venv.
 
-When auto-run by `analyze`/`all`, a campaign with no apo structures configured
-anywhere just gets a dashboard section saying so -- it never aborts the rest of the
-pipeline over an optional, additive feature. The standalone command above still exits
-with a clear error if you explicitly pass a `--family`/`--target` that matches
-nothing, since that's a real mistake worth stopping for.
-
-## 🩹 Troubleshooting / FAQ
-
-| Problem | Fix |
-|---|---|
-| `setup-plip` fails, or `pip install plip` tries to build OpenBabel from source | This is expected without conda-forge -- `plip`'s own installer forces a from-source OpenBabel rebuild unless OpenBabel is already importable *inside pip's build sandbox*, and the standalone PyPI `pymol-open-source` wheel has a hardcoded broken library path on at least some machines. `setup-plip` works around both by building a conda-forge env via a self-downloaded micromamba -- just re-run `python3 BoltzMaker.py setup-plip --force` if a previous attempt left a half-built `.plip_env`. |
-| A `preflight`/`analyze` step involving `.plip_env` errors with `ModuleNotFoundError: No module named 'chatmol'` (or similar) | A stray `~/.pymolrc.py` on your machine (e.g. from an unrelated PyMOL plugin) is being loaded by the bundled PyMOL. BoltzMaker already overrides `HOME` for these subprocess calls so this shouldn't reach you, but if it does, check `~/.pymolrc.py` for anything referencing a package not installed in `.plip_env`. |
-| `run` seems to hang with no progress, or your Mac gets extremely slow | Check the memory-usage figure in the progress bar and see "Memory on Mac" earlier in this document -- this is very likely swap-thrashing, not a genuine stall. Re-run with a lower `--mps-watermark`, `--workers 1`, and `--max-parallel-samples 1`. |
-| A target's YAML/CIF exists on disk but BoltzMaker says it's missing, or `preflight` hangs | Check for iCloud "Optimize Mac Storage" dataless files -- `preflight`'s `icloud_materialize` check handles this automatically, but a very large campaign can take a while to force-download everything on first run. |
-| `boltz` fails during `setup` with a `numpy` build error | You're likely on Python 3.13+. `boltz` pins `numpy<2.0`, which has no prebuilt wheel past cp312 -- `_find_boltz_python()` already looks for a `python3.12` specifically; install one (`brew install python@3.12`) if it can't find one. |
-| A run dies with `torch._C._LinAlgError: linalg.svd ... failed to converge because the input matrix is ill-conditioned` | Not a conditioning problem, and not an OOM. Measured on this hardware: of every degenerate 3x3 (rank-1, zeros, repeated singular values, 1e-20, 1e20) plus 2000 random matrices, the only input that raises it is one containing **NaN** -- the diffusion coordinates have already diverged before the alignment runs. `linalg.svd` is not even an MPS op (it falls back to CPU), so forcing it to CPU changes nothing. Apply `patches/apply_boltz_patches.py` so the failure is contained to that one target, then try that target with `--no-potentials`, since the physical-guidance coordinate update is one of the places a trajectory can diverge. |
-| One target's failure kills the whole `boltz predict`, and targets behind it never run | `boltz`'s `predict_step` skips a batch on out-of-memory but re-raises everything else, and `LinAlgError` subclasses `RuntimeError`. Run `python3 patches/apply_boltz_patches.py` (idempotent, keeps `.orig` backups) -- `preflight`'s `boltz_patches` row reports whether it is applied. Re-run it after any `boltz` upgrade, which silently reverts it. |
-| A target fails preflight with a chain-id-length error | Boltz truncates chain IDs to 5 characters internally (a fixed-width field in its own schema) and silently corrupts longer ones rather than erroring at parse time -- shorten the protein/partner/ligand name in `boltz_input.md`. |
-| The dashboard's charts (or the binding-site 3D view) don't render, or look unstyled | plotly.js and 3Dmol.js are both vendored and inlined (not CDN-loaded), so this shouldn't happen from a missing network connection -- Google Fonts is still loaded from a CDN for styling, though, so the page needs internet access at least once for the fonts to look right (falls back to a generic sans-serif otherwise; charts, 3D views, and data are unaffected). If they genuinely don't render, check that `vendor/plotly-2.35.2.min.js` and `vendor/3Dmol-2.5.5-min.js` exist next to `BoltzMaker.py` -- `analyze` prints a warning and falls back to the relevant CDN (which is known not to work in some HTML-preview contexts) if either is missing. |
+A campaign with no apo structures anywhere never aborts the rest of the pipeline over an
+optional, additive feature. The standalone command still exits with a clear error if you
+explicitly pass a `--family`/`--target` matching nothing, since that's a real mistake worth
+stopping for.
 
 ## 🌐 Web deployment
 
 **Live at [boltzmaker.mdeller.com](https://boltzmaker.mdeller.com).** A Flask frontend for the
-non-GPU stages of the pipeline. The GPU `run` step is deliberately never hosted: there's no
-GPU on the droplet, so that stage always runs on your own hardware.
+non-GPU stages, in the two modes introduced under **Installation** above. The GPU `run` step is
+deliberately never hosted: there's no GPU on the droplet, so that stage always runs on your own
+hardware.
 
-The site opens on a choice of two ways to work: **Fully Automated Mode**, which hands the
-whole pipeline to you as one downloadable bundle, and **Stepwise Mode**, which exposes the
-same non-GPU stages as four separate tools.
+### Fully Automated Mode, Step 1: Prepare
 
-### Fully Automated Mode
+Describe the campaign in the form: a **name**, whether to **predict binding affinity**, then your
+**partners** (optional co-folded chains), **proteins**, **constraints** (pocket contact, covalent
+bond, or distance), and **ligands** (SMILES or CCD code). Same fields `BoltzMaker.py new` asks
+for, and the same 5-character shared-namespace rule on every short name.
 
-#### Step 1: Prepare
+Four fields replace something the form used to make you do by hand:
 
-Describe the campaign in the form: a **name**, whether to **predict binding affinity**, then
-your **partners** (optional co-folded chains), **proteins**, **constraints** (pocket contact,
-covalent bond, or distance), and **ligands** (SMILES or CCD code). These are the same fields
-`BoltzMaker.py new` asks for in the terminal, and the same 5-character shared-namespace rule
-applies to every short name.
+- **Co-folded partners** are tickboxes built from the Partner blocks' own short names, rather
+  than a list you retype. The two had to agree exactly, so renaming a partner after a protein
+  referenced it failed validation at download time with the campaign already entered. A
+  selection whose partner is later renamed or removed stays visible, ticked and flagged, instead
+  of quietly disappearing.
+- **Apo or inactive structure PDB id** reads the entry back underneath the box: title, method,
+  resolution, and **what is bound to it**. Four characters means every typo is another valid id,
+  so the title is the only way to see the wrong structure was named -- and "apo" in a title is
+  not a guarantee. Entries carrying ligands read amber rather than green: found, and worth your
+  judgement.
+- **Upload a structure** covers anything not in the PDB -- an unreleased entry, a colleague's
+  model, a construct with the fusion cut out. It is copied into the bundle under `reference/`
+  and named as the apo path, so the run never needs the network for it. Contents are checked
+  against the extension, and the filename sanitised before it becomes a path inside an archive
+  somebody unpacks.
+- **Targets per prediction process** defaults to 4. On Apple unified memory the allocator never
+  returns everything, so a long campaign starves itself and only process exit frees it. Blank
+  was the wrong default for this hardware; `0` disables recycling.
 
-Four of those fields are worth calling out, because each replaces something the form used to
-make you do by hand:
+The form also carries the rest of what a spec can say: per-protein **ligand scoping**
+(`Ligands:`), a shared report **group**, the **motif annotator** (`Family type:`), a ligand's
+**pharmacology** (`Role:`), and an apo reference as a file in the bundle with an optional
+**chain** -- deriving a form from a spec is only honest if the form can hold everything the spec
+says. Everything you type is kept in your browser, so downloading a bundle, stepping over to
+Analysis, or reloading does not lose it.
 
-| Field | What it saves you |
-|---|---|
-| **Co-folded partners** | Tickboxes built from the Partner blocks' own short names, rather than a list you retype. The two had to agree exactly, so renaming a partner after a protein referenced it failed validation at download time with the campaign already entered. A selection whose partner is later renamed or removed stays visible, ticked and flagged, instead of quietly disappearing. |
-| **Apo or inactive structure PDB id** | Reads the entry back underneath the box: title, method, resolution, and **what is bound to it**. Four characters means every typo is another valid id, so the title is the only way to see the wrong structure was named -- and "apo" in a title is not a guarantee. Entries carrying ligands read amber rather than green: found, and worth your judgement. |
-| **Upload a structure** | For anything not in the PDB -- an unreleased entry, a colleague's model, a construct with the fusion cut out. It is copied into the bundle under `reference/` and named as the apo path, so the campaign carries it and the run never needs the network for it. Contents are checked against the extension, and the filename is sanitised before it becomes a path inside an archive somebody unpacks. |
-| **Targets per prediction process** | Defaults to 4. On Apple unified memory the allocator never returns everything, so a long campaign starves itself and only process exit frees it. Blank was the wrong default for the hardware this runs on; `0` disables recycling. |
+**The bundle is the only file to keep.** It runs the campaign on your machine, and uploading it
+back at **Upload bundle** brings the whole page back as it was -- add a ligand, change a pocket,
+retune the run, download a new one. The form travels inside the bundle, so one file answers both
+questions; **Clear** empties the form, and asks first.
 
-The form also carries the rest of what a spec can say, which it could not before: per-protein
-**ligand scoping** (`Ligands:`), a shared report **group**, the **motif annotator**
-(`Family type:`), a ligand's **pharmacology** (`Role:`), and an apo reference given as a file
-in the bundle with an optional **chain**. Those gaps are why no example campaign could be
-loaded back into Step 1: deriving a form from a spec is only honest if the form can hold
-everything the spec says.
+A bundle with no saved page inside it -- every example campaign, and everything already in the
+**Runs** archive -- is rebuilt from the `boltz_input.md` it carries, but only when that is
+provably safe: the rebuilt page goes back through the form's own parser and assembler and the
+resulting spec is compared with the original, refusing with the difference named if they
+disagree. A form that silently drops a directive looks correct, rebuilds into a different
+campaign, and says nothing -- worse than not loading at all. An unrecognised directive refuses by
+name for the same reason.
 
-Everything you type is kept in your browser as you go, so downloading a bundle, stepping over
-to Analysis, or reloading does not lose it.
+Then choose the run settings. Every one maps to a real `BoltzMaker.py` flag, written literally
+into the generated script so you can read exactly what will run. **Commands** above documents
+what each flag does; the form's own labels, defaults and the few web-only notes are below.
 
-**The bundle is the only file to keep.** It runs the campaign on your machine, and uploading
-it back at **Upload bundle**, at the top of Step 1, brings the whole page back as it was --
-add a ligand, change a pocket, retune the run, download a new one. There used to be three
-artefacts and nobody could say which mattered: the `.command` that runs a campaign, the
-`.bmz` it produces, and a `.boltzpage.json` written by a "Save page" button. Now the form
-travels inside the bundle, so one file answers both questions. **Clear** empties the form,
-and asks first.
+| Setting | Flag | Default |
+|---|---|---|
+| Accelerator | `--accelerator` | auto (picks CUDA or Apple MPS when there is one) |
+| Use potentials | `--no-potentials` when unticked | on |
+| Data-loading workers | `--workers` | 0 |
+| Parallel diffusion samples | `--max-parallel-samples` | 1 |
+| MPS high-watermark ratio | `--mps-watermark` | 1.0 (Apple Silicon only; ignored elsewhere) |
+| Recycling steps | `--recycling-steps` | blank = Boltz's own (more steps is slower and usually only marginally better) |
+| Sampling steps | `--sampling-steps` | blank = Boltz's own |
+| Structure samples per target | `--diffusion-samples` | blank = one sample per target |
+| Affinity diffusion samples | `--diffusion-samples-affinity` | blank = Boltz's own; only matters where affinity prediction is on |
+| Affinity sampling steps | `--sampling-steps-affinity` | blank = Boltz's own |
+| Max MSA sequences | `--max-msa-seqs` | blank = BoltzMaker's 4096 (Boltz's own is 8192) |
+| Auto-retries per target | `--max-retries` | 2 |
+| Preflight size-warning threshold | `--memory-warn-tokens` | 1500 |
+| Only run the first N targets | `--limit` | blank = the whole campaign. 1 or 2 is the cheapest way to prove the pipeline works before committing hours of GPU time |
+| Treat preflight warnings as failures | `--strict` | off |
+| Skip PLIP interaction analysis | `--skip-interactions` | off. Leave it off: PLIP produces the interaction fingerprints the Analysis step shows, and skipping empties that panel to save minutes |
+| Skip apo-vs-holo compare-sse | `--skip-sse` | off. Left off, every protein gets an apo reference: an experimental structure if you gave a PDB id, otherwise an extra ligand-free prediction of that protein -- one more target per protein of GPU time. Tick to predict nothing extra |
+| Keep private | _(this site only)_ | off. Ticked, nothing about the run is kept on the server: the bundle is not archived, and the results file you upload later is recognised as private and not archived either. Left off, the run is listed under Runs |
 
-A bundle built before the form started saving itself -- every example campaign, and
-everything already in the **Runs** archive -- has no saved page inside it. Those still load:
-the form is rebuilt from the `boltz_input.md` the bundle carries. That is only done when it
-is provably safe. The rebuilt page is pushed back through the same parser and assembler the
-form itself uses, and the resulting spec compared with the one it came from; if they differ,
-the upload is refused with the difference named. A form that silently drops a directive looks
-correct, rebuilds into a different campaign, and says nothing -- worse than not loading at
-all. An unrecognised directive refuses by name for the same reason.
-
-Then choose the run settings. Every one maps to a real `BoltzMaker.py` flag, and each is
-written literally into the generated script so you can read exactly what will run:
-
-**Prediction settings**
-
-| Setting | Flag | Default | What it does |
-|---|---|---|---|
-| Accelerator | `--accelerator` | auto | auto picks your GPU (CUDA or Apple MPS) when there is one. cpu works but is slow enough that it is really only for checking a campaign runs at all. |
-| Data-loading workers | `--workers` | 2 | Matches Boltz's own default of 2. Lower it to 0 if you hit memory pressure on a Mac. |
-| Parallel diffusion samples | `--max-parallel-samples` | 1 | How many diffusion samples Boltz holds in memory at once. 1 is the safe default on unified-memory hardware; raising it multiplies peak memory. |
-| MPS high-watermark ratio | `--mps-watermark` | 1.0 | Apple Silicon only (PYTORCH_MPS_HIGH_WATERMARK_RATIO). Caps how much unified memory PyTorch will claim before it errors instead of swap-thrashing. Ignored elsewhere. |
-| Recycling steps | `--recycling-steps` | Boltz default | Leave blank for Boltz's own default. More steps is slower and usually only marginally better. |
-| Sampling steps | `--sampling-steps` | Boltz default | Leave blank for Boltz's own default. |
-| Structure samples per target | `--diffusion-samples` | Boltz default | Leave blank for one sample per target. Each extra sample costs roughly its own share of diffusion time, and analysis only ever reads the first one (model_0) -- so raise it to inspect pose variability yourself, not to improve the report. |
-| Affinity diffusion samples | `--diffusion-samples-affinity` | Boltz default | Leave blank for Boltz's own default. Only matters for targets with affinity prediction switched on. |
-| Affinity sampling steps | `--sampling-steps-affinity` | Boltz default | Leave blank for Boltz's own default. |
-| Max MSA sequences | `--max-msa-seqs` | Boltz default | Leave blank for Boltz's own default. Lowering it is one of the few levers that meaningfully cuts memory on very large complexes. |
-| Auto-retries per target | `--max-retries` | 2 | A target that fails (typically an out-of-memory kill) is retried in isolation, one target at a time. 0 disables retrying. |
-| Preflight size-warning threshold | `--memory-warn-tokens` | 1000 | Preflight warns when a target's combined residue/atom count exceeds this. It is a warning, not a limit. |
-
-**Scope and safety**
-
-| Setting | Flag | Default | What it does |
-|---|---|---|---|
-| Only run the first N targets | `--limit` | Boltz default | Leave blank to run the whole campaign. Setting it to 1 or 2 is the cheapest way to prove the pipeline works before committing hours of GPU time. |
-| Treat preflight warnings as failures | `--strict` | off | Stops the run before any GPU time is spent if preflight raises any warning at all. |
-
-**Analysis**
-
-| Setting | Flag | Default | What it does |
-|---|---|---|---|
-| Skip PLIP interaction analysis | `--skip-interactions` | off | Leave off. PLIP is what produces the per-target interaction fingerprints the Analysis step shows; skipping it saves minutes but empties that panel. |
-| Skip apo-vs-holo compare-sse | `--skip-sse` | off | Left off, every protein gets an apo reference so the comparison can run: an experimental structure if you gave a PDB id above, otherwise an extra ligand-free prediction of that protein. Those extra targets cost GPU time -- one more target per protein. Tick this to skip the comparison and predict nothing extra. |
-| Keep private | _(this site only)_ | off | Nothing about this run is kept on the server: the bundle is not archived, and the results file you upload later is recognised as private and not archived either. Leave it off and the run is listed under Runs, where you can download the bundle and results again later. |
-
-Submitting validates the spec (`format`, then `generate`, so a broken campaign fails here
-rather than an hour into a run on your machine) and downloads
-`boltzmaker_<campaign>.command`, typically around 200KB. It contains:
+Submitting validates the spec (`format`, then `generate`, so a broken campaign fails here rather
+than an hour into a run on your machine) and downloads `boltzmaker_<campaign>.command`, typically
+around 200KB, containing:
 
 | File | What it is |
 |---|---|
 | `boltz_input.md` | Your campaign spec, tidied to the house style. Editable. |
-| `sse_comparison/`, `vendor/` | The compare-sse package BoltzMaker imports during `analyze`, and the Plotly and 3Dmol builds the offline dashboard embeds. `vendor/` is most of the bundle's size and is included so the run needs nothing from the network beyond the model weights. |
+| `sse_comparison/`, `vendor/` | The compare-sse package `analyze` imports, and the Plotly and 3Dmol builds the offline dashboard embeds. `vendor/` is most of the bundle's size, included so the run needs nothing from the network beyond the model weights. |
 | `config.json` | The run settings, machine-readable. Provenance; not read at run time. |
 | `run_campaign.sh` | Installs the environment, runs the campaign, packs the results. |
 | `pack_results.py` | Writes the `.bmz`. |
 | `BoltzMaker.py` | The pipeline itself. |
 | `pixi.toml`, `pixi.lock` | The pinned environment, locked for macOS (Apple Silicon) and Linux (x86-64). |
 
-To run it, move the downloaded file to the machine with the GPU, put it wherever you want the
-campaign to live, and either double-click it in Finder or run it from a terminal in that
-folder:
+Move the downloaded file to the machine with the GPU, put it wherever you want the campaign to
+live, and either double-click it in Finder or run it from a terminal in that folder:
 
 ```sh
 sh ./boltzmaker_<campaign>.command
 ```
 
-`sh` is fine on any platform: the file re-execs itself under bash on its first line, so it
-behaves the same whether your `/bin/sh` is bash (macOS) or dash (most Linux distributions).
+`sh` is fine on any platform: the file re-execs itself under bash on its first line, so it behaves
+the same whether your `/bin/sh` is bash (macOS) or dash (most Linux distributions).
 `bash ./boltzmaker_<campaign>.command` and `./boltzmaker_<campaign>.command` (once executable)
-work equally well.
+work too.
 
-It unpacks into a folder beside itself and starts immediately: it installs
-[pixi](https://pixi.sh) if you do not have it, solves the environment, then runs `generate` ->
-`preflight` -> `run` -> `analyze` and writes one `<campaign>.bmz` file in that same folder.
-Bring that one file back to the site for Step 2. **Boltz-2's model weights are not in the bundle** --
-they are large and versioned by Boltz itself, so they download on first use and are cached in
-your home directory, meaning a second campaign skips that step.
+It unpacks into a folder beside itself and starts immediately: installs [pixi](https://pixi.sh)
+if you do not have it, solves the environment, then runs `generate` -> `preflight` -> `run` ->
+`analyze`, writing one `<campaign>.bmz` in that same folder. Bring that back for Step 2.
+**Boltz-2's model weights are not in the bundle** -- large and versioned by Boltz itself, they
+download on first use and cache in your home directory, so a second campaign skips that step.
 
 Each long step -- solving the environment, installing PLIP, warming the Boltz CLI -- shows a
-spinner with its elapsed time and reports how long it took, so a terminal that has not moved
-in four minutes is never ambiguous. If a step fails, the last twenty lines of its log are
-printed rather than left in a file you have to go and find.
+spinner with its elapsed time and reports how long it took, so a terminal that has not moved in
+four minutes is never ambiguous; a failing step prints the last twenty lines of its log rather
+than leaving it in a file you have to find. Re-running is safe at any point: `run` is idempotent
+so an interrupted campaign resumes, and the script refuses to overwrite an existing unpacked
+folder. A campaign that fails part-way still packs what completed and records the shortfall.
 
-It is safe to re-run at any point. `run` is idempotent, so an interrupted campaign resumes
-rather than starting over, and the script refuses to overwrite an existing unpacked folder.
-If the campaign fails part-way it still packs what completed, and records the shortfall in the
-results file rather than hiding it.
+The bundle runs the whole pipeline including `analyze`, not just `run`. Once a machine has the
+pinned environment analysis costs seconds more there, and doing it locally is what lets the
+droplet skip a ~1.5GB PLIP environment and a 900-second request for work your machine has already
+done. What comes back is small and already structured -- 4.2MB on a real 15-target campaign,
+against a 19.4MB dashboard and 50.6MB of PyMOL sessions that deliberately stay on your own disk
+-- so Analysis is a reader, not a compute step.
 
-The bundle runs the whole pipeline including `analyze`, not just `run`. Once a machine has
-the pinned environment, analysis costs seconds more there, and doing it locally is what lets
-the droplet skip a ~1.5GB PLIP environment and a 900-second request for work your machine has
-already done. What comes back is small and already structured (measured on a real 15-target
-campaign: 4.2MB, against a 19.4MB dashboard and 50.6MB of PyMOL sessions that deliberately
-stay on your own disk), so Analysis is a reader rather than a compute step.
+### Fully Automated Mode, Step 2: Analysis
 
-#### Step 2: Analysis
+Upload the `.bmz` and the campaign opens as an interactive report. Nothing is recomputed, so it is
+quick regardless of campaign size, and it opens on the campaign summary with the first target
+already selected -- on a one-target campaign there was never a click to make.
 
-Upload the `.bmz` and the campaign opens as an interactive report. Nothing is recomputed, so
-it is quick regardless of campaign size.
+A **header** names the campaign and counts how many predictions it produced, how many are
+flagged and how many carry a structure, warning explicitly if targets are missing from the
+summary because the campaign did not fully complete. Below it, a sortable, filterable
+**targets** table -- target, family, ligand, confidence, pIC50, interaction count and flags,
+filtered by free text, by family, or to flagged targets only -- opens any row you click as the
+**target detail**: four panes for that target, then two campaign-level panes and a sequence
+track.
 
-| Panel | What you get |
+The Target detail heading is itself the target picker, so the panel both names the open target and
+changes it, and a pulldown at the top of the page jumps to any panel. **Download HTML package**
+gives the whole explorer as a directory of files -- one page, Mol*, Plotly and the campaign's own
+data -- to drop into any web root; a **Keep private** campaign gets that download beside a
+**Destroy all data** button, removing the session and any archived bundle and results from the
+server.
+
+**Four equal panes:**
+
+| Pane | Content |
 |---|---|
-| **Header** | Campaign name, how many predictions the campaign produced, how many are flagged, how many carry a structure. An explicit warning if targets are missing from the summary because the campaign did not fully complete. |
-| **Targets** | Sortable, filterable table: target, family, ligand, confidence, pIC50, interaction count and flags. Filter by free text, by family, or to flagged targets only. Click any row to open it. |
-| **Target detail** | Its heading is the target picker, so the panel both names the open target and changes it, and a pulldown at the top of the page jumps to any panel on it. **Download HTML package** gives the whole explorer as a directory of files -- one page, Mol*, Plotly and the campaign's own data -- to drop into any web root; a campaign marked **Keep private** gets that download beside a **Destroy all data** button that removes the session and any archived bundle and results from the server. Four equal panes: a [Mol*](https://molstar.org) **Overall structure** viewer coloured by chain with the ligand in red, a second Mol* viewer framed on the ligand and its contacting residues and turning on load (both with cartoon/surface/spin/reset, and an **AlphaFold** button that overlays that protein's AlphaFold model, superposed server-side on the confident core -- pLDDT >= 70 -- and reporting the accession, how it was resolved, how many Ca it was fitted on and the RMSD), every PLIP contact grouped by type -- residue name, number and chain, the distance, and the geometry that belongs to that interaction (donor and acceptor atom types and the donor angle for a hydrogen bond, the T/P classification and ring offset for a stack, the charge sense and ligand group for a salt bridge) -- and the full metric set including pTM, ipTM, complex pLDDT, predicted affinity, pIC50 with its ensemble spread, and the Ca RMSD to the apo reference (the residue-weighted mean across the motifs compare-sse could align, with that motif count beside it), with this target's ligand depiction filling the space below it. Below those, two panes that describe the campaign rather than one target: **Ligand pose**, every ligand overlaid as sticks in one frame with no protein, and **Superposed targets**, every target as a Ca trace with its RMSD to the campaign's reference beside it -- each with a checkbox per target, and each RMSD given over the residues that actually agree, with that count. Then, full width, the target's sequence: a per-residue track coloured by property with the PLIP contacts marked, and above it a conservation logo aligned across every distinct protein in the campaign, drawn in bits of information. Hovering a residue names it and lists its contacts and its conservation; clicking one selects and frames it in both viewers, as does clicking a contact. Open on the first target from the start, rather than waiting for a click that on a one-target campaign there was nothing to make. |
+| Overall structure | A [Mol*](https://molstar.org) viewer coloured by chain, ligand in red |
+| Binding site | A second Mol* viewer framed on the ligand and its contacting residues, turning on load |
+| Interactions | Every PLIP contact grouped by type: residue name, number and chain, the distance, and the geometry belonging to that interaction -- donor and acceptor atom types and the donor angle for a hydrogen bond, the T/P classification and ring offset for a stack, the charge sense and ligand group for a salt bridge |
+| Metrics | pTM, ipTM, complex pLDDT, predicted affinity, pIC50 with its ensemble spread, and the Ca RMSD to the apo reference (the residue-weighted mean across the motifs compare-sse could align, with that motif count beside it), with the ligand depiction filling the space below |
 
-Everything else on the page comes from BoltzMaker's own reports, and the whole sequence --
-this page's panels and the reports' -- is one ordered list in `reports.PANEL_ORDER`, so
-reordering the page is a line moved rather than a template edit. It opens on the campaign
-summary. BoltzMaker's own **pIC50 vs confidence score** scatter is the one kept, and it is
-wired up here so clicking a point opens that target.
+Both viewers carry cartoon/surface/spin/reset and an **AlphaFold** button overlaying that
+protein's AlphaFold model, superposed server-side on the confident core (pLDDT >= 70) and
+reporting the accession, how it was resolved, how many Ca it was fitted on, and the RMSD.
 
-Beneath those panels sit **BoltzMaker's own**, lifted out of the reports it generated and
-rendered as siblings: the campaign summary, ligand preparation, the 2D ligand structures,
-ranked pIC50 and confidence, the family-by-ligand selectivity heatmap, interaction counts,
-pIC50 against binder probability, a residue interaction fingerprint per family, and the
-secondary-structure tables and charts. Twenty panels on a real campaign, against the two the
-explorer draws itself. Both reports can still be downloaded whole.
+**Two campaign-level panes** sit below: **Ligand pose**, every ligand overlaid as sticks in one
+frame with no protein, and **Superposed targets**, every target as a Ca trace with its RMSD to the
+campaign's reference beside it. Each has a checkbox per target, and each RMSD is given over the
+residues that actually agree, with that count.
 
-They are lifted rather than reimplemented, so they cannot drift from the analysis code, and
-merged rather than framed, so the page does not become a scrolling document inside a card.
+**Then, full width, the target's sequence:** a per-residue track coloured by property with the
+PLIP contacts marked, and above it a conservation logo aligned across every distinct protein in
+the campaign, drawn in bits of information. Hovering a residue names it and lists its contacts and
+conservation; clicking one selects and frames it in both viewers, as does clicking a contact.
 
-**Nothing from the results file executes.** It is user input rendered on this site's own
-origin, so the markup is reduced to a tag allowlist by a tokeniser -- not a regex, which was
-defeated by a `<` inside a quoted attribute -- and every chart is rebuilt from its data: each
-`Plotly.newPlot` call has its arguments JSON-parsed on the server and handed to the page as
-values, which the page's own code then plots. Parsed and re-serialised, an injected payload is
-inert text.
+**BoltzMaker's own panels sit beneath**, lifted out of the reports it generated and rendered as
+siblings -- every panel listed under **Inside `boltz_dashboard.html`** above, twenty on a real
+campaign against the two the explorer draws itself, both reports still downloadable whole. They
+are lifted rather than reimplemented, so they cannot drift from the analysis code, and merged
+rather than framed, so the page does not become a scrolling document inside a card. The whole
+sequence is one ordered list in `reports.PANEL_ORDER`, so reordering the page is a line moved
+rather than a template edit. BoltzMaker's **pIC50 vs confidence score** scatter is the one kept,
+wired up so clicking a point opens that target. On it, the dashed vertical line at **0.5** is the
+genuine absolute low-confidence cutoff, while the mismatch flags
+(`HIGH_CONFIDENCE_POOR_AFFINITY`, `LOW_CONFIDENCE_STRONG_AFFINITY`) are **not** absolute: they
+come from splitting *that campaign* into terciles, so they mean "relative to the other targets
+you ran". There is deliberately no horizontal affinity threshold line, because drawing one would
+imply a fixed cutoff the numbers do not support.
 
-Two things are deliberately dropped. The reports' binding-site panels, because the explorer
+**Nothing from the results file executes.** It is user input rendered on this site's own origin,
+so the markup is reduced to a tag allowlist by a tokeniser -- not a regex, which was defeated by a
+`<` inside a quoted attribute -- and every chart is rebuilt from its data: each `Plotly.newPlot`
+call has its arguments JSON-parsed on the server and handed to the page as values, which the
+page's own code then plots. Parsed and re-serialised, an injected payload is inert text.
+
+Two things are deliberately dropped: the reports' binding-site panels, because the explorer
 already gives every target a pose viewer with its interactions beside it and the PyMOL sessions
-they link to are not in the archive; and the compare-sse charts the dashboard embeds, because
-the compare-sse page carries the same charts under the same element ids, and rendering both
-would put two divs with one id on the page -- leaving the second unreachable and silently
-undrawn.
+they link to are not in the archive; and the compare-sse charts the dashboard embeds, because the
+compare-sse page carries the same charts under the same element ids, and rendering both would put
+two divs with one id on the page, leaving the second unreachable and silently undrawn.
 
-Two things worth knowing about the plot. The dashed vertical line at **0.5** is BoltzMaker's
-genuine absolute low-confidence cutoff. The mismatch flags (`HIGH_CONFIDENCE_POOR_AFFINITY`,
-`LOW_CONFIDENCE_STRONG_AFFINITY`) are **not** absolute: BoltzMaker assigns them by splitting
-*that campaign* into terciles, so they mean "relative to the other targets you ran", and there
-is deliberately no horizontal affinity threshold line, because drawing one would imply a fixed
-cutoff the numbers do not support.
+An open target is deep-linkable -- the URL carries it, so a link to one target can be shared or
+reloaded. **Sessions do not expire on a clock**: an analysis link keeps working, and uploads are
+removed only when the space set aside for them fills, least recently opened first. **Download
+summary CSV** gives the full summary table including every column not shown in the browser.
 
-An open target is deep-linkable -- the URL carries it, so a link to one target can be shared
-or reloaded. **Sessions do not expire on a clock**: an analysis link keeps working, and uploads
-are removed only when the space set aside for them fills, least recently opened first. The
-**Download summary CSV** button gives you the full summary table including every column not
-shown in the browser.
-
-A note on vocabulary: BoltzMaker calls each `Protein:` block a **family**, and its own reports
-use that word throughout. A campaign with one receptor and an apo companion therefore has two
+A note on vocabulary: BoltzMaker calls each `Protein:` block a **family**, and its own reports use
+that word throughout. A campaign with one receptor and an apo companion therefore has two
 families, which reads oddly, so this page says **protein** for the same thing and counts
 **predictions** rather than families.
 
 ### Stepwise Mode
 
-The same non-GPU stages as four independent tools. Each takes an upload and hands back a
-download, and none of them depends on the others, so you can use just the one you need.
+The same non-GPU stages as four independent tools. Each takes an upload and hands back a download,
+and none depends on the others.
 
 | Tool | You give it | You get back |
 |---|---|---|
@@ -1345,26 +1300,63 @@ download, and none of them depends on the others, so you can use just the one yo
 | **Preflight** | A `boltz_input.md` | The full check table: SMILES and ligand chemistry, chain-id lengths, duplicate targets, size heuristics. The GPU and model-weight checks report on the server, not your machine, so read those on your own hardware instead. |
 | **Analyze** | A zip of a completed campaign folder (`boltz_input.md` + `boltz_yamls/` + `boltz_output/`, plus any `Apo structure:` files) | The summary CSV/XLSX, the interactive dashboard rendered in the page, and a zip of everything including the CIFs, PLIP output and compare-sse results |
 
-Use Stepwise when you already have your own setup and want one piece of it; use Fully
-Automated when you want the whole pipeline handled.
-
 ### Runs
 
-The landing page carries the five most recent, with a link straight into each one's analysis.
-The full table is at **/runs**: everything not marked private, in one place: campaign, when it was prepared, target count,
-the bundle, and the results file once uploaded. Each row offers the bundle and the `.bmz`
-for download, and **explore**, which re-opens the analysis from the archived results without
-uploading anything again.
+The landing page carries the five most recent runs with a link straight into each one's analysis.
+The full table is at [**/runs**](https://boltzmaker.mdeller.com/runs): everything not marked
+private, in one place -- campaign, when it was prepared, target count, the bundle, and the results
+file once uploaded. Each row offers the bundle and the `.bmz` for download, and **explore**, which
+re-opens the analysis from the archived results without uploading anything again. The six public
+campaigns listed under **Examples** above all live here.
 
-The archive is **capped** -- 3GB and 200 runs -- and prunes oldest-first when it fills, with
-each removal recorded so a missing run is explainable rather than a mystery. The host this
-runs on has ~16GB free and also serves three other apps, so an uncapped archive would be a
-slow-motion disk-full outage.
+The archive is **capped** -- 3GB and 200 runs -- and prunes oldest-first when it fills, each
+removal recorded so a missing run is explainable rather than a mystery. The host has ~16GB free
+and also serves three other apps, so an uncapped archive would be a slow-motion disk-full outage.
 
-### Limits, and what to do when something goes wrong
+### How it is built and served
 
-| Situation | What is happening |
+**Source and tested-CLI isolation.** The web app lives in `web/`, and the isolation that matters
+is the process boundary. `BoltzMaker.py` was never designed to be imported (it relaunches itself
+into a managed venv at module import time), so the Flask app only ever invokes it as a subprocess, with
+an explicit minimal environment and a per-command timeout, through a dedicated trimmed venv
+(`.venv/`, torch/boltz-free, ~500MB -- every torch/boltz reference in the script is a
+function-local lazy import) kept separate from the Flask-serving venv (`web/.venv/`).
+
+**The `.bmz` results file.** A zip carrying `manifest.json` (format version, campaign name,
+timestamps, a SHA-256 of the `BoltzMaker.py` that produced it, per-file checksums, and an explicit
+record of anything not packed), the summary CSVs, one structure per target, and one labelled PLIP
+image per target. Its layout is written by the bundle's generated `pack_results.py` and read by
+`web/boltzmaker_web/results.py`; both mirror one `BMZ_VERSION`, and a file declaring any other
+version is refused rather than parsed optimistically. Every uploaded zip -- a `.bmz` or a
+Stepwise campaign folder -- is treated as hostile: extraction is bounded on entry count, declared
+size, actual written size, compression ratio and resolved path (so zip-slip and zip-bomb payloads
+are rejected), with every check run over the whole member list before a single byte is written.
+
+**Optional PLIP.** With the droplet's `.plip_env` present (the same conda-forge PyMOL/OpenBabel
+environment `setup-plip` builds locally, ~1-1.5GB), hosted `analyze` runs full interaction
+detection and compare-sse; without it, both degrade gracefully rather than erroring, as locally.
+
+**Serving stack:** gunicorn (3 sync workers, 900s timeout to cover PLIP rendering and compare-sse's
+GPCRdb/KLIFS/PDBe lookups) behind nginx (Let's Encrypt TLS via certbot, HTTP/2, rate-limited upload
+endpoints, 200MB body cap), as a hardened systemd service (dedicated unprivileged user, memory/CPU
+caps). Every request gets its own scratch directory, deleted when the request finishes and swept
+by a five-minute cleanup timer as a backstop.
+
+## 🩹 Troubleshooting / FAQ
+
+Local runs first, then the hosted site.
+
+| Problem | What is happening, and what to do |
 |---|---|
+| `setup-plip` fails, or `pip install plip` tries to build OpenBabel from source | Expected without conda-forge -- `plip`'s own installer forces a from-source OpenBabel rebuild unless OpenBabel is already importable *inside pip's build sandbox*, and the standalone PyPI `pymol-open-source` wheel has a hardcoded broken library path on at least some machines. `setup-plip` works around both via a self-downloaded micromamba; re-run `python3 BoltzMaker.py setup-plip --force` if a previous attempt left a half-built `.plip_env`. |
+| A `preflight`/`analyze` step involving `.plip_env` errors with `ModuleNotFoundError: No module named 'chatmol'` (or similar) | A stray `~/.pymolrc.py` (e.g. from an unrelated PyMOL plugin) is being loaded by the bundled PyMOL. BoltzMaker already overrides `HOME` for these subprocess calls so this shouldn't reach you, but if it does, check `~/.pymolrc.py` for anything referencing a package not installed in `.plip_env`. |
+| `run` seems to hang with no progress, or your Mac gets extremely slow | Check the memory figure in the progress bar and see **Memory on Mac** above -- very likely swap-thrashing, not a genuine stall. Re-run with a lower `--mps-watermark`, `--workers 1` and `--max-parallel-samples 1`. |
+| A target's YAML/CIF exists on disk but BoltzMaker says it's missing, or `preflight` hangs | Check for iCloud "Optimize Mac Storage" dataless files -- `preflight`'s `icloud_materialize` check handles this automatically, but a very large campaign can take a while to force-download everything on first run. |
+| `boltz` fails during `setup` with a `numpy` build error | You're likely on Python 3.13+. `boltz` pins `numpy<2.0`, which has no prebuilt wheel past cp312 -- `_find_boltz_python()` already looks for a `python3.12` specifically; install one (`brew install python@3.12`) if it can't find one. |
+| A run dies with `torch._C._LinAlgError: linalg.svd ... failed to converge because the input matrix is ill-conditioned` | Not a conditioning problem, and not an OOM. Measured on this hardware: of every degenerate 3x3 (rank-1, zeros, repeated singular values, 1e-20, 1e20) plus 2000 random matrices, the only input that raises it is one containing **NaN** -- the diffusion coordinates have already diverged before the alignment runs. `linalg.svd` is not even an MPS op (it falls back to CPU), so forcing it to CPU changes nothing. Apply `patches/apply_boltz_patches.py` so the failure is contained to that one target, then try that target with `--no-potentials`, since the physical-guidance coordinate update is one of the places a trajectory can diverge. |
+| One target's failure kills the whole `boltz predict`, and targets behind it never run | `boltz`'s `predict_step` skips a batch on out-of-memory but re-raises everything else, and `LinAlgError` subclasses `RuntimeError`. Run `python3 patches/apply_boltz_patches.py` (idempotent, keeps `.orig` backups) -- `preflight`'s `boltz_patches` row reports whether it is applied. Re-run it after any `boltz` upgrade, which silently reverts it. |
+| A target fails preflight with a chain-id-length error | Boltz truncates chain IDs to 5 characters internally (a fixed-width field in its own schema) and silently corrupts longer ones rather than erroring at parse time -- shorten the protein/partner/ligand name in `boltz_input.md`. |
+| The dashboard's charts (or the binding-site 3D view) don't render, or look unstyled | plotly.js and 3Dmol.js are vendored and inlined (not CDN-loaded), so a missing network connection shouldn't cause this -- Google Fonts is still CDN-loaded for styling, so the page needs internet access at least once for the fonts to look right (falls back to a generic sans-serif otherwise; charts, 3D views and data are unaffected). If they genuinely don't render, check that `vendor/plotly-2.35.2.min.js` and `vendor/3Dmol-2.5.5-min.js` exist next to `BoltzMaker.py` -- `analyze` prints a warning and falls back to the relevant CDN (known not to work in some HTML-preview contexts) if either is missing. |
 | Upload rejected as too large | Uploads are capped at **200MB**. The packer aims below that (it stops at 180MB, dropping the largest structures first and recording each one in the manifest), so hitting this usually means an unusually large campaign. Analyse it locally with `boltz_dashboard.html` instead. |
 | "This results file declares format version N" | The `.bmz` was written by a different version of the bundle than the site understands. Prepare a fresh bundle and re-pack; the file itself is not damaged. |
 | "No manifest.json in the upload" | A campaign folder was uploaded instead of the `.bmz`. Either upload the `.bmz` the bundle wrote, or use Stepwise Mode's **Analyze**, which is the tool that takes a campaign folder. |
@@ -1374,42 +1366,7 @@ slow-motion disk-full outage.
 | Preflight warns on `vendor_assets` | Plotly or 3Dmol is missing from `vendor/`, so the dashboard will reach for a CDN and will not render offline. The run itself is unaffected. |
 | Preflight warns `boltz_cli` did not answer `--help` in 120s | A cold first import, not a broken install: `boltz --help` loads the whole torch stack, and a freshly solved environment byte-compiles it too. The bundle warms it before the campaign, and it is a warning that does not stop the run. |
 | The interactions panel is empty | PLIP either did not run for that target, or found nothing. If you switched **Skip PLIP interaction analysis** on when preparing, that is the cause. |
-| A session link stops working | Sessions expire after two hours. Upload the file again; nothing is lost, since the `.bmz` is on your own disk. |
-
-### How it is built and served
-
-**Source and tested-CLI isolation.** The web app lives in `web/`. It was developed on a
-separate `web` branch/worktree so that web-app work could never disturb the tested
-`BoltzMaker.py`, and has since been merged into `main` -- the isolation that matters is
-now the process boundary described next, not a branch boundary. `BoltzMaker.py` was never
-designed to be imported (it relaunches itself into a managed
-venv at module import time), so the Flask app only ever invokes it as a subprocess, with an
-explicit minimal environment and a per-command timeout, through a dedicated trimmed venv
-(`.venv/`, torch/boltz-free, ~500MB -- every torch/boltz reference in the script is a
-function-local lazy import) kept separate from the Flask-serving venv (`web/.venv/`).
-
-**The `.bmz` results file.** A zip carrying `manifest.json` (format version, campaign name,
-timestamps, a SHA-256 of the `BoltzMaker.py` that produced it, per-file checksums, and an
-explicit record of anything not packed), the summary CSVs, one structure per target, and one
-labelled PLIP image per target. Its layout is written by the bundle's generated
-`pack_results.py` and read by `web/boltzmaker_web/results.py`; both mirror one `BMZ_VERSION`,
-and a file declaring any other version is refused rather than parsed optimistically. Uploads
-are treated as hostile: extraction is bounded on entry count, declared size, actual written
-size, compression ratio and resolved path, with every check run over the whole member list
-before a single byte is written.
-
-**Optional PLIP.** If the droplet's `.plip_env` (the same conda-forge PyMOL/OpenBabel
-environment `setup-plip` builds locally, ~1-1.5GB) is present, `analyze` runs full
-protein-ligand interaction detection and compare-sse automatically; if not, both degrade
-gracefully rather than erroring, exactly as they do locally.
-
-**Serving stack:** gunicorn (3 sync workers, 900s timeout to cover PLIP rendering and
-compare-sse's GPCRdb/KLIFS/PDBe lookups) behind nginx (Let's Encrypt TLS via certbot, HTTP/2,
-rate-limited upload endpoints, 200MB body cap), as a hardened systemd service (dedicated
-unprivileged user, memory/CPU caps). Every request gets its own scratch directory, deleted
-when the request finishes and swept by a five-minute cleanup timer as a backstop; uploaded
-zips are checked for zip-slip and zip-bomb payloads (path-traversal/absolute-path rejection,
-uncompressed-size and entry-count caps) before anything is extracted.
+| A session link stops working | Sessions are not deleted for being old, but the oldest are evicted once the space set aside for them fills, least recently opened first. Upload the file again; nothing is lost, since the `.bmz` is on your own disk. |
 
 ## 🧫 Testing
 
@@ -1418,30 +1375,30 @@ uncompressed-size and entry-count caps) before anything is extracted.
 .venv/bin/pytest tests/
 ```
 
-432 tests here, plus 609 for the web app on the `web` branch. The `compare-sse` annotators are covered against real fixture data (a real apo EGFR
-kinase-domain structure vs the `egfr_covalent` example's real holo prediction; a real
-apo beta2-adrenergic-receptor structure vs `adrb2_gs_panel`'s real holo predictions),
-with GPCRdb/KLIFS/PDBe network calls swapped for an injectable fake client seeded with
-real, previously-verified API responses -- fully offline and fast (~9s). Plus grammar
-and CLI-resolution tests for the parser fields above, chain-resolution tests against real
-fusion-construct and kinase-domain-only apo structures, GPCRdb/KLIFS/Pfam annotator
-pipelines, and the dashboard's summary-stats and SSE-table column logic.
+432 tests here, plus 609 for the web app. The `compare-sse` annotators are covered against real
+fixture data (a real apo EGFR kinase-domain structure vs the `egfr_covalent` example's real holo
+prediction; a real apo beta2-adrenergic-receptor structure vs `adrb2_gs_panel`'s real holo
+predictions), with GPCRdb/KLIFS/PDBe network calls swapped for an injectable fake client seeded
+with real, previously-verified API responses -- fully offline and fast (~9s). Plus grammar and
+CLI-resolution tests for the parser fields above, chain-resolution tests against real
+fusion-construct and kinase-domain-only apo structures, GPCRdb/KLIFS/Pfam annotator pipelines, and
+the dashboard's summary-stats and SSE-table column logic.
 
-The web app's own 53 tests cover Fully Automated Mode end to end. Rather than asserting
-against a hand-written `.bmz` fixture, they render the real `pack_results.py` out of a real
-bundle, run it over a synthetic campaign, and read the result back with the real reader --
-the packer and the reader are two halves of one contract living in different files and
-running on different machines, which is exactly the shape of thing that drifts silently.
-Also covered: the generated bundle is really executed under `sh`, `bash`, `dash`, `zsh` and
-`ksh` (with its final step stubbed) to prove the documented `sh ./<bundle>.command` works where
-`/bin/sh` is dash as well as where it is bash, the generated scripts are checked with `bash -n`
-(they only ever execute on someone else's machine), every run-setting flag is checked against `BoltzMaker.py all
---help` so a typo cannot reach a user's overnight run, and the hostile-upload guards are
-exercised with real zip-slip, compression-bomb and malformed-manifest archives.
+53 of the web app's tests cover Fully Automated Mode end to end. Rather than asserting against a
+hand-written `.bmz` fixture, they render the real `pack_results.py` out of a real bundle, run it
+over a synthetic campaign, and read the result back with the real reader -- packer and reader are
+two halves of one contract living in different files on different machines, exactly the shape of
+thing that drifts silently. Also covered: the generated bundle really executed under `sh`,
+`bash`, `dash`, `zsh` and `ksh` (final step stubbed), proving the documented
+`sh ./<bundle>.command` works where `/bin/sh` is dash as well as bash; the generated scripts
+checked with `bash -n` (they only ever execute on someone else's machine); every run-setting flag
+checked against `BoltzMaker.py all --help` so a typo cannot reach a user's overnight run; and the
+hostile-upload guards exercised with real zip-slip, compression-bomb and malformed-manifest
+archives.
 
-Note that four `compare-sse` tests need example structure data that is gitignored
-(`examples/*/boltz_cif/`), so they fail in a fresh clone until you have run one of the
-example campaigns.
+Four `compare-sse` tests need example structure data that is gitignored
+(`examples/*/boltz_cif/`), so they fail in a fresh clone until you have run one of the example
+campaigns.
 
 ## 📚 Citation
 

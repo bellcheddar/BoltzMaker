@@ -37,6 +37,17 @@ boltz_sse_comparison_sessions/
 # Local staging bundle for manual upload to WordPress -- not tracked in git
 wordpress/
 
+# Exported Claude Code session transcripts. `/export` writes them into the repo
+# folder, and a transcript carries the whole conversation -- compound codenames,
+# share passwords, private run keys. This repo is public. One `git add -A` is all
+# it would take, so they are ignored rather than left to discipline.
+*-this-session-is-being-continued-*.txt
+20[0-9][0-9]-[0-9][0-9]-[0-9][0-9]-[0-9]*.txt
+
+# README backups taken before a rewrite. Working copies, not history --
+# git already has that.
+README.backup*.md
+
 # Elementor README/report forge output (regenerate with readme_forge.py as needed)
 *.polished.md
 README.html
