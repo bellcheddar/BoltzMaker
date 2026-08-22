@@ -51,6 +51,25 @@ def clean_pdb_id(raw: str) -> str:
     return value
 
 
+def clean_reference_path(raw: str) -> str:
+    """A path to a file the campaign carries, relative to its own folder.
+
+    Absolute paths and parent traversal are refused rather than cleaned: this
+    string is written into a spec that runs on someone's machine, and "reference/"
+    plus a filename is the only shape the bundle can actually deliver. Refusing is
+    also the honest answer -- silently rewriting a path would produce a campaign
+    that points somewhere the author did not mean.
+    """
+    value = (raw or "").strip().replace("\\", "/")
+    if not value:
+        return ""
+    if value.startswith("/") or value.startswith("~") or ".." in value.split("/"):
+        raise WizardValidationError(
+            f"Apo structure path '{raw}' must be inside the campaign folder, "
+            "e.g. reference/2rh1_apo.pdb.", field="protein_apo_path")
+    return value
+
+
 def clean_accession(raw: str) -> str:
     """Normalise an optional UniProt accession, or raise.
 
@@ -105,6 +124,12 @@ def _parse_form() -> tuple[bool, list[ProteinInput], list[PartnerInput], list[Li
     protein_partners_raw = request.form.getlist("protein_partners[]")  # comma-separated
     protein_apo_raw = request.form.getlist("protein_apo_pdb[]")
     protein_uniprot_raw = request.form.getlist("protein_uniprot[]")
+    protein_ligands_raw = request.form.getlist("protein_ligands[]")   # comma-separated
+    protein_group_raw = request.form.getlist("protein_group[]")
+    protein_family_raw = request.form.getlist("protein_family_type[]")
+    protein_apo_path_raw = request.form.getlist("protein_apo_path[]")
+    protein_apo_chain_raw = request.form.getlist("protein_apo_chain[]")
+    protein_apo_name_raw = request.form.getlist("protein_apo_name[]")
     # A set of row ordinals, not a parallel array: an unchecked box posts nothing,
     # so this field is shorter than the others by however many were left unticked.
     # Anything unparseable is ignored rather than shifting a row's meaning.
@@ -139,11 +164,24 @@ def _parse_form() -> tuple[bool, list[ProteinInput], list[PartnerInput], list[Li
                     f"Protein '{name}' references partner '{pn}', which isn't defined above.",
                     field="protein_partners",
                 )
+        def _row(values, default=""):
+            raw = values[row_index] if row_index < len(values) else default
+            return (raw or "").strip()
+
+        family_type = _row(protein_family_raw).lower()
+        if family_type not in ("gpcr", "kinase", "auto"):
+            family_type = ""          # "auto" is the parser's own default; say nothing
         proteins.append(ProteinInput(
             name=name, sequence=seq, partner_names=chosen_partners,
             apo_pdb=clean_pdb_id(apo_raw),
             apo_predict=(row_index in apo_predict_rows) if apo_field_present else True,
             uniprot=clean_accession(uniprot_raw),
+            ligand_names=[x.strip() for x in _row(protein_ligands_raw).split(",") if x.strip()],
+            group=_row(protein_group_raw),
+            family_type=family_type,
+            apo_path=clean_reference_path(_row(protein_apo_path_raw)),
+            apo_chain=_row(protein_apo_chain_raw)[:4],
+            apo_name=_row(protein_apo_name_raw)[:5].upper(),
         ))
 
     protein_names_defined = {p.name for p in proteins}
@@ -183,6 +221,7 @@ def _parse_form() -> tuple[bool, list[ProteinInput], list[PartnerInput], list[Li
     # all, and truncating to the shortest list is exactly the bug the check below
     # exists to catch.
     ligand_classes = request.form.getlist("ligand_class[]")
+    ligand_roles = request.form.getlist("ligand_role[]")
     ligands: list[LigandInput] = []
     # zip() over parallel arrays truncates to the shortest, which is how a form bug
     # that posted one ligand_kind for several rows silently dropped every ligand after
@@ -207,8 +246,11 @@ def _parse_form() -> tuple[bool, list[ProteinInput], list[PartnerInput], list[Li
         used_names.add(name)
         if not value.strip():
             raise WizardValidationError(f"Ligand '{name}' needs a SMILES or CCD value.", field="ligand_value")
+        role = (ligand_roles[index] if index < len(ligand_roles) else "").strip().lower()
+        if role not in ("agonist", "antagonist"):
+            role = ""
         ligands.append(LigandInput(name=name, kind=kind, value=value,
-                                   ligand_class=ligand_class))
+                                   ligand_class=ligand_class, role=role))
 
     return predict_affinity, proteins, partners, ligands, confine_to_receptor
 

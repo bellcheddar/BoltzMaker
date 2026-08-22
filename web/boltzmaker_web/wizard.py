@@ -105,6 +105,18 @@ class ProteinInput:
     # structure is the comparison reference and no ligand-free prediction is made for
     # this protein: measured beats predicted.
     apo_pdb: str = ""
+    # A reference file shipped inside the campaign, e.g. "reference/2rh1_apo.pdb",
+    # instead of a PDB id to download. Every example campaign uses one, which is why
+    # none of them could be loaded back into a form that only understood ids. Wins
+    # over apo_pdb when both are set: a file the campaign carries is not ambiguous.
+    apo_path: str = ""
+    # Chain id inside that apo structure, when the file holds more than one copy.
+    apo_chain: str = ""
+    # The companion's own name. Normally derived, but a spec being loaded back in
+    # already has one, and regenerating it renames the chain -- 5HT2's hand-picked
+    # H2AAP/H2BAP/H2CAP came back as 5HAP/5HTAP/APO, which is a different campaign
+    # as far as every output filename is concerned.
+    apo_name: str = ""
     # Predict a ligand-free companion of this protein. On by default, and
     # independent of apo_pdb: an experimental structure is the better thing to
     # measure against, but a predicted apo of the user's own construct is worth
@@ -122,6 +134,16 @@ class ProteinInput:
     # site named anywhere in the campaign, including sites taken from another
     # protein's structure and projected here through a sequence alignment.
     pockets: dict = field(default_factory=dict)
+    # Restrict this protein to a subset of the campaign's ligands. Empty means the
+    # default: crossed with every ligand. The examples rely on this -- ADRB2+Gs is
+    # scoped to the agonist and the Gs-free copy to the antagonist, because a
+    # G-protein only forms a ternary complex with an agonist-bound receptor.
+    ligand_names: list[str] = field(default_factory=list)
+    # Shared report name for several Protein blocks that are the same receptor, and
+    # the motif annotator to use. Both are spec features the form used to have no
+    # field for, which meant a spec using them could not be loaded back into it.
+    group: str = ""
+    family_type: str = ""
 
 
 @dataclass
@@ -142,6 +164,9 @@ class LigandInput:
     #: Reporting only -- it never reaches a YAML -- but it is what tells a reader
     #: which points on a chart are the yardstick and which are the question.
     ligand_class: str = "experimental"
+    #: "agonist" / "antagonist", or empty. Reporting only -- it shapes the points on
+    #: the affinity charts -- but the spec has always carried it and the form did not.
+    role: str = ""
 
 
 def assemble_boltz_input_md(
@@ -153,6 +178,7 @@ def assemble_boltz_input_md(
     confine_to_receptor: bool = True,
     apo_reference_paths: dict = None,
     pocket_distance: float = 0.0,
+    targets_per_invocation: str = "",
 ) -> str:
     """Builds the exact same line-list structure cmd_new does, then
     "\\n".join(...) + "\\n" -- byte-for-byte the same assembly rule.
@@ -175,6 +201,12 @@ def assemble_boltz_input_md(
     # it on produces the same spec it always did.
     if not confine_to_receptor:
         out.append("Confine to receptor: no")
+    # How many targets one `boltz predict` process may run before BoltzMaker starts a
+    # fresh one. Only written when set, so a campaign that leaves it alone produces
+    # the spec it always did. It matters on unified memory: the MPS allocator never
+    # gives everything back, so a long campaign starves itself without recycling.
+    if str(targets_per_invocation).strip():
+        out.append(f"Targets per invocation: {str(targets_per_invocation).strip()}")
     # Only written when a pocket is actually in use, so a campaign without one
     # produces the same file it always did.
     if pocket_distance and any(p.pockets for p in proteins):
@@ -205,14 +237,15 @@ def assemble_boltz_input_md(
 
     if compare_sse:
         for p in proteins:
-            experimental = apo_reference_paths.get(p.name) if p.apo_pdb else None
+            experimental = p.apo_path or (apo_reference_paths.get(p.name) if p.apo_pdb else None)
 
             companion_path = None
             if p.apo_predict:
-                companion = apo_companion_name(p.name, used_names)
+                companion = p.apo_name or apo_companion_name(p.name, used_names)
                 used_names.add(companion)
                 apo_companions.append(ProteinInput(name=companion, sequence=p.sequence,
-                                                   partner_names=list(p.partner_names)))
+                                                   partner_names=list(p.partner_names),
+                                                   group=p.group, family_type=p.family_type))
                 companion_path = f"boltz_cif/{companion}_model_0.cif"
 
             # A family can name exactly one apo structure, so when both exist the
@@ -228,8 +261,12 @@ def assemble_boltz_input_md(
         block = [f"Protein: {p.name}", f"Sequence: {p.sequence.strip()}"]
         if p.partner_names:
             block.append(f"Partners: {', '.join(p.partner_names)}")
+        if p.ligand_names:
+            block.append(f"Ligands: {', '.join(p.ligand_names)}")
         if apo_reference.get(p.name):
             block.append(f"Apo structure: {apo_reference[p.name]}")
+            if p.apo_chain:
+                block.append(f"Apo chain: {p.apo_chain}")
         # Which structure this protein's site was read out of. The form has always
         # known it -- it downloaded the entry and extracted the contacts -- and used
         # to drop it here, so the report could name a pocket but never say what it
@@ -239,6 +276,10 @@ def assemble_boltz_input_md(
         for code, positions in sorted(p.pockets.items()):
             for position in positions:
                 block.append(f"Pocket contact: {p.name} residue {position} as {code}")
+        if p.family_type:
+            block.append(f"Family type: {p.family_type}")
+        if p.group:
+            block.append(f"Group: {p.group}")
 
         protein_blocks.append(block)
         for c in p.constraints:
@@ -249,22 +290,23 @@ def assemble_boltz_input_md(
         if companion.partner_names:
             block.append(f"Partners: {', '.join(companion.partner_names)}")
         block.append("Ligands: none")      # the whole point: same system, no ligand
+        if companion.family_type:
+            block.append(f"Family type: {companion.family_type}")
+        if companion.group:
+            block.append(f"Group: {companion.group}")
         protein_blocks.append(block)
 
     partner_blocks = [[f"Partner: {pt.name}", f"Sequence: {pt.sequence.strip()}"] for pt in partners]
 
     ligand_blocks = []
     for lg in ligands:
-        if lg.kind == "ccd":
-            block = [f"Ligand: {lg.name}", f"CCD: {lg.value.strip()}"]
-            if lg.ligand_class:
-                block.append(f"Class: {lg.ligand_class}")
-            ligand_blocks.append(block)
-        else:
-            block = [f"Ligand: {lg.name}", f"SMILES: {lg.value.strip()}"]
-            if lg.ligand_class:
-                block.append(f"Class: {lg.ligand_class}")
-            ligand_blocks.append(block)
+        key = "CCD" if lg.kind == "ccd" else "SMILES"
+        block = [f"Ligand: {lg.name}", f"{key}: {lg.value.strip()}"]
+        if lg.role:
+            block.append(f"Role: {lg.role}")
+        if lg.ligand_class:
+            block.append(f"Class: {lg.ligand_class}")
+        ligand_blocks.append(block)
 
     for block in protein_blocks + partner_blocks + ligand_blocks:
         out.append("")

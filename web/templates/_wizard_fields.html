@@ -53,6 +53,16 @@
         holo reference per ligand below &mdash; a pocket belongs to the ligand, not the
         protein.</p>
     </div>
+    {#  A spec setting BoltzMaker has always understood and this form could not say,
+        which is what stopped its own campaigns being loaded back in.  #}
+    <div class="md-field">
+      <label for="targets_per_invocation">Targets per prediction process (optional)</label>
+      <input type="text" inputmode="numeric" id="targets_per_invocation"
+             name="targets_per_invocation" placeholder="leave blank for the default">
+      <p class="md-hint">Restarts <code>boltz predict</code> every N targets. On Apple
+        unified memory the allocator never gives everything back, so a long campaign
+        starves itself; only process exit frees it. <code>0</code> disables recycling.</p>
+    </div>
   </div>
 
   <div class="md-card">
@@ -113,6 +123,33 @@
       <label>Co-folded partners (comma-separated short names, optional)</label>
       <input type="text" name="protein_partners[]" placeholder="e.g. GNAS, GNB1, GNG2">
     </div>
+    {#  Scoping, grouping and the annotator: three things a spec could always say and
+        this form could not, which is why no example campaign could be loaded back
+        into it. The examples depend on the first one -- ADRB2+Gs is scoped to the
+        agonist and the Gs-free copy to the antagonist, because a G protein only forms
+        a ternary complex with an agonist-bound receptor.  #}
+    <div class="md-field">
+      <label>Only these ligands (comma-separated, optional)</label>
+      <input type="text" name="protein_ligands[]" placeholder="e.g. ISO1">
+      <p class="md-hint">Blank crosses this protein with every ligand below. Name a
+        subset when a protein should only be run against some of them.</p>
+    </div>
+    <div class="md-field">
+      <label>Report group (optional)</label>
+      <input type="text" name="protein_group[]" maxlength="5" placeholder="e.g. ADRB2">
+      <p class="md-hint">Shared name for several blocks that are the same receptor, so
+        the report treats them as one family instead of unrelated proteins.</p>
+    </div>
+    <div class="md-field">
+      <label>Motif annotator (optional)</label>
+      <select name="protein_family_type[]">
+        <option value="">auto (detect)</option>
+        <option value="gpcr">gpcr</option>
+        <option value="kinase">kinase</option>
+      </select>
+      <p class="md-hint">Which motif set <code>compare-sse</code> uses. Auto is right
+        almost always; set it when detection picks the wrong one.</p>
+    </div>
     {#  Per protein, not per campaign: a campaign can hold several proteins and each
         needs its own apo reference. Left blank, a ligand-free companion is predicted
         instead, so the apo-vs-holo comparison works without anyone hunting for a
@@ -120,6 +157,13 @@
     <div class="md-field">
       <label>Apo or inactive structure PDB id (optional)</label>
       <input type="text" name="protein_apo_pdb[]" maxlength="4" placeholder="e.g. 5VEW">
+      {#  A file the campaign already carries, instead of an id to download. Every
+          example uses one, and the hidden companion name keeps a loaded campaign's
+          chain ids stable -- regenerating them renamed 5HT2's H2AAP to 5HAP, which
+          changes every output filename for no reason.  #}
+      <input type="text" name="protein_apo_path[]" placeholder="or a file in the bundle, e.g. reference/5vew.cif">
+      <input type="text" name="protein_apo_chain[]" maxlength="4" placeholder="chain (optional, e.g. A)">
+      <input type="hidden" name="protein_apo_name[]">
       <p class="md-hint">What the motif comparison measures movement <em>from</em>. It may
         carry an antagonist or a modulator &mdash; the state matters, not emptiness.
         <b>Check what it is bound to:</b> a structure titled &ldquo;apo&rdquo; can still be
@@ -236,6 +280,18 @@
       </select>
       <p class="md-hint">Controls are what the predictions are judged against; they are
         ringed in the charts and listed in the report's Reference structures panel.</p>
+    </div>
+    <div class="md-field">
+      <label>Pharmacology (optional)</label>
+      <select name="ligand_role[]">
+        <option value="">not specified</option>
+        <option value="agonist">agonist</option>
+        <option value="antagonist">antagonist</option>
+      </select>
+      <p class="md-hint">Shape-codes this ligand's points on the affinity charts:
+        circle for an agonist, diamond for an antagonist. The spec has always carried
+        it; the form had no field for it, so a campaign using it could not be loaded
+        back in.</p>
     </div>
   </div>
 </template>

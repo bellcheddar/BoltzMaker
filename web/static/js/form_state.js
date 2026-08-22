@@ -213,37 +213,24 @@ var BoltzFormState = (function () {
 
   // ---- save / upload to disk ----------------------------------------------
 
-  function fileStem() {
-    var el = document.getElementById("campaign_name");
-    var name = (el && el.value ? el.value : "boltzmaker_page").trim();
-    return name.replace(/[^A-Za-z0-9._-]+/g, "_").replace(/^[._-]+|[._-]+$/g, "") || "boltzmaker_page";
-  }
+  /* Send a bundle to the server and get its saved page back.
 
-  function saveToDisk() {
-    var blob = new Blob([JSON.stringify(collect(), null, 2)], { type: "application/json" });
-    var url = URL.createObjectURL(blob);
-    var link = document.createElement("a");
-    link.href = url;
-    link.download = fileStem() + ".boltzpage.json";
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    // Revoking immediately can cancel the download in some browsers; a tick is enough.
-    window.setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
-    status("Saved " + link.download + " to your downloads.", "ok");
-  }
+     The wizard's state travels inside the bundle itself, which is what lets one
+     file be the only thing anyone keeps: the .command runs the campaign AND
+     restores this form. A finished campaign's .bmz carries the same state and is
+     accepted too, as is an old .boltzpage.json, but neither is advertised -- one
+     artefact to think about is the whole point.
 
-  /* A finished campaign's results file, rather than a saved page.
-
-     The wizard state travels inside the .bmz, so extending a campaign starts by
-     uploading the results you already have: the form comes back as it was, you add
-     the new ligands, and you download a new bundle. Unzipping happens on the server
-     because the browser cannot read a zip without shipping a library to do it, and
-     the server already has one. */
-  function loadFromBundle(file) {
+     Unpacking happens on the server: the browser can read neither a tar.gz nor a
+     zip without shipping a library to do it, and the server already has both. */
+  function loadFromBundle(file, report) {
+    // `report` lets the caller choose where the message appears. The button at
+    // the top of the page is two screens from the bottom status line, and a
+    // result the user has to go looking for reads as nothing having happened.
+    report = report || status;
     var body = new FormData();
     body.append("results_file", file);
-    status("Reading " + file.name + "...", "");
+    report("Reading " + file.name + "...", "");
     fetch("/auto/prepare/page-state", { method: "POST", body: body })
       .then(function (response) {
         return response.json().then(function (payload) {
@@ -252,46 +239,49 @@ var BoltzFormState = (function () {
       })
       .then(function (result) {
         if (!result.ok) {
-          status(result.payload.error || "Could not read that file.", "bad");
+          report(result.payload.error || "Could not read that file.", "bad");
           return;
         }
         try {
           apply(result.payload);
         } catch (err) {
-          status(err.message, "bad");
+          report(err.message, "bad");
           return;
         }
         save();
-        status("Loaded the campaign from " + file.name
+        report("Loaded the campaign from " + file.name
                + ". Add what you want and download a new bundle.", "ok");
       })
-      .catch(function () { status("Could not read that file.", "bad"); });
+      .catch(function () { report("Could not read that file.", "bad"); });
   }
 
-  function loadFromDisk(file) {
-    // A .bmz is a zip; a saved page is JSON. Chosen by extension rather than by
-    // sniffing, because the two are asked for by two different buttons' worth of
-    // intent and guessing wrong wastes an upload.
-    if (/\.bmz$/i.test(file.name)) { loadFromBundle(file); return; }
+  function loadFromDisk(file, report) {
+    report = report || status;
+    // A .bmz is a zip and a .command is a shell script with a tar.gz stapled to it;
+    // a saved page is JSON. Chosen by extension rather than by sniffing, because the
+    // two are asked for by two different buttons' worth of intent and guessing wrong
+    // wastes an upload. The server sniffs properly, which is what catches a file
+    // whose extension is missing or wrong.
+    if (/\.(bmz|command)$/i.test(file.name)) { loadFromBundle(file, report); return; }
     var reader = new FileReader();
     reader.onload = function () {
       var parsed;
       try {
         parsed = JSON.parse(reader.result);
       } catch (err) {
-        status("That file is not valid JSON.", "bad");
+        report("That file is not valid JSON.", "bad");
         return;
       }
       try {
         apply(parsed);
       } catch (err) {
-        status(err.message, "bad");
+        report(err.message, "bad");
         return;
       }
       save();
-      status("Loaded " + file.name + ".", "ok");
+      report("Loaded " + file.name + ".", "ok");
     };
-    reader.onerror = function () { status("Could not read that file.", "bad"); };
+    reader.onerror = function () { report("Could not read that file.", "bad"); };
     reader.readAsText(file);
   }
 
@@ -325,17 +315,25 @@ var BoltzFormState = (function () {
     form.addEventListener("submit", save);
     stampStateForSubmit();
 
-    var saveBtn = document.getElementById("save-page");
-    if (saveBtn) saveBtn.addEventListener("click", saveToDisk);
-
-    var uploadBtn = document.getElementById("upload-page");
-    var uploadInput = document.getElementById("upload-page-file");
-    if (uploadBtn && uploadInput) {
-      uploadBtn.addEventListener("click", function () { uploadInput.click(); });
-      uploadInput.addEventListener("change", function () {
-        if (uploadInput.files && uploadInput.files[0]) loadFromDisk(uploadInput.files[0]);
+    /* The one upload control: "Upload bundle", above the form. Its own status
+       line, so the message appears beside the button that was pressed rather than
+       at the far end of the page. */
+    var bundleBtn = document.getElementById("upload-bundle");
+    var bundleInput = document.getElementById("upload-bundle-file");
+    var bundleStatusEl = document.getElementById("bundle-status");
+    function bundleStatus(message, tone) {
+      if (!bundleStatusEl) return;
+      bundleStatusEl.textContent = message;
+      bundleStatusEl.className = "md-hint" + (tone ? " md-status-" + tone : "");
+    }
+    if (bundleBtn && bundleInput) {
+      bundleBtn.addEventListener("click", function () { bundleInput.click(); });
+      bundleInput.addEventListener("change", function () {
+        if (bundleInput.files && bundleInput.files[0]) {
+          loadFromDisk(bundleInput.files[0], bundleStatus);
+        }
         // Reset so choosing the same file twice still fires a change event.
-        uploadInput.value = "";
+        bundleInput.value = "";
       });
     }
 

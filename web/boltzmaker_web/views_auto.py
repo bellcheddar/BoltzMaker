@@ -25,8 +25,13 @@ would delete a session out from under someone still reading it.
 
 from __future__ import annotations
 
+import base64
+import binascii
+import io
 import json
+import tarfile
 import zipfile
+import zlib
 import math
 import re
 import secrets
@@ -39,7 +44,7 @@ from flask import (
     send_file, send_from_directory, url_for,
 )
 
-from . import (alphafold, apo, bundle, options, package,
+from . import (alphafold, apo, bundle, derive_page, options, package,
                reports as report_panels, results as bmz,
                pocket as pocket_finder, runs as runs_archive, sequences, shares)
 from .app import REPO_ROOT, WEB_ROOT, new_scratch_dir, runs_root, session_root
@@ -193,6 +198,162 @@ _MAX_PAGE_STATE_BYTES = 512 * 1024
 
 #: The member a bundle and its results archive both store the wizard state under.
 PAGE_STATE_NAME = "page_state.json"
+
+#: The line a .command bundle puts between its extractor script and its base64
+#: tar.gz payload. Kept in step with bundle._EXTRACTOR.
+_PAYLOAD_MARKER = b"__BOLTZMAKER_PAYLOAD__"
+
+#: Ceiling on what a .command's payload may expand to while we look for one small
+#: member. A real bundle's tar is a few MB; anything claiming far more is a gzip
+#: bomb, and the whole point of a bounded read is not to find that out by running
+#: out of memory. Generous against the 32MB build ceiling, still finite.
+_MAX_PAYLOAD_BYTES = 128 * 1024 * 1024
+
+
+class _BundleReadError(Exception):
+    """A bundle we could open but could not get a page out of.
+
+    Carries the HTTP status so the route can report "no saved page" (404) apart
+    from "this is not a bundle" (400) -- two different things for the person
+    holding the file.
+    """
+
+    def __init__(self, message: str, status: int = 400):
+        super().__init__(message)
+        self.status = status
+
+
+def _bounded_gunzip(raw: bytes) -> bytes:
+    """Decompress, refusing to keep going past the ceiling.
+
+    `GzipFile.read(n)` is the only part that matters here: reading the whole
+    stream is what a decompression bomb is built to punish, so the size is
+    checked before the memory is committed rather than after.
+    """
+    import gzip
+    with gzip.GzipFile(fileobj=io.BytesIO(raw)) as gz:
+        out = gz.read(_MAX_PAYLOAD_BYTES + 1)
+    if len(out) > _MAX_PAYLOAD_BYTES:
+        raise _BundleReadError("that bundle's payload is implausibly large", 413)
+    return out
+
+
+def _page_state_from_command(data: bytes) -> str:
+    """Pull page_state.json out of a .command bundle.
+
+    A .command is a bash extractor followed by a marker line and a base64 tar.gz.
+    It is what the Runs tab offers as "Bundle" and what Prepare hands you at the
+    end, so it is the artefact people actually have -- the .bmz only exists once a
+    campaign has finished running. Reading it here means a bundle can be reopened
+    and edited before it has ever been run.
+    """
+    # Anchored to a line of its own, and the LAST such line. The marker name also
+    # appears earlier inside the extractor's own `sed -n '/^..._$/,$p'` command, so a
+    # plain find() lands on that and slices the shell script in as base64.
+    start = data.rfind(b"\n" + _PAYLOAD_MARKER + b"\n")
+    if start == -1:
+        raise _BundleReadError(
+            "That file is not a BoltzMaker bundle -- no payload marker in it.")
+    start += len(_PAYLOAD_MARKER) + 1  # past the marker, onto its trailing newline
+    try:
+        # validate=False so a payload that was rewrapped in transit still decodes,
+        # which is the reason the builder wraps it at 76 columns in the first place.
+        packed = base64.b64decode(data[start + 1:], validate=False)
+    except (ValueError, binascii.Error):
+        raise _BundleReadError("that bundle's payload is not readable base64")
+
+    try:
+        tar_bytes = _bounded_gunzip(packed)
+    except _BundleReadError:
+        raise
+    except (OSError, EOFError, zlib.error):
+        raise _BundleReadError("that bundle's payload is not a readable archive")
+
+    try:
+        with tarfile.open(fileobj=io.BytesIO(tar_bytes), mode="r") as tar:
+            try:
+                member = tar.getmember(PAGE_STATE_NAME)
+            except KeyError:
+                raise _BundleReadError(
+                    "This bundle has no saved page. It was built before the wizard "
+                    "started storing one, so the form cannot be restored from it.",
+                    404)
+            if not member.isfile() or member.size > _MAX_PAGE_STATE_BYTES:
+                raise _BundleReadError("saved page is implausibly large", 413)
+            handle = tar.extractfile(member)
+            if handle is None:
+                raise _BundleReadError("that bundle's saved page could not be read")
+            return handle.read(_MAX_PAGE_STATE_BYTES + 1).decode("utf-8", "replace")
+    except tarfile.TarError:
+        raise _BundleReadError("that bundle's payload is not a readable archive")
+
+
+def _spec_from_command(data: bytes) -> tuple[str, dict]:
+    """The campaign spec and its config out of a .command, for deriving a page."""
+    start = data.rfind(b"\n" + _PAYLOAD_MARKER + b"\n")
+    if start == -1:
+        raise _BundleReadError(
+            "That file is not a BoltzMaker bundle -- no payload marker in it.")
+    start += len(_PAYLOAD_MARKER) + 1
+    try:
+        tar_bytes = _bounded_gunzip(base64.b64decode(data[start + 1:], validate=False))
+        with tarfile.open(fileobj=io.BytesIO(tar_bytes), mode="r") as tar:
+            return _spec_members(tar.extractfile, tar.getnames())
+    except _BundleReadError:
+        raise
+    except (ValueError, binascii.Error, OSError, EOFError, zlib.error, tarfile.TarError):
+        raise _BundleReadError("that bundle's payload is not a readable archive")
+
+
+def _spec_members(opener, names) -> tuple[str, dict]:
+    if "boltz_input.md" not in names:
+        raise _BundleReadError(
+            "This bundle has no saved page and no boltz_input.md either, so there "
+            "is nothing to rebuild the form from.", 404)
+    md_text = opener("boltz_input.md").read().decode("utf-8", "replace")
+    config: dict = {}
+    if "config.json" in names:
+        try:
+            config = json.loads(opener("config.json").read().decode("utf-8", "replace"))
+        except ValueError:
+            config = {}
+    return md_text, (config if isinstance(config, dict) else {})
+
+
+def _page_state_from_bmz(stream) -> str:
+    """Pull page_state.json out of a .bmz results archive.
+
+    Only ever reads one named member, and only after checking its declared size --
+    a zip is an archive of whatever its author chose, including a member that
+    claims to be small and expands to fill the disk.
+    """
+    try:
+        with zipfile.ZipFile(stream) as archive:
+            try:
+                info = archive.getinfo(PAGE_STATE_NAME)
+            except KeyError:
+                raise _BundleReadError(
+                    "This bundle has no saved page. It was built before the wizard "
+                    "started storing one, so the form cannot be restored from it.",
+                    404)
+            if info.file_size > _MAX_PAGE_STATE_BYTES:
+                raise _BundleReadError("saved page is implausibly large", 413)
+            return archive.read(PAGE_STATE_NAME).decode("utf-8", "replace")
+    except _BundleReadError:
+        raise
+    except (zipfile.BadZipFile, OSError, ValueError):
+        raise _BundleReadError("That file is not a readable .bmz.")
+
+
+def _spec_from_bmz(stream) -> tuple[str, dict]:
+    stream.seek(0)
+    try:
+        with zipfile.ZipFile(stream) as archive:
+            return _spec_members(archive.open, archive.namelist())
+    except _BundleReadError:
+        raise
+    except (zipfile.BadZipFile, OSError, ValueError):
+        raise _BundleReadError("That file is not a readable .bmz.")
 
 
 def _page_state_from(form) -> str:
@@ -391,7 +552,8 @@ def prepare():
                                           compare_sse=compare_sse,
                                           apo_reference_paths=apo_paths,
                                           pocket_distance=pocket_distance if use_same_pocket else 0.0,
-                                          confine_to_receptor=confine_to_receptor)
+                                          confine_to_receptor=confine_to_receptor,
+                                           targets_per_invocation=request.form.get('targets_per_invocation', ''))
     except WizardValidationError as exc:
         return _render_prepare(defaults=cfg, error=str(exc), form=request.form,
                                error_field=getattr(exc, 'field', ''))
@@ -514,36 +676,58 @@ def _count_targets(scratch: Path) -> int:
 
 @bp.route("/prepare/page-state", methods=["POST"])
 def page_state_from_bundle():
-    """Pull the wizard state out of a finished campaign's results file.
+    """Pull the wizard state out of a bundle, so it can be edited into a new one.
 
-    So a campaign can be extended on the page it was built on: upload its .bmz,
-    the form comes back exactly as it was, add the new ligands, download a new
-    bundle. The alternative is retyping every protein, ligand and pocket, or
-    editing boltz_input.md by hand, which is what this whole step exists to avoid.
+    Two artefacts carry the state and both are accepted, because which one a person
+    has depends on how far they got. The **.command bundle** is what Prepare hands
+    you and what the Runs tab offers under "Bundle" -- it exists from the moment a
+    campaign is described, before anything has been run. The **.bmz results file**
+    only exists once a campaign has finished. Taking only the latter meant a bundle
+    could not be reopened and corrected until after you had run it, which is the
+    wrong way round: a typo in a ligand is worth catching before the GPU time, not
+    after.
 
-    Only ever reads one named member, and only after checking its declared size --
-    a zip is an archive of whatever its author chose, including a member that
-    claims to be small and expands to fill the disk.
+    Format is sniffed rather than taken from the extension. The extension is a hint
+    the uploader controls and gets wrong (a browser that renamed the download, a
+    file copied without its suffix); the first bytes are not.
     """
     uploaded = request.files.get("results_file")
     if not uploaded or not uploaded.filename:
         return Response('{"error": "no file"}', status=400, mimetype="application/json")
+
+    head = uploaded.stream.read(2)
+    uploaded.stream.seek(0)
+    is_zip = head == b"PK"
+    payload = None if is_zip else uploaded.stream.read()
     try:
-        with zipfile.ZipFile(uploaded.stream) as archive:
-            try:
-                info = archive.getinfo(PAGE_STATE_NAME)
-            except KeyError:
-                return Response(
-                    '{"error": "This bundle has no saved page. It was built before the '
-                    'wizard started storing one, so the form cannot be restored from it."}',
-                    status=404, mimetype="application/json")
-            if info.file_size > _MAX_PAGE_STATE_BYTES:
-                return Response('{"error": "saved page is implausibly large"}',
-                                status=413, mimetype="application/json")
-            raw = archive.read(PAGE_STATE_NAME).decode("utf-8", "replace")
-    except (zipfile.BadZipFile, OSError, ValueError):
-        return Response('{"error": "That file is not a readable .bmz."}',
-                        status=400, mimetype="application/json")
+        raw = (_page_state_from_bmz(uploaded.stream) if is_zip
+               else _page_state_from_command(payload))
+    except _BundleReadError as exc:
+        # No stored page. Every bundle built before the wizard started saving one
+        # lands here -- including all six in the Runs archive -- and the spec inside
+        # still describes the campaign, so rebuild the form from that instead.
+        #
+        # Only if it survives the round-trip: the derived page is rebuilt into a spec
+        # and compared with the original, and a mismatch refuses the file naming what
+        # differs. A form that silently drops a directive looks right, rebuilds into a
+        # different campaign, and says nothing -- worse than not loading at all.
+        if exc.status != 404:
+            return Response(json.dumps({"error": str(exc)}),
+                            status=exc.status, mimetype="application/json")
+        try:
+            md_text, config = (_spec_from_bmz(uploaded.stream) if is_zip
+                               else _spec_from_command(payload))
+            parsed = derive_page.derive_verified(md_text, config, app=current_app)
+        except _BundleReadError as spec_exc:
+            return Response(json.dumps({"error": str(spec_exc)}),
+                            status=spec_exc.status, mimetype="application/json")
+        except derive_page.DerivationError as derive_exc:
+            return Response(
+                json.dumps({"error": f"This bundle has no saved page, and rebuilding "
+                                     f"one from its spec is not safe: {derive_exc}"}),
+                status=422, mimetype="application/json")
+        return Response(json.dumps(parsed), mimetype="application/json")
+
     try:
         parsed = json.loads(raw)
     except ValueError:

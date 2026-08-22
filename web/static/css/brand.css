@@ -86,6 +86,13 @@ img, canvas { max-width: 100%; height: auto; }
 .md-main { max-width: 1000px; margin: 0 auto; padding: 24px; }
 .md-card { background: var(--md-surface); border: 1px solid var(--md-border); border-radius: var(--md-radius); padding: 20px; box-shadow: var(--md-shadow-sm); margin-bottom: 24px; }
 .md-card h2 { margin-top: 0; font-size: 16px; }
+/* The "start from an existing bundle" card above Step 1's form. Tinted and
+   accented so it reads as an alternative entry point rather than the first
+   field to fill in -- it sits above the form it would populate, and a plain
+   card there looks like something you must complete before continuing. */
+.md-card-lead { background: var(--md-bg-alt); border-left: 3px solid var(--md-primary); }
+.md-card-lead h2 { color: var(--md-primary); }
+.md-card-lead .md-button-row { margin-top: 12px; }
 .md-footer { text-align: center; padding: 24px; color: var(--md-text-muted); font-size: 13px; }
 .md-footer a { color: var(--md-primary); text-decoration: none; }
 

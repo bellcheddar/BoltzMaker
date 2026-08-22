@@ -84,10 +84,16 @@ def test_the_state_comes_back_out(client):
     assert r.status_code == 200 and r.get_json() == state
 
 
-def test_an_older_bundle_says_so_rather_than_failing_obscurely(client):
+def test_an_older_bundle_falls_back_to_its_spec_and_explains_a_failure(client):
+    """No saved page is no longer the end of it: the spec is tried instead.
+
+    This one cannot be rebuilt -- a protein with no sequence and no ligand is not a
+    campaign the form can express -- so it reports why rather than the old generic
+    "there is no saved page", which said nothing about the actual obstacle.
+    """
     r = _post(client, _bmz({"boltz_input.md": "Protein: X\n"}))
-    assert r.status_code == 404
-    assert "before the wizard started storing one" in r.get_json()["error"]
+    assert r.status_code == 422
+    assert "not safe" in r.get_json()["error"]
 
 
 def test_something_that_is_not_a_zip(client):
