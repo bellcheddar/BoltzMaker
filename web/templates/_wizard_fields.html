@@ -58,7 +58,7 @@
     <div class="md-field">
       <label for="targets_per_invocation">Targets per prediction process (optional)</label>
       <input type="text" inputmode="numeric" id="targets_per_invocation"
-             name="targets_per_invocation" placeholder="leave blank for the default">
+             name="targets_per_invocation" value="4" placeholder="4">
       <p class="md-hint">Restarts <code>boltz predict</code> every N targets. On Apple
         unified memory the allocator never gives everything back, so a long campaign
         starves itself; only process exit frees it. <code>0</code> disables recycling.</p>
@@ -119,9 +119,19 @@
     </div>
     <div class="md-field"><label>Short name (max 5 letters)</label><input type="text" name="protein_name[]" maxlength="5" placeholder="e.g. GLP1R"></div>
     <div class="md-field"><label>Sequence</label><textarea name="protein_sequence[]"></textarea></div>
-    <div class="md-field">
-      <label>Co-folded partners (comma-separated short names, optional)</label>
-      <input type="text" name="protein_partners[]" placeholder="e.g. GNAS, GNB1, GNG2">
+    {#  Tickboxes built from the Partner rows' own short names, not a free-text list.
+        The two used to be typed separately and had to match exactly: a partner
+        renamed after a protein referenced it, or a single typo, failed validation
+        at download time with the campaign already filled in. The posted field is
+        still one comma-separated `protein_partners[]` per row, written by the
+        picker, so the server contract and the parallel-array alignment are
+        unchanged -- only the way it gets filled in.  #}
+    <div class="md-field md-partner-field">
+      <label>Co-folded partners (optional)</label>
+      <div class="md-partner-picker" data-partner-picker></div>
+      <input type="hidden" name="protein_partners[]">
+      <p class="md-hint md-partner-note">Add Partner blocks below and they appear here
+        to tick. Renaming one updates every protein that uses it.</p>
     </div>
     {#  Scoping, grouping and the annotator: three things a spec could always say and
         this form could not, which is why no example campaign could be loaded back
@@ -154,9 +164,17 @@
         needs its own apo reference. Left blank, a ligand-free companion is predicted
         instead, so the apo-vs-holo comparison works without anyone hunting for a
         structure.  #}
-    <div class="md-field">
+    <div class="md-field md-apo-field">
       <label>Apo or inactive structure PDB id (optional)</label>
-      <input type="text" name="protein_apo_pdb[]" maxlength="4" placeholder="e.g. 5VEW">
+      <input type="text" name="protein_apo_pdb[]" maxlength="4" placeholder="e.g. 5VEW"
+             data-pdb-verify>
+      {#  Read the entry back, the way the UniProt box does. Four characters means
+          every typo is another valid id, and the title is the only way to see the
+          wrong structure was named. It lists bound ligands too, because "is this
+          actually apo" is the question that has cost this project time twice: a
+          structure titled apo that was Gs-coupled, and a "peptide free" entry used
+          as an inactive reference while already active.  #}
+      <p class="md-hint md-pdb-note"></p>
       {#  A file the campaign already carries, instead of an id to download. Every
           example uses one, and the hidden companion name keeps a loaded campaign's
           chain ids stable -- regenerating them renamed 5HT2's H2AAP to 5HAP, which
@@ -164,6 +182,19 @@
       <input type="text" name="protein_apo_path[]" placeholder="or a file in the bundle, e.g. reference/5vew.cif">
       <input type="text" name="protein_apo_chain[]" maxlength="4" placeholder="chain (optional, e.g. A)">
       <input type="hidden" name="protein_apo_name[]">
+      {#  Or a structure from this machine, for anything not in the PDB -- an
+          unreleased entry, a colleague's model, a stripped-down construct. It is
+          copied into the bundle under reference/ and named as the apo path, so the
+          campaign carries it and the run never needs the network for it.
+
+          Named with the row ordinal rather than as a `[]` array: an empty file input
+          posts nothing, so a plain array would be shorter than the other fields and
+          every later row's file would attach to the wrong protein -- the same
+          misalignment the apo checkbox above already works around.  #}
+      <input type="file" class="md-apo-upload" data-apo-upload
+             accept=".cif,.pdb,.mmcif,.ent,chemical/x-pdb,chemical/x-mmcif">
+      <p class="md-hint md-apo-upload-note">Or upload a structure from this computer
+        (<code>.cif</code> or <code>.pdb</code>) &mdash; it travels inside the bundle.</p>
       <p class="md-hint">What the motif comparison measures movement <em>from</em>. It may
         carry an antagonist or a modulator &mdash; the state matters, not emptiness.
         <b>Check what it is bound to:</b> a structure titled &ldquo;apo&rdquo; can still be

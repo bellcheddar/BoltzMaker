@@ -41,7 +41,10 @@
   <p class="md-hint" id="bundle-status"></p>
 </div>
 
-<form method="post" id="wizard-form">
+{#  multipart, because a protein row can now carry an uploaded apo structure. A
+    urlencoded form posts the filename and not the file, so the upload would arrive
+    empty with nothing to say why.  #}
+<form method="post" id="wizard-form" enctype="multipart/form-data">
   <div class="md-card">
     <h2>Campaign</h2>
     <div class="md-field">

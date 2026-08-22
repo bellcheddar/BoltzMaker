@@ -219,6 +219,18 @@ img, canvas { max-width: 100%; height: auto; }
 
 .md-status-ok { color: var(--md-accent-green); font-weight: 600; }
 .md-status-bad { color: var(--md-accent-red); font-weight: 600; }
+/* Not an error: the entry was found and has ligands in it. Whether that makes it
+   unusable as an apo reference is a judgement only the reader can make. */
+.md-status-warn { color: var(--md-accent-orange); font-weight: 600; }
+
+/* Co-folded partner picker: tickboxes built from the Partner rows themselves. */
+.md-partner-picker { display: flex; flex-wrap: wrap; gap: 6px 14px; margin: 4px 0 2px; }
+.md-partner-option { display: inline-flex; align-items: center; gap: 5px;
+                     font-size: 13px; white-space: nowrap; cursor: pointer; }
+.md-partner-option input { margin: 0; }
+.md-partner-missing { color: var(--md-accent-red); }
+.md-partner-empty { font-size: 13px; color: var(--md-text-muted); font-style: italic; }
+.md-apo-upload { display: block; margin-top: 6px; font-size: 13px; }
 
 .md-privacy-label { font-weight: 700; }
 

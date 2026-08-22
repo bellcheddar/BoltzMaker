@@ -130,6 +130,11 @@ var BoltzFormState = (function () {
 
     // Rows were rebuilt from scratch, so their checkbox ordinals are all stale.
     BoltzWizard.renumberAll();
+    // Anything that renders itself from other rows -- the partner pickers -- has to
+    // rebuild now the values are in. Without this a loaded campaign shows its
+    // partners unticked while the hidden field holds them, and the first tick of any
+    // box overwrites the lot.
+    document.dispatchEvent(new CustomEvent("boltz:page-applied"));
   }
 
   // ---- persistence ---------------------------------------------------------

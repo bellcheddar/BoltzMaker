@@ -23,6 +23,7 @@ reference would simply produce no comparison, hours later, for no visible reason
 
 from __future__ import annotations
 
+import re
 import urllib.error
 import urllib.request
 
@@ -80,8 +81,7 @@ def fetch(pdb_id: str, opener=urllib.request.urlopen) -> tuple[bytes, str]:
         except urllib.error.HTTPError as exc:
             if exc.code == 404:
                 continue          # not published in this format; try the next one
-            raise ApoFetchError(
-                f"the PDB returned {exc.code} for {pdb_id}. Try again, or leave it blank "
+            raise _upload_error(f"the PDB returned {exc.code} for {pdb_id}. Try again, or leave it blank "
                 "to have an apo structure predicted instead."
             ) from exc
         except (urllib.error.URLError, TimeoutError, OSError) as exc:
@@ -109,3 +109,59 @@ def fetch(pdb_id: str, opener=urllib.request.urlopen) -> tuple[bytes, str]:
         f"the PDB has no entry {pdb_id}, in either mmCIF or legacy PDB format -- check the "
         "id, or leave it blank to have an apo structure predicted instead."
     )
+
+
+#: An uploaded structure larger than this is not a receptor, it is a mistake or an
+#: attack. 6VXX (a whole spike trimer) is about 3MB of mmCIF; 20 is generous.
+MAX_UPLOAD_BYTES = 20 * 1024 * 1024
+
+
+def _upload_error(message: str) -> "ApoFetchError":
+    """ApoFetchError carrying the form field to scroll to.
+
+    The exception takes no such argument -- the form reads it off the instance with
+    getattr -- so it is attached rather than passed.
+    """
+    error = ApoFetchError(message)
+    error.field = "protein_apo_pdb"
+    return error
+
+
+def accept_upload(filename: str, data: bytes) -> tuple[str, bytes]:
+    """Take a structure from the user's machine into the bundle.
+
+    Returns (path inside the campaign, contents). Raises ApoFetchError with a
+    message meant for the form.
+
+    The content is sniffed rather than trusted from the extension: this file is
+    written into a bundle other people download and run, and a .cif that is
+    actually something else fails much later, on their machine, with an error
+    about the campaign rather than about the upload.
+    """
+    name = (filename or "").strip().replace("\\", "/").split("/")[-1]
+    if not name:
+        raise ApoFetchError("That upload had no filename.")
+    if len(data) > MAX_UPLOAD_BYTES:
+        raise _upload_error(f"{name} is {len(data) // 1024 // 1024}MB; the limit for a structure is "
+            f"{MAX_UPLOAD_BYTES // 1024 // 1024}MB.")
+    if not data.strip():
+        raise _upload_error(f"{name} is empty.")
+
+    stem, _, suffix = name.rpartition(".")
+    suffix = suffix.lower()
+    if suffix in ("cif", "mmcif"):
+        extension = "cif"
+    elif suffix in ("pdb", "ent"):
+        extension = "pdb"
+    else:
+        raise _upload_error(f"{name} is not a .cif or .pdb file.")
+
+    if not _looks_like_structure(data, extension):
+        raise _upload_error(f"{name} does not look like a {extension.upper()} structure inside -- "
+            "check it is the file you meant.")
+
+    # Everything but the safe characters goes. The name ends up in a spec line and a
+    # path inside an archive somebody unpacks, so neither a directory separator nor a
+    # space belongs in it.
+    safe = re.sub(r"[^A-Za-z0-9._-]", "_", stem or "structure").strip("._-") or "structure"
+    return f"reference/{safe.lower()}.{extension}", data

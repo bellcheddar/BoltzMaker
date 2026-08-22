@@ -30,6 +30,8 @@ import binascii
 import io
 import json
 import tarfile
+import urllib.error
+import urllib.request
 import zipfile
 import zlib
 import math
@@ -458,6 +460,27 @@ def prepare():
     # run never stops to ask the network for something checkable in advance.
     extra_files: dict[str, bytes] = {}
     apo_paths: dict[str, str] = {}
+
+    # A structure from the user's own machine, for anything not in the PDB -- an
+    # unreleased entry, a colleague's model, a construct with the fusion cut out.
+    # Taken before the download loop so it wins over an id typed into the same row:
+    # a file they picked is a deliberate act, an id may be left over from a previous
+    # edit. The input is named by row ordinal, not as an array, because an empty
+    # file input posts nothing and an array would silently attach each file to the
+    # wrong protein.
+    for row_index, protein in enumerate(proteins):
+        uploaded_apo = request.files.get(f"protein_apo_file_{row_index}")
+        if not uploaded_apo or not uploaded_apo.filename:
+            continue
+        try:
+            path, data = apo.accept_upload(uploaded_apo.filename, uploaded_apo.read())
+        except apo.ApoFetchError as exc:
+            return _render_prepare(defaults=cfg, error=str(exc), form=request.form,
+                                   error_field=getattr(exc, "field", ""))
+        extra_files[path] = data
+        protein.apo_path = path
+        protein.apo_pdb = ""          # the file is the answer; do not also download
+
     if compare_sse:
         for protein in proteins:
             if not protein.apo_pdb:
@@ -1406,6 +1429,70 @@ def pocket_ligands(pdb_id: str):
     return Response(json.dumps({"pdb_id": pdb_id.upper(),
                                 "ligands": [c.to_json() for c in found]}),
                     mimetype="application/json")
+
+
+@bp.route("/pdb/<pdb_id>.json")
+def pdb_entry(pdb_id: str):
+    """What a PDB id actually is, for the Prepare form to show back.
+
+    An id is four characters and every typo is another valid-looking id, so the
+    only way to know the right structure was named is to read its title back. The
+    same mistake in a different guise has cost this project real time twice: a
+    structure titled "apo" that turned out to be Gs-coupled, and a "peptide free"
+    entry used as an inactive reference when it was already active. So the method,
+    the resolution and the bound ligands come back too -- the state matters, and
+    the ligand list is the fastest way to see it is not apo at all.
+
+    Proxied, like the UniProt and pocket-ligand routes, so the page talks only to
+    this server and the id is validated against the grammar the form validates.
+    """
+    pdb_id = (pdb_id or "").strip()
+    if not _PDB_ID_RE.match(pdb_id):
+        return Response(json.dumps({"error": "That is not a 4-character PDB id."}),
+                        mimetype="application/json", status=400)
+    # One GraphQL call rather than the REST entry endpoint plus a hop per ligand:
+    # `rcsb_entry_info.nonpolymer_bound_components` is simply absent on many entries
+    # (5VEW among them, which has three), so REST would report "no ligands" for a
+    # structure carrying the very modulator that makes it not apo.
+    query = ("{entry(entry_id:\"%s\"){struct{title} exptl{method} "
+             "rcsb_accession_info{initial_release_date} "
+             "rcsb_entry_info{resolution_combined polymer_entity_count_protein} "
+             "nonpolymer_entities{nonpolymer_comp{chem_comp{id name}}}}}"
+             % pdb_id.upper())
+    request_body = json.dumps({"query": query}).encode("utf-8")
+    try:
+        req = urllib.request.Request(
+            "https://data.rcsb.org/graphql", data=request_body,
+            headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=15) as response:
+            payload = json.loads(response.read().decode("utf-8", "replace"))
+    except Exception:
+        return Response(json.dumps({"error": "RCSB could not be reached."}),
+                        mimetype="application/json", status=502)
+
+    entry_data = (payload.get("data") or {}).get("entry")
+    if not entry_data:
+        return Response(json.dumps({"error": f"No PDB entry {pdb_id.upper()}."}),
+                        mimetype="application/json", status=404)
+
+    info = entry_data.get("rcsb_entry_info") or {}
+    resolutions = info.get("resolution_combined") or []
+    ligands = []
+    for item in entry_data.get("nonpolymer_entities") or []:
+        comp = ((item or {}).get("nonpolymer_comp") or {}).get("chem_comp") or {}
+        if comp.get("id"):
+            ligands.append({"id": comp["id"], "name": comp.get("name") or ""})
+    return Response(json.dumps({
+        "pdb_id": pdb_id.upper(),
+        "title": (entry_data.get("struct") or {}).get("title", ""),
+        "method": ", ".join(m.get("method", "") for m in (entry_data.get("exptl") or [])
+                            if m.get("method")),
+        "resolution": resolutions[0] if resolutions else None,
+        "chains": info.get("polymer_entity_count_protein"),
+        "ligands": ligands[:10],
+        "released": ((entry_data.get("rcsb_accession_info") or {})
+                     .get("initial_release_date") or "")[:10],
+    }), mimetype="application/json")
 
 
 @bp.route("/uniprot/<accession>.json")

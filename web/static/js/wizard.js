@@ -80,6 +80,14 @@ var BoltzWizard = (function () {
     for (var i = 0; i < rows.length; i++) {
       var boxes = rows[i].querySelectorAll('input[type="checkbox"][name$="[]"]');
       for (var j = 0; j < boxes.length; j++) boxes[j].value = String(i);
+      // File inputs are named per row rather than as a `name[]` array: an empty one
+      // posts nothing, so the array would be shorter than every other field and each
+      // uploaded file would land on the wrong protein. The ordinal is in the name,
+      // so the server can pair them by row however many are left empty.
+      var uploads = rows[i].querySelectorAll("[data-apo-upload]");
+      for (var k = 0; k < uploads.length; k++) {
+        uploads[k].name = "protein_apo_file_" + i;
+      }
     }
   }
 
@@ -160,6 +168,18 @@ var BoltzWizard = (function () {
     };
   }
 
+  /* Setting .value in script fires nothing, so anything listening for the field to
+     change never hears it. A partner filled in from its accession therefore did not
+     appear in the proteins' partner pickers until some later edit happened to
+     trigger a re-sync -- which read as "partners only show up when I add another
+     one". Autosave missed it the same way: an autofilled name and sequence were not
+     written to browser storage until the next keystroke elsewhere. */
+  function setFilled(field, value) {
+    field.value = value;
+    field.dispatchEvent(new Event("input", { bubbles: true }));
+    field.dispatchEvent(new Event("change", { bubbles: true }));
+  }
+
   function fill(input) {
     var accession = (input.value || "").trim().toUpperCase().split("-")[0].split(".")[0];
     if (!accession) return;
@@ -178,11 +198,11 @@ var BoltzWizard = (function () {
         }
         var filled = [];
         if (fields.name && !fields.name.value.trim() && entry.gene) {
-          fields.name.value = entry.gene;
+          setFilled(fields.name, entry.gene);
           filled.push("short name");
         }
         if (fields.sequence && !fields.sequence.value.trim() && entry.sequence) {
-          fields.sequence.value = entry.sequence;
+          setFilled(fields.sequence, entry.sequence);
           filled.push(entry.length + " residues");
         }
         if (note) {
@@ -541,4 +561,170 @@ var BoltzWizard = (function () {
   document.addEventListener("boltz:form-changed", recount);
   recount();
   setTimeout(recount, 0);
+})();
+
+/* ---- Co-folded partners: tickboxes, not a typed list -----------------------
+
+   The protein's partner list and the Partner blocks' short names had to agree
+   exactly and were typed in two places. Renaming a partner after a protein
+   referenced it, or one typo, failed validation at download time with the whole
+   campaign already entered. The picker is built from the Partner rows themselves,
+   so the two cannot disagree.
+
+   It writes the same comma-separated `protein_partners[]` the server has always
+   read. The visible tickboxes carry no name and are never posted -- one hidden
+   input per protein row keeps the parallel arrays the same length, which is the
+   thing that quietly breaks when a control posts nothing. */
+(function () {
+  "use strict";
+
+  function partnerNames() {
+    var seen = [];
+    Array.prototype.forEach.call(
+      document.querySelectorAll('[name="partner_name[]"]'), function (input) {
+        var value = (input.value || "").trim();
+        if (value && seen.indexOf(value) === -1) seen.push(value);
+      });
+    return seen;
+  }
+
+  function chosen(hidden) {
+    return (hidden.value || "").split(",")
+      .map(function (s) { return s.trim(); })
+      .filter(Boolean);
+  }
+
+  function render(picker) {
+    var row = picker.closest(".md-repeat-block");
+    if (!row) return;
+    var hidden = row.querySelector('[name="protein_partners[]"]');
+    if (!hidden) return;
+
+    var names = partnerNames();
+    // Keep a selection whose partner has been renamed or removed, rather than
+    // dropping it silently: it still shows, ticked, flagged as missing, so the
+    // person can see what happened instead of finding the partner simply gone.
+    var picked = chosen(hidden);
+    var missing = picked.filter(function (n) { return names.indexOf(n) === -1; });
+
+    if (!names.length && !missing.length) {
+      picker.innerHTML = '<span class="md-partner-empty">No partners defined yet.</span>';
+      return;
+    }
+
+    picker.innerHTML = "";
+    names.concat(missing).forEach(function (name) {
+      var isMissing = names.indexOf(name) === -1;
+      var label = document.createElement("label");
+      label.className = "md-partner-option" + (isMissing ? " md-partner-missing" : "");
+      var box = document.createElement("input");
+      box.type = "checkbox";
+      box.value = name;
+      box.checked = picked.indexOf(name) !== -1;
+      box.addEventListener("change", function () { commit(picker); });
+      label.appendChild(box);
+      label.appendChild(document.createTextNode(
+        " " + name + (isMissing ? " (no such partner)" : "")));
+      picker.appendChild(label);
+    });
+  }
+
+  function commit(picker) {
+    var row = picker.closest(".md-repeat-block");
+    var hidden = row && row.querySelector('[name="protein_partners[]"]');
+    if (!hidden) return;
+    var picked = [];
+    Array.prototype.forEach.call(
+      picker.querySelectorAll('input[type="checkbox"]'), function (box) {
+        if (box.checked) picked.push(box.value);
+      });
+    hidden.value = picked.join(", ");
+    // So form_state.js autosaves and anything else watching the form reacts. The
+    // hidden input's own value change fires nothing on its own.
+    hidden.dispatchEvent(new Event("change", { bubbles: true }));
+  }
+
+  function syncAll() {
+    Array.prototype.forEach.call(
+      document.querySelectorAll("[data-partner-picker]"), render);
+  }
+
+  document.addEventListener("boltz:wizard-ready", syncAll);
+  document.addEventListener("boltz:form-changed", syncAll);
+  // Typing a partner's name should update the pickers as it happens, not only when
+  // a row is added or removed.
+  ["input", "change"].forEach(function (kind) {
+    document.addEventListener(kind, function (event) {
+      if (event.target && event.target.matches &&
+          event.target.matches('[name="partner_name[]"]')) syncAll();
+    });
+  });
+  document.addEventListener("boltz:page-applied", syncAll);
+  syncAll();
+})();
+
+/* ---- Verify a PDB id by reading the entry back -----------------------------
+
+   Same shape as the UniProt autofill above, and for the same reason: four
+   characters means every typo is another valid id, so the only way to know the
+   right structure was named is to see its title. The bound-ligand list is the
+   part that matters most here -- "apo" in a title is not a guarantee, and this
+   project has twice measured against a reference that was not what it claimed. */
+(function () {
+  "use strict";
+
+  function noteFor(input) {
+    var field = input.closest(".md-apo-field");
+    return field ? field.querySelector(".md-pdb-note") : null;
+  }
+
+  function verify(input) {
+    var note = noteFor(input);
+    var id = (input.value || "").trim().toUpperCase();
+    input.value = id;
+    if (!note) return;
+    if (!id) { note.textContent = ""; note.className = "md-hint md-pdb-note"; return; }
+    if (!/^[0-9][A-Za-z0-9]{3}$/.test(id)) {
+      note.textContent = "A PDB id is four characters starting with a digit.";
+      note.className = "md-hint md-pdb-note md-status-bad";
+      return;
+    }
+    note.textContent = "Looking up " + id + "…";
+    note.className = "md-hint md-pdb-note";
+
+    fetch("/auto/pdb/" + encodeURIComponent(id) + ".json")
+      .then(function (r) { return r.json(); })
+      .then(function (entry) {
+        if (entry.error) {
+          note.textContent = entry.error;
+          note.className = "md-hint md-pdb-note md-status-bad";
+          return;
+        }
+        var bits = [entry.pdb_id + " · " + (entry.title || "untitled")];
+        var facts = [];
+        if (entry.method) facts.push(entry.method.toLowerCase());
+        if (entry.resolution) facts.push(entry.resolution + " Å");
+        if (entry.released) facts.push("released " + entry.released);
+        if (facts.length) bits.push(facts.join(", "));
+        if (entry.ligands && entry.ligands.length) {
+          bits.push("bound: " + entry.ligands.map(function (l) { return l.id; }).join(", ")
+                    + " — check none of these makes it non-apo");
+        } else {
+          bits.push("no bound ligands listed");
+        }
+        note.textContent = bits.join(" — ");
+        note.className = "md-hint md-pdb-note"
+          + (entry.ligands && entry.ligands.length ? " md-status-warn" : " md-status-ok");
+      })
+      .catch(function () {
+        note.textContent = "RCSB could not be reached.";
+        note.className = "md-hint md-pdb-note md-status-bad";
+      });
+  }
+
+  document.addEventListener("change", function (event) {
+    if (event.target && event.target.matches && event.target.matches("[data-pdb-verify]")) {
+      verify(event.target);
+    }
+  });
 })();
