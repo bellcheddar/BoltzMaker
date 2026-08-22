@@ -1151,14 +1151,42 @@ covalent bond, or distance), and **ligands** (SMILES or CCD code). These are the
 `BoltzMaker.py new` asks for in the terminal, and the same 5-character shared-namespace rule
 applies to every short name.
 
-Everything you type is kept in your browser as you go, so downloading a bundle, stepping over
-to Analysis, or reloading does not lose it. Three buttons sit under the campaign name:
+Four of those fields are worth calling out, because each replaces something the form used to
+make you do by hand:
 
-| Button | What it does |
+| Field | What it saves you |
 |---|---|
-| **Save page** | Writes everything currently entered to a small `<campaign>.boltzpage.json` file. Keep it as a record of a campaign, or send it to a colleague. |
-| **Upload page** | Reads one of those files back in, replacing what is on the form. |
-| **Clear** | Forgets the saved state and empties the form. Asks first. |
+| **Co-folded partners** | Tickboxes built from the Partner blocks' own short names, rather than a list you retype. The two had to agree exactly, so renaming a partner after a protein referenced it failed validation at download time with the campaign already entered. A selection whose partner is later renamed or removed stays visible, ticked and flagged, instead of quietly disappearing. |
+| **Apo or inactive structure PDB id** | Reads the entry back underneath the box: title, method, resolution, and **what is bound to it**. Four characters means every typo is another valid id, so the title is the only way to see the wrong structure was named -- and "apo" in a title is not a guarantee. Entries carrying ligands read amber rather than green: found, and worth your judgement. |
+| **Upload a structure** | For anything not in the PDB -- an unreleased entry, a colleague's model, a construct with the fusion cut out. It is copied into the bundle under `reference/` and named as the apo path, so the campaign carries it and the run never needs the network for it. Contents are checked against the extension, and the filename is sanitised before it becomes a path inside an archive somebody unpacks. |
+| **Targets per prediction process** | Defaults to 4. On Apple unified memory the allocator never returns everything, so a long campaign starves itself and only process exit frees it. Blank was the wrong default for the hardware this runs on; `0` disables recycling. |
+
+The form also carries the rest of what a spec can say, which it could not before: per-protein
+**ligand scoping** (`Ligands:`), a shared report **group**, the **motif annotator**
+(`Family type:`), a ligand's **pharmacology** (`Role:`), and an apo reference given as a file
+in the bundle with an optional **chain**. Those gaps are why no example campaign could be
+loaded back into Step 1: deriving a form from a spec is only honest if the form can hold
+everything the spec says.
+
+Everything you type is kept in your browser as you go, so downloading a bundle, stepping over
+to Analysis, or reloading does not lose it.
+
+**The bundle is the only file to keep.** It runs the campaign on your machine, and uploading
+it back at **Upload bundle**, at the top of Step 1, brings the whole page back as it was --
+add a ligand, change a pocket, retune the run, download a new one. There used to be three
+artefacts and nobody could say which mattered: the `.command` that runs a campaign, the
+`.bmz` it produces, and a `.boltzpage.json` written by a "Save page" button. Now the form
+travels inside the bundle, so one file answers both questions. **Clear** empties the form,
+and asks first.
+
+A bundle built before the form started saving itself -- every example campaign, and
+everything already in the **Runs** archive -- has no saved page inside it. Those still load:
+the form is rebuilt from the `boltz_input.md` the bundle carries. That is only done when it
+is provably safe. The rebuilt page is pushed back through the same parser and assembler the
+form itself uses, and the resulting spec compared with the one it came from; if they differ,
+the upload is refused with the difference named. A form that silently drops a directive looks
+correct, rebuilds into a different campaign, and says nothing -- worse than not loading at
+all. An unrecognised directive refuses by name for the same reason.
 
 Then choose the run settings. Every one maps to a real `BoltzMaker.py` flag, and each is
 written literally into the generated script so you can read exactly what will run:
@@ -1390,7 +1418,7 @@ uncompressed-size and entry-count caps) before anything is extracted.
 .venv/bin/pytest tests/
 ```
 
-379 tests. The `compare-sse` annotators are covered against real fixture data (a real apo EGFR
+432 tests here, plus 609 for the web app on the `web` branch. The `compare-sse` annotators are covered against real fixture data (a real apo EGFR
 kinase-domain structure vs the `egfr_covalent` example's real holo prediction; a real
 apo beta2-adrenergic-receptor structure vs `adrb2_gs_panel`'s real holo predictions),
 with GPCRdb/KLIFS/PDBe network calls swapped for an injectable fake client seeded with
@@ -1473,6 +1501,13 @@ example campaigns.
   the promise that a link works until it is revoked.
 - [x] Add **Use same pocket** to Prepare, with a distance box defaulting to 8 A. Co-folding puts a ligand wherever it likes: measured on a real GLP1R/GIPR campaign, 6 of 27 ligands docked onto the G-protein subunits rather than the receptor, and only 6 of 14 GIPR ligands shared a site. The pocket reference is **per ligand**, not per protein, because a pocket belongs to the ligand-receptor pair -- orforglipron's site on GLP1R (7E14) and 41Y's site on GIPR (7RBT) share 3 residues out of ~60 once projected onto each other, so one pocket per receptor would force one chemotype into the wrong site. Each ligand names a **holo** reference and picks from the ligands found in it; waters, ions, buffers, sugars and lipids are excluded outright, so 7dty's six cholesterols are never offered. Holo is enforced for the pocket and apo is enforced for the comparison: a reference with a bound ligand is refused as apo (6ln2, a modulator+Fab complex, was used as one for weeks) and a ligand-free one is refused as a pocket. Residues are mapped into the user's own numbering by alignment and reach Boltz as a `pocket` constraint with `max_distance`.
 - [x] Close the archive's trust gap: "Keep private" put the guarantee in a checkbox the caller had to remember to tick, and automated form posts made against the live site published three bundles of a real private campaign on `/runs` and the front page. Archiving now needs positive evidence of a person submitting the form from this site (`Sec-Fetch-Site: same-origin`, or a same-origin `Referer`), fails closed otherwise, and honours an explicit `X-BoltzMaker-No-Archive` opt-out for test clients.
+- [x] Make the bundle **the only file anyone has to keep**: it runs the campaign, and uploading it back at the top of Step 1 restores the form to edit and rebuild. It was three artefacts before -- the `.command`, the `.bmz` it produces, and a `.boltzpage.json` from a "Save page" button -- with no way to say which mattered; the second and third are gone from the page. Reading a `.command` needs a line-anchored search for the payload marker, because the extractor greps for its own marker and a plain `find` slices the shell script in as base64, failing with "Incorrect padding" and naming nothing.
+- [x] Load a bundle that **has no saved page inside it** -- every example campaign and everything already in the Runs archive -- by rebuilding the form from its `boltz_input.md`, which fixes bundles already on people's disks rather than only the archived copies. Done only when provably safe: the rebuilt page goes back through the form's own parser and assembler and the resulting spec is compared with the original, refusing with the difference named if they disagree, and refusing any directive the derivation has not been taught. The check earned itself immediately, catching eight silent losses -- companion proteins invented on every reload (an unticked box posts nothing, and the field being wholly absent reads as "old page, default all on"), a covalent bond dropped because blank fields were skipped and the parallel arrays went ragged, `Class: experimental` appearing from nowhere, 5HT2's `H2AAP` renamed to `5HAP`, three companions collapsing into one because they were matched on a sequence their variants share, companions lost when a real apo exists and nothing points at them, and a spec with no `Settings:` block reading as different from its own rebuild.
+- [x] Give the form the fields a spec always had and it did not: per-protein **`Ligands:` scoping**, **`Group:`**, **`Family type:`**, a ligand's **`Role:`**, an apo reference as a **file in the bundle** with an optional **chain**, and **`Targets per invocation`**. Not optional extras -- these are why no example campaign could be loaded back in, and deriving a form from a spec is only honest if the form can hold everything the spec says.
+- [x] Stop the two places a partner is named from drifting apart: **co-folded partners are tickboxes** built from the Partner rows themselves. Renaming a partner after a protein referenced it used to fail validation at download time with the campaign already entered. Still posts one comma-separated `protein_partners[]` per row -- a `<select multiple>` posts one value per selection, which would make the protein rows' parallel arrays ragged and attach partners to the wrong protein.
+- [x] **Read a PDB id back** under the box, the way the UniProt accession already was: title, method, resolution and the bound ligands. Every typo in a four-character id is another valid id, and "apo" in a title is not a guarantee -- this project has twice measured against a reference that was not what it claimed. Needs one GraphQL call rather than the REST entry endpoint, whose `nonpolymer_bound_components` is absent on many entries including 5VEW, which has three ligands: REST would report "no ligands" for exactly the case the check exists to catch.
+- [x] **Upload an apo structure** from the machine, for anything not in the PDB, copied into the bundle under `reference/`. Two things that would fail silently: the form needs `multipart/form-data` or the browser posts the filename without the file, and the input is named per row rather than as a `[]` array because an empty file input posts nothing and an array would attach each upload to the wrong protein. Contents are sniffed rather than trusted from the extension, filenames sanitised, 20MB ceiling.
+- [x] Fix the UniProt autofill **announcing nothing when it fills a field**. Assigning `.value` from script fires no event, so a partner filled from its accession did not reach the proteins' partner pickers until some later edit triggered a re-sync -- which read as "partners only appear when I add another one". Autosave missed it identically: an autofilled name and sequence were never written to browser storage until the next keystroke elsewhere, so filling a protein from its accession and reloading lost it.
 - [x] Prove the pocket restraint can **fail**, not just succeed: a wrong-pocket arm on every ligand. The tightness series showed a 4 A pocket reproducing a crystal pose, which is only evidence if the same machinery misses when aimed somewhere else. Running each ligand against its own site, the other ligand's site and no site at all put own-site at 0.91/2.79 A, unconstrained at 6.17/13.57 A and wrong-site at 24.93/29.40 A -- worse than no constraint -- on two ligands across two receptors. The conformer column stays low (0.81, 1.78) through the wrong-site failures, so the molecule's shape is right and only its placement is wrong, which is the decomposition the three columns exist for. See **Does the restraint just manufacture the pose?** above.
 - [x] Resolve pocket codes against the chemical component dictionary instead of treating them as opaque labels. A pocket carried through a campaign as the string `41Y` is a PDB component id defining a real molecule, and it turned out to be the same compound as one of that campaign's own ligands -- which had an experimental structure nobody had fetched. Pulling 7RBT into `reference/` doubled the pose panel's coverage and supplied the second ligand of the wrong-pocket control above.
 - [x] Record where a pocket came from, via **`Pocket source: <code> from <PDB>`**. The reference panel previously read "not recorded" for any pocket whose provenance lived only in whoever built the spec, and the pose panel could pair a prediction with its experiment only when that structure happened to already be in `reference/`. Reporting only -- it never reaches generate/run.
