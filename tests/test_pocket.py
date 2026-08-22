@@ -195,16 +195,27 @@ def test_two_references_sharing_a_ligand_code_are_refused(client, monkeypatch): 
     assert b"would collide" in response.data or b"both use ligand" in response.data
 
 
-def test_an_apo_reference_with_a_ligand_in_it_is_refused(client, monkeypatch):   # noqa: F811
-    """6ln2 was used as an 'apo' reference for weeks; it is a modulator+Fab complex,
-    so the apo-vs-holo comparison was holo against holo."""
+def test_an_apo_reference_may_carry_a_ligand(client, monkeypatch):   # noqa: F811
+    """The field is "apo OR inactive", and an inactive receptor is usually bound.
+
+    This used to be refused outright on the grounds that 6ln2 -- a modulator+Fab
+    complex -- had been used as an "apo" reference for weeks, making the
+    comparison holo against holo. But the same rule rejected 5VEW, the correct
+    inactive GLP1R reference, because it carries PF-06372222: what holds a
+    receptor inactive is usually a ligand. State is the thing that matters, not
+    an empty site, and only the person choosing the structure can judge it.
+
+    Not silently, though: the PDB verification note under the box lists whatever
+    is bound as soon as the id is typed. Told, not blocked.
+    """
     from boltzmaker_web import apo
     monkeypatch.setattr(apo, "fetch", lambda pdb_id, **kw: (_text("6ln2").encode(), "cif"))
     form = _form()
     form.setlist("protein_apo_pdb[]", ["6ln2"])
     response = client.post("/auto/prepare", data=form, headers=BROWSER)
-    assert b"not an apo structure" in response.data
-    assert b"97Y" in response.data
+    assert response.status_code == 200
+    assert response.data.startswith(b"#!/usr/bin/env bash"), "expected a bundle, not the form"
+    assert b"not an apo structure" not in response.data
 
 
 def test_an_apo_structure_is_refused_as_a_pocket_reference(client, monkeypatch):  # noqa: F811
@@ -293,3 +304,39 @@ def test_a_bundle_ships_and_applies_the_boltz_patches(client, monkeypatch):  # n
     assert "patches/apply_boltz_patches.py" in script
     # applied before the campaign, not after it
     assert script.index("apply_boltz_patches.py") < script.index("BoltzMaker.py all")
+
+
+def test_a_domain_only_structure_matches_a_full_length_sequence(sequences):
+    """The normal case for a kinase, and it used to be refused outright.
+
+    Identity was measured as matched residues over the length of the *whole*
+    target, so a structure covering one domain of a multi-domain protein could
+    not clear the bar however perfectly it matched. Reported from the field with
+    ABL1: 2GQG is the ABL1 kinase domain and aligns to UniProt P00519 at 276
+    identical residues out of 277 observed -- but P00519 is 1130 residues, so the
+    score came to 0.244, fell under the 0.3 threshold, and the form said "no chain
+    of 2GQG aligns to this protein".
+
+    Reproduced here without shipping a 5,600-line fixture: the same arithmetic
+    appears whenever the chain covers a small fraction of the target, so the
+    receptor sequence is padded until it does.
+    """
+    receptor = sequences["GLP1R"]
+    padded = receptor + "W" * (4 * len(receptor))      # chain now covers ~20%
+    assert pocket.best_chain_for_sequence(_text("6ln2"), padded) == "A"
+
+
+def test_identity_is_still_required_over_whatever_does_align(sequences):
+    """Loosening the denominator must not let a different protein through.
+
+    A related receptor aligns over much of its length at moderate identity, which
+    is exactly what the gate is for -- placing a site from the wrong protein is
+    worse than placing none.
+    """
+    assert pocket.best_chain_for_sequence(_text("6ln2"), sequences["GIPR"]) == ""
+
+
+def test_a_short_high_identity_fragment_is_not_enough(sequences):
+    """A few dozen residues can align at 100% between unrelated proteins."""
+    fragment = sequences["GLP1R"][200:215]
+    assert pocket.best_chain_for_sequence(_text("6ln2"), fragment) == ""

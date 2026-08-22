@@ -155,6 +155,18 @@ class PartnerInput:
     uniprot: str = ""
 
 
+#: A ligand's pharmacology. Must match BoltzMaker.py's own LIGAND_ROLES -- the spec
+#: this form writes is parsed by that file, so a value accepted here and rejected
+#: there fails on the user's machine after the bundle has been downloaded.
+#:
+#: "inhibitor" is not a synonym for antagonist: an antagonist blocks a receptor's own
+#: signal, an inhibitor blocks an enzyme's catalysis, and a campaign spanning kinases
+#: and GPCRs needs both words. "unknown" is a positive statement that the pharmacology
+#: is not established, which an empty field does not make -- blank only means nobody
+#: filled it in.
+LIGAND_ROLES = ("agonist", "antagonist", "inhibitor", "unknown")
+
+
 @dataclass
 class LigandInput:
     name: str

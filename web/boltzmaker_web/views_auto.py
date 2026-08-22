@@ -494,21 +494,18 @@ def prepare():
             extra_files[path] = data
             apo_paths[protein.name] = path
 
-            # The apo reference is for compare-sse, which measures what changes
-            # between ligand-free and ligand-bound. A structure with a ligand in it is
-            # not apo, and comparing holo against holo measures nothing -- a real
-            # campaign ran for weeks with 6ln2 (a modulator+Fab complex) and 7dty
-            # (peptide-bound) as its "apo" references.
-            if extension == "cif":
-                bound = pocket_finder.ligand_candidates(data.decode("utf-8", errors="replace"))
-                if bound:
-                    return _render_prepare(
-                        defaults=cfg, form=request.form, error_field="protein_apo_pdb[]",
-                        error=f"{protein.name}: {protein.apo_pdb.upper()} is not an apo "
-                              f"structure -- it contains {bound[0].code}. The apo reference is "
-                              "for the apo-vs-holo comparison, so a bound ligand makes it "
-                              "meaningless. Use a ligand-free structure here; the pocket comes "
-                              "from a holo structure on the ligand rows.")
+            # A bound ligand is no longer refused here. The field is "apo OR
+            # inactive", and an inactive-state reference is usually bound to
+            # something -- an antagonist or a negative allosteric modulator is
+            # often what holds it inactive. 5VEW, the right inactive GLP1R
+            # reference, carries PF-06372222; the old check rejected it and every
+            # structure like it, which is the opposite of what the comparison
+            # wants. What matters is the receptor's state, not whether the site is
+            # empty, and that is a judgement only the person choosing it can make.
+            #
+            # The information is still surfaced rather than dropped: the PDB
+            # verification note under the box lists whatever is bound, in amber,
+            # as soon as the id is typed. Told, not blocked.
 
     # Each protein's pockets are the sites its ligands are run against, plus an
     # unconstrained baseline. A site is applied to the protein that named it; when the

@@ -193,25 +193,48 @@ def map_to_sequence(text: str, chain: str, contacts: list[str],
     return positions
 
 
+#: Identity over the part that actually aligns, not over the whole target. A chain
+#: has to be the same protein, but it does not have to be all of it.
+_MIN_CHAIN_IDENTITY = 0.7
+
+#: ...and it has to be enough of it to be a real correspondence rather than a
+#: coincidence: a dozen residues can align at 100% between unrelated proteins.
+_MIN_MATCHED_RESIDUES = 30
+
+
 def best_chain_for_sequence(text: str, target_sequence: str) -> str:
     """Which chain of the reference corresponds to the user's protein.
 
     Chosen by alignment identity rather than by name or order: a reference names
     its chains whatever the depositor chose, and the receptor is not reliably
     chain A.
+
+    Identity is measured over the aligned overlap. Dividing the matched residues
+    by the length of the *whole* target instead makes a domain-only structure
+    unusable against a full-length UniProt sequence, which is the normal case for
+    a kinase: 2GQG is the ABL1 kinase domain and matches P00519 at 276 identical
+    residues out of 277, but P00519 is 1130 residues long, so the old score came
+    to 0.244 and fell under a 0.3 threshold. A near-perfect match was refused with
+    "no chain aligns to this protein". Coverage is not identity, and a structure
+    is almost never the whole protein.
     """
-    best, best_score = "", -1.0
+    best, best_matched = "", 0
     chains = {ch for kind, _c, ch, _s, _a, _x, _y, _z in _atom_rows(text) if kind == "ATOM"}
     for chain in sorted(chains):
         observed, _numbers = _chain_sequence(text, chain)
-        if len(observed) < 30:
+        if len(observed) < _MIN_MATCHED_RESIDUES:
             continue
         ref_aln, tgt_aln = align_pair(observed, target_sequence)
         same = sum(1 for a, b in zip(ref_aln, tgt_aln) if a == b and a != "-")
-        score = same / max(len(target_sequence), 1)
-        if score > best_score:
-            best, best_score = chain, score
-    return best if best_score >= 0.3 else ""
+        overlap = sum(1 for a, b in zip(ref_aln, tgt_aln) if a != "-" and b != "-")
+        if same / max(overlap, 1) < _MIN_CHAIN_IDENTITY:
+            continue
+        # Ranked by how much of the protein the chain actually explains, not by
+        # ratio: two copies of the same domain both score 1.0, and the better
+        # resolved one is the one worth taking the site from.
+        if same > best_matched:
+            best, best_matched = chain, same
+    return best if best_matched >= _MIN_MATCHED_RESIDUES else ""
 
 
 # ---------------------------------------------------------------------------

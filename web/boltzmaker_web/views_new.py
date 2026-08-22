@@ -11,6 +11,7 @@ from .app import new_scratch_dir
 from .runner import BoltzMakerTimeout, extract_error_message, run_boltzmaker
 from .wizard import (
     Constraint,
+    LIGAND_ROLES,
     LigandInput,
     PartnerInput,
     ProteinInput,
@@ -247,7 +248,7 @@ def _parse_form() -> tuple[bool, list[ProteinInput], list[PartnerInput], list[Li
         if not value.strip():
             raise WizardValidationError(f"Ligand '{name}' needs a SMILES or CCD value.", field="ligand_value")
         role = (ligand_roles[index] if index < len(ligand_roles) else "").strip().lower()
-        if role not in ("agonist", "antagonist"):
+        if role not in LIGAND_ROLES:
             role = ""
         ligands.append(LigandInput(name=name, kind=kind, value=value,
                                    ligand_class=ligand_class, role=role))

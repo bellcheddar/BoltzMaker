@@ -692,7 +692,7 @@ class Ligand:
     id: str
     smiles: object = None
     ccd: object = None
-    role: object = None  # optional "agonist" / "antagonist" -- purely for reporting
+    role: object = None  # optional pharmacology (see LIGAND_ROLES) -- reporting only
                            # (dashboard charts, compare-sse), never affects generate/run
     #: "control" or "experimental". A control has been verified experimentally, by
     #: structure or by assay, so its prediction can be checked against something real;
@@ -998,6 +998,14 @@ LIGAND_CLASS_NOTE = _LIGAND_CLASS_NOTE = {
 }
 LIGAND_CLASS_LABELS = {"control": "Control", "experimental": "Experimental"}
 
+#: A ligand's pharmacology. Reporting only -- nothing in the pipeline reads it.
+#: "inhibitor" is not a synonym for antagonist: an antagonist blocks a receptor's
+#: own signal, an inhibitor blocks an enzyme's catalysis, and a campaign mixing
+#: kinases with GPCRs needs both words. "unknown" is a deliberate statement that
+#: the pharmacology was looked at and is not established, which absence does not
+#: say -- an omitted Role only means nobody filled it in.
+LIGAND_ROLES = ("agonist", "antagonist", "inhibitor", "unknown")
+
 
 def _build_ligand_record(name: str, fields: dict, statements: list, lineno: int) -> Ligand:
     has_smiles, has_ccd = "smiles" in fields, "ccd" in fields
@@ -1005,9 +1013,9 @@ def _build_ligand_record(name: str, fields: dict, statements: list, lineno: int)
         raise MDParseError(f"ligand '{name}' must specify exactly one of SMILES/CCD (line {lineno})")
     smiles = _canonicalize_smiles(fields["smiles"]) if has_smiles else None
     role = fields.get("role", "").strip().lower() or None
-    if role and role not in ("agonist", "antagonist"):
+    if role and role not in LIGAND_ROLES:
         raise MDParseError(f"ligand '{name}' has invalid Role '{role}' "
-                            f"(expected agonist/antagonist, line {lineno})")
+                            f"(expected {'/'.join(LIGAND_ROLES)}, line {lineno})")
     ligand_class = fields.get("class", "").strip().lower() or None
     if ligand_class and ligand_class not in LIGAND_CLASSES:
         raise MDParseError(f"ligand '{name}' has invalid Class '{ligand_class}' "
@@ -3788,7 +3796,8 @@ def _protein_groups(d: pd.DataFrame) -> list:
 #: used to shape-code by this and now shape-code by protein: with one receptor per
 #: shape a reader can see which points belong together, whereas agonist/antagonist
 #: was usually constant across a campaign and split nothing.
-_ROLE_MARKER_SYMBOL = {"agonist": "circle", "antagonist": "diamond"}
+_ROLE_MARKER_SYMBOL = {"agonist": "circle", "antagonist": "diamond",
+                       "inhibitor": "square", "unknown": "circle-open"}
 _ROLE_MARKER_DEFAULT = "circle"
 
 # Plotly's own legend defaults to sitting outside the plot on the right, exactly where a

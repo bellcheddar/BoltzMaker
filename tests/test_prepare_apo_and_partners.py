@@ -192,3 +192,56 @@ def test_the_picker_resyncs_on_every_way_a_partner_name_can_change():
                     '"boltz:page-applied", syncAll'):
         assert trigger in source, trigger
     assert '["input", "change"].forEach' in source
+
+
+# ---- pharmacology: four values, not two -------------------------------------
+
+def test_the_form_offers_all_four_roles(client):
+    page = client.get("/auto/prepare").get_data(as_text=True)
+    for role in ("agonist", "antagonist", "inhibitor", "unknown"):
+        assert f'<option value="{role}">' in page, role
+
+
+def test_the_web_and_cli_role_lists_cannot_drift():
+    """The spec this form writes is parsed by BoltzMaker.py.
+
+    A value accepted here and rejected there fails on the user's machine, after
+    the bundle has been downloaded and the campaign started -- the worst possible
+    place to discover a mismatch. Compared by reading the source rather than by
+    importing: BoltzMaker.py relaunches itself on import and must never be loaded
+    in the web process.
+    """
+    import re
+    from pathlib import Path
+    from boltzmaker_web.wizard import LIGAND_ROLES
+
+    source = (Path(__file__).parent.parent / "BoltzMaker.py").read_text()
+    match = re.search(r"^LIGAND_ROLES = \(([^)]*)\)", source, re.M)
+    assert match, "BoltzMaker.py no longer defines LIGAND_ROLES"
+    cli = tuple(v.strip().strip('"\'') for v in match.group(1).split(",") if v.strip())
+    assert cli == LIGAND_ROLES
+
+
+def test_an_unknown_role_is_dropped_rather_than_written_into_the_spec(client):
+    """Anything not in the list becomes empty, not a Role: line the parser refuses."""
+    from boltzmaker_web.wizard import LIGAND_ROLES
+    assert "partial-agonist" not in LIGAND_ROLES
+
+
+# ---- an inactive reference may carry a ligand -------------------------------
+
+def test_a_bound_ligand_no_longer_disqualifies_an_apo_reference():
+    """The field is "apo OR inactive", and an inactive receptor is usually bound.
+
+    5VEW -- the correct inactive GLP1R reference -- carries PF-06372222, and the
+    old check rejected it and every structure like it. What matters is the
+    receptor's state, not whether the site is empty. The information is still
+    surfaced by the PDB verification note; it just no longer blocks.
+    """
+    from pathlib import Path
+    source = (Path(__file__).parent.parent
+              / "web/boltzmaker_web/views_auto.py").read_text()
+    assert "is not an apo " not in source
+    assert "Use a ligand-free structure here" not in source
+    # The opposite rule stays: a pocket must come from a structure with a ligand.
+    assert "ligand_candidates" in source

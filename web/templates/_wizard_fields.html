@@ -318,11 +318,15 @@
         <option value="">not specified</option>
         <option value="agonist">agonist</option>
         <option value="antagonist">antagonist</option>
+        <option value="inhibitor">inhibitor</option>
+        <option value="unknown">unknown</option>
       </select>
-      <p class="md-hint">Shape-codes this ligand's points on the affinity charts:
-        circle for an agonist, diamond for an antagonist. The spec has always carried
-        it; the form had no field for it, so a campaign using it could not be loaded
-        back in.</p>
+      <p class="md-hint">Reporting only, and carried into the report beside each
+        ligand. <b>inhibitor</b> is not a synonym for antagonist: an antagonist blocks
+        a receptor's own signal, an inhibitor blocks an enzyme's catalysis, and a
+        campaign spanning kinases and GPCRs needs both. <b>unknown</b> says the
+        pharmacology was looked at and is not established, which leaving this blank
+        does not: blank only means nobody filled it in.</p>
     </div>
   </div>
 </template>
