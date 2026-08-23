@@ -242,6 +242,18 @@ img, canvas { max-width: 100%; height: auto; }
    wrap rather than letting the panel scroll: a scrollbar hides the columns that
    matter (the RMSD figures are at the right-hand end) behind a gesture. */
 .md-report-panel { overflow-x: visible; }
+
+/* Sub-headings inside an imported dashboard panel. The dashboard styles these in
+   its own <style> block, which the explorer does not import -- it takes the panel
+   markup only -- so they fell back to browser defaults here and the same fix made
+   offline had no effect on the page people actually read.
+
+   The 30px is not the 18px plus slop: a heading directly under a table reads
+   tighter than the identical margin under a paragraph, because a table's last
+   border sits flush with its box where a line of text leaves leading below the
+   baseline. Matched by eye, and kept in step with BoltzMaker.py's .md-card h3. */
+.md-report-panel h3.md-sub { margin: 18px 0 6px; font-size: 14px; }
+.md-report-panel table + h3.md-sub { margin-top: 30px; }
 .md-report-panel table {
   border-collapse: collapse; width: 100%; table-layout: auto;
   font-size: 12.5px; font-variant-numeric: tabular-nums;
