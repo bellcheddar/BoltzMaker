@@ -1442,6 +1442,32 @@ SMILES: CCO
     assert bm.parse_md(md).pocket_sources == {"1N1": "2GQG", "STI": "1IEP"}
 
 
+def test_a_reference_molecule_is_credited_to_the_protein_that_declared_it(bm, tmp_path):
+    """It defines no site, so no protein carries it -- but one block named it.
+
+    Falling back to "every family" credited an ABL1 reference to the ABLAP apo
+    companion as well, which never mentioned it.
+    """
+    md = tmp_path / "c.md"
+    md.write_text("""Settings:
+Pocket distance: 4
+
+Protein: ABL1
+Sequence: MKTAYIAKQRQISFVKSHFSRQLEERLGLIEVQ
+Pocket source: STI from 1IEP
+
+Protein: ABLAP
+Sequence: MKTAYIAKQRQISFVKSHFSRQLEERLGLIEVQ
+
+Ligand: IMATI
+SMILES: CCO
+""")
+    html = bm._build_reference_panel_html(bm.parse_md(md), tmp_path)
+    row = [line for line in html.split("<tr>") if "STI" in line][0]
+    assert "ABL1" in row
+    assert "ABLAP" not in row, "the companion never named this reference"
+
+
 def test_one_pocket_code_claimed_by_two_structures_is_refused(bm, tmp_path):
     """A code names one site; two structures for it means the residues depend on
     which line happened to be read last, which is not a campaign anyone meant."""
