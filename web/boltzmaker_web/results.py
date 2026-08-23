@@ -308,6 +308,11 @@ class Results:
     reports: list = field(default_factory=list)
     #: Every PLIP contact, by target_id -- the detail behind the counts.
     interactions: dict = field(default_factory=dict)
+    #: Whether the campaign ran interaction analysis at all. Distinct from an empty
+    #: `interactions`: a campaign run without the optional cif2plip environment
+    #: produces no contacts for any target, which is not the same finding as a
+    #: ligand that genuinely touches nothing, and the viewer said the latter.
+    interactions_ran: bool = False
     #: UniProt accession by protein short name, when the Prepare form was told one.
     accessions: dict = field(default_factory=dict)
     #: One entry per predicted/experimental ligand pair BoltzMaker could compare,
@@ -583,6 +588,7 @@ def load(root: Path) -> Results:
         sse_rows=sse_rows,
         reports=reports,
         interactions=_load_interactions(root),
+        interactions_ran=(root / "summary" / "boltz_interactions.csv").is_file(),
         accessions=accessions,
         pose_pairs=pose_pairs,
     )
@@ -647,6 +653,10 @@ def to_json(results: Results) -> str:
                 "plip_status": t.plip_status, "plip": t.plip_counts, "plip_total": t.plip_total,
                 "structure": t.has_structure, "image": t.has_image,
                 "interactions": results.interactions.get(t.target_id, []),
+                # Per target, because a campaign can run the analysis and still have
+                # a target it could not analyse; the viewer needs to tell "nothing
+                # touching" from "nobody looked".
+                "interactions_ran": results.interactions_ran,
                 "apo_rmsd": apo.get(t.target_id),
             }
             for t in results.targets

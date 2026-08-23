@@ -523,12 +523,28 @@ var BoltzExplorer = (function () {
               var framed = wrapper.focusContacts(ligandId, contacts);
               var drawn = wrapper.showInteractions(ligandId, contacts);
               wrapper.setSpin(true);
+              // "0 contacting residues" is what this said for a campaign run
+              // without the optional cif2plip environment -- reporting an absence
+              // of analysis as a finding of no contacts, which are opposite claims
+              // about the ligand. Say which one it is.
               note.textContent = !framed
-                ? "No contacts to frame, so the whole complex is shown."
+                ? (t.interactions_ran === false
+                    ? "Interaction analysis was not run for this campaign, so no "
+                      + "contacts are marked. Re-run with cif2plip installed "
+                      + "(`setup-plip`) to see them."
+                    : "No contacts to frame, so the whole complex is shown.")
                 : contacts.length + " contacting residue"
                   + (contacts.length === 1 ? "" : "s") + " and the ligand as sticks"
                   + (drawn ? ", with " + drawn + " contact" + (drawn === 1 ? "" : "s")
                              + " drawn and measured." : ".");
+              if (framed && !contacts.length) {
+                note.textContent = t.interactions_ran === false
+                  ? "Interaction analysis was not run for this campaign, so no "
+                    + "contacts are marked. The ligand is shown as sticks; re-run "
+                    + "with cif2plip installed (`setup-plip`) to see them."
+                  : "No contacts were detected for this ligand. It is shown as "
+                    + "sticks in the site it was placed in.";
+              }
             });
         })
         .catch(function (err) {
