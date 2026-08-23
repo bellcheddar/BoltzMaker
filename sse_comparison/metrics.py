@@ -157,26 +157,102 @@ def _residue_distance(structure: object, fam_to_pos: dict, fam_pos: object) -> o
         return None
 
 
-def classify_state(frame: object, anchor1_fam_pos: object, anchor2_fam_pos: object,
-                    threshold: float) -> tuple:
-    """Generic "in"/"out" distance classifier shared by DFG and alphaC states: measures
-    the CA-CA distance between two named anchor residues (e.g. DFG-Asp and the
-    catalytic Lys) in both structures. A coarse geometric proxy for *shift detection*
-    (did the state change between apo and holo), not a publication-grade dihedral
-    classifier. Returns (state_apo, state_holo, changed) with None entries where an
-    anchor residue couldn't be resolved in that structure.
+#: Dunbrack's two-distance DFG classifier (Modi & Dunbrack, PNAS 2019): the DFG-Phe
+#: ring packs against the alphaC helix when the motif is in, and swings into the ATP
+#: site when it is out. 11 A separates the two populations on both distances.
+DFG_PHE_CUTOFF_A = 11.0
+
+#: The catalytic Lys to alphaC Glu salt bridge, formed (alphaC-in) or broken (out).
+#: A side-chain contact, so it needs a structure with side chains modelled.
+ALPHAC_SALT_BRIDGE_A = 4.0
+
+
+def _residue_at(structure: object, fam_to_pos: dict, fam_pos: object) -> object:
+    i = fam_to_pos.get(fam_pos) if fam_pos is not None else None
+    if i is None:
+        return None
+    try:
+        return structure.polymer[i]
+    except Exception:
+        return None
+
+
+def _atom_pos(residue: object, *names: str) -> object:
+    """Position of the first of `names` modelled on this residue, or None.
+
+    Several names because the atom a criterion is defined on is not always the one
+    present: a glutamate offers either carboxylate oxygen to the salt bridge, and a
+    truncated side chain offers neither.
     """
-    apo_p1 = _residue_distance(frame.apo, frame.fam_to_apo, anchor1_fam_pos)
-    apo_p2 = _residue_distance(frame.apo, frame.fam_to_apo, anchor2_fam_pos)
-    holo_p1 = _residue_distance(frame.holo, frame.fam_to_holo, anchor1_fam_pos)
-    holo_p2 = _residue_distance(frame.holo, frame.fam_to_holo, anchor2_fam_pos)
+    if residue is None:
+        return None
+    for name in names:
+        for atom in residue:
+            if atom.name == name:
+                return atom.pos
+    return None
 
-    def _state(p1, p2):
-        if p1 is None or p2 is None:
+
+def classify_dfg_state(frame: object, phe_pos: object, lys_pos: object, glu_pos: object,
+                        cutoff: float = DFG_PHE_CUTOFF_A) -> tuple:
+    """DFG-in/out from where the DFG-Phe ring sits, not from the Asp backbone.
+
+    The CA-CA proxy this replaced measured DFG-Asp CA to catalytic Lys CA and called
+    dasatinib-bound ABL1 (2GQG) "DFG-out" at 11.15 A against an 8 A threshold -- as it
+    called every structure it was ever handed, reference and prediction alike, because
+    that CA-CA separation barely moves between the two states. It is the *side chain*
+    that swings. This measures the Phe ring against two fixed points: the alphaC-Glu+4
+    CA and the catalytic Lys CA. In: close to alphaC, far from Lys. Out: the reverse.
+    Neither, and the kinase is in some third conformation -- reported as "other"
+    rather than forced into a binary it does not fit.
+
+    Returns (state_apo, state_holo, changed), None where an anchor is unresolvable.
+    """
+    def state(structure, fam_to_pos):
+        ring = _atom_pos(_residue_at(structure, fam_to_pos, phe_pos), "CZ", "CE1", "CD1")
+        near = _atom_pos(_residue_at(structure, fam_to_pos,
+                                     None if glu_pos is None else glu_pos + 4), "CA")
+        far = _atom_pos(_residue_at(structure, fam_to_pos, lys_pos), "CA")
+        if ring is None or near is None or far is None:
             return None
-        return "in" if p1.dist(p2) < threshold else "out"
+        d_near, d_far = ring.dist(near), ring.dist(far)
+        if d_near <= cutoff < d_far:
+            return "in"
+        if d_far <= cutoff < d_near:
+            return "out"
+        return "other"
 
-    state_apo, state_holo = _state(apo_p1, apo_p2), _state(holo_p1, holo_p2)
+    return _paired(state, frame)
+
+
+def classify_alphac_state(frame: object, glu_pos: object, lys_pos: object,
+                           cutoff: float = ALPHAC_SALT_BRIDGE_A) -> tuple:
+    """alphaC-in/out from the catalytic Lys-alphaC Glu salt bridge.
+
+    The defining contact, and a side-chain one: measuring it CA-CA (the previous
+    proxy, 10 A threshold) reads 10.91 A on 2GQG and calls it out, while the
+    carboxylate is 3.34 A from the Lys amine and the bridge is plainly intact.
+    Returns None where either side chain is unmodelled, which is the honest answer
+    for a backbone-only structure -- not "out".
+    """
+    def state(structure, fam_to_pos):
+        amine = _atom_pos(_residue_at(structure, fam_to_pos, lys_pos), "NZ")
+        acid = _residue_at(structure, fam_to_pos, glu_pos)
+        if amine is None or acid is None:
+            return None
+        contacts = [amine.dist(pos) for pos in
+                    (_atom_pos(acid, "OE1"), _atom_pos(acid, "OE2")) if pos is not None]
+        if not contacts:
+            return None
+        return "in" if min(contacts) < cutoff else "out"
+
+    return _paired(state, frame)
+
+
+def _paired(state: object, frame: object) -> tuple:
+    """Run a per-structure classifier over both halves of a comparison frame."""
+    state_apo = state(frame.apo, frame.fam_to_apo)
+    state_holo = state(frame.holo, frame.fam_to_holo)
     changed = None if (state_apo is None or state_holo is None) else state_apo != state_holo
     return state_apo, state_holo, changed
 

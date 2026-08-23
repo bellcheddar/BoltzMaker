@@ -452,6 +452,10 @@ var BoltzWizard = (function () {
       if (!row) return;
       var pdb = row.querySelector('input[name="pocket_pdb[]"]');
       var sel = row.querySelector('select[name="pocket_ligand[]"]');
+      var mode = row.querySelector('select[name="pocket_mode[]"]');
+      /* Restored before the ligand list loads: the mode is independent of it, and a
+         reference-only row reloaded as a site would quietly add a target per ligand. */
+      if (mode && saved && saved.mode) mode.value = saved.mode;
       if (pdb && saved && saved.pdb) {
         pdb.value = saved.pdb;
         if (sel && saved.ligand) sel.setAttribute("data-restore", saved.ligand);
@@ -464,8 +468,10 @@ var BoltzWizard = (function () {
       for (var i = 0; i < rows.length; i++) {
         var pdb = rows[i].querySelector('input[name="pocket_pdb[]"]');
         var sel = rows[i].querySelector('select[name="pocket_ligand[]"]');
+        var mode = rows[i].querySelector('select[name="pocket_mode[]"]');
         if (pdb && pdb.value.trim()) {
-          out.push({ pdb: pdb.value.trim(), ligand: sel ? sel.value : "" });
+          out.push({ pdb: pdb.value.trim(), ligand: sel ? sel.value : "",
+                     mode: mode ? mode.value : "site" });
         }
       }
       return out;
@@ -519,7 +525,12 @@ var BoltzWizard = (function () {
       var mine = 0;
       var pdbs = fields("pocket_pdb[]", row);
       var codes = fields("pocket_ligand[]", row);
+      var modes = fields("pocket_mode[]", row);
       for (var j = 0; j < pdbs.length; j++) {
+        /* A "reference molecule only" row ships a structure to score poses against
+           and defines no site, so it costs nothing and must not be counted here --
+           the whole point of the mode is that the run count does not change. */
+        if (modes[j] && modes[j].value === "reference") continue;
         if (pdbs[j].value.trim() && codes[j] && codes[j].value) mine++;
       }
       pockets += mine;

@@ -574,6 +574,7 @@ import argparse
 import ast
 import base64
 import contextlib
+import csv
 import html
 import io
 import json
@@ -679,7 +680,8 @@ class ProteinFamily:
     apo_structure: object = None   # raw path string to a reference apo structure, or None
     apo_chain: object = None        # explicit apo chain id, or None (triggers auto-detect)
     #: "CODE from PDBID" -- the structure this protein's named pocket was read from.
-    pocket_source: object = None
+    #: Raw `Pocket source:` lines, one per structure a site was read from.
+    pocket_source_lines: list = field(default_factory=list)
     family_type: str = "auto"        # "gpcr" | "kinase" | "auto" -- selects the compare-sse MotifAnnotator
     group: object = None             # optional display/report grouping name shared across
                                        # multiple Protein: blocks of the same underlying
@@ -751,6 +753,14 @@ class MDParseError(Exception):
 
 _RECORD_START_RE = re.compile(r"^(Settings|Protein|Partner|Ligand)\s*:\s*(.*)$", re.IGNORECASE)
 _FIELD_RE = re.compile(r"^([A-Za-z][A-Za-z ]*?)\s*:\s*(.*)$")
+
+#: (record type, field) pairs that may appear more than once in one block and are
+#: collected in order instead of overwriting. Everything else keeps last-write-wins,
+#: which for a field written once is the same thing and catches a duplicated line.
+#: A protein may read a site out of each of several structures -- one holo entry per
+#: reference molecule -- and each needs its own provenance, so two `Pocket source:`
+#: lines used to leave the campaign claiming the last one for every pocket.
+_REPEATABLE_FIELDS = {("protein", "pocket source")}
 
 _RECORD_ALLOWED_FIELDS = {
     "settings": {"output folder", "predict affinity", "pocket distance",
@@ -904,7 +914,10 @@ def _split_records(lines: list) -> list:
             _warn(f"unrecognized field '{fm.group(1).strip()}:' in "
                   f"{current[0].capitalize()} '{current[1]}' (line {lineno}) -- ignored, typo?")
             continue
-        current[2][field_name] = field_value
+        if (current[0], field_name) in _REPEATABLE_FIELDS:
+            current[2].setdefault(field_name, []).append(field_value)
+        else:
+            current[2][field_name] = field_value
     if current is not None:
         records.append(current)
     return records
@@ -958,7 +971,8 @@ def _build_family_record(name: str, fields: dict, partners: dict, statements: li
         bond_constraints=bond_constraints, contact_constraints=contact_constraints,
         templates=_parse_csv(fields["templates"]) if "templates" in fields else None,
         apo_structure=fields.get("apo structure"), apo_chain=fields.get("apo chain"), family_type=family_type,
-        group=fields.get("group"), pocket_source=fields.get("pocket source"),
+        group=fields.get("group"),
+        pocket_source_lines=list(fields.get("pocket source") or []),
     )
 
 
@@ -1446,15 +1460,23 @@ def parse_md(path: Path) -> Campaign:
     # the same site, so the code-to-structure mapping belongs to the campaign.
     pocket_sources = {}
     for fam in families:
-        raw = (fam.pocket_source or "").strip()
-        if not raw:
-            continue
-        match = _POCKET_SOURCE_RE.match(raw)
-        if not match:
-            raise MDParseError(
-                f"protein '{fam.id}': 'Pocket source: {raw}' should read "
-                f"'<pocket code> from <PDB id>', e.g. 'V6G from 7E14'.")
-        pocket_sources[match.group("code")] = match.group("pdb").upper()
+        for line in fam.pocket_source_lines:
+            raw = (line or "").strip()
+            if not raw:
+                continue
+            match = _POCKET_SOURCE_RE.match(raw)
+            if not match:
+                raise MDParseError(
+                    f"protein '{fam.id}': 'Pocket source: {raw}' should read "
+                    f"'<pocket code> from <PDB id>', e.g. 'V6G from 7E14'.")
+            code, pdb = match.group("code"), match.group("pdb").upper()
+            previous = pocket_sources.get(code)
+            if previous and previous != pdb:
+                raise MDParseError(
+                    f"pocket '{code}' is claimed by two structures ({previous} and "
+                    f"{pdb}). A pocket code names one site, so the residues would "
+                    f"depend on which line was read last.")
+            pocket_sources[code] = pdb
 
     return Campaign(settings=settings, partners=partners, families=families, ligands=ligands,
                     source_path=path, pocket_sources=pocket_sources)
@@ -4515,6 +4537,10 @@ img, canvas { max-width: 100%; height: auto; }
 .landlord-stats th { text-align: left; white-space: nowrap; width: 11em;
                      color: var(--md-text-muted, #6b7c93); font-weight: 600; }
 .md-card h3 { font-size: 14px; margin: 18px 0 6px; }
+/* A heading directly under a table reads tighter than the same 18px under a
+   paragraph: a table's last border is flush with its box, where a line of text
+   leaves leading below the baseline. Match them by eye, not by the number. */
+.md-card table + h3 { margin-top: 30px; }
 .md-card h3 + ul { margin-top: 0; }
 .landlord-table td:nth-child(3) { min-width: 26em; }
 .landlord-verdict { font-weight: 600; text-transform: capitalize; white-space: nowrap; }
@@ -4873,7 +4899,88 @@ def _entity_descriptions(path: Path) -> list:
     return names
 
 
-def _reference_state(path: Path) -> dict:
+def _family_kind(fam: ProteinFamily) -> object:
+    """"gpcr", "kinase" or None -- what a protein is, for reports that must not
+    describe it as something it is not.
+
+    Delegates to compare-sse rather than repeating the test, so a panel cannot label
+    a protein differently from the annotator that measured it. Imported at call time
+    because the annotators import this module.
+    """
+    try:
+        from sse_comparison.cli import family_kind
+        return family_kind(fam.family_type, fam.sequence or "")
+    except Exception:
+        return None
+
+
+def _apo_motif_states(campaign_dir: Path, family_id: str) -> dict:
+    """A kinase reference's DFG and alphaC states, as compare-sse already measured
+    them. Empty when compare-sse has not run, or ran and resolved no anchor -- which
+    is not the same as the motif being absent, and is reported differently.
+    """
+    path = campaign_dir / "boltz_sse_comparison.csv"
+    if not path.is_file():
+        return {}
+    states = {}
+    try:
+        with path.open(newline="") as handle:
+            for row in csv.DictReader(handle):
+                if row.get("family_id") != family_id:
+                    continue
+                for column, label in (("dfg_state_apo", "DFG"),
+                                      ("alphac_state_apo", "αC")):
+                    value = (row.get(column) or "").strip()
+                    if value and value.lower() not in ("none", "nan"):
+                        states[label] = value
+    except (OSError, csv.Error):
+        return {}
+    return states
+
+
+def _reference_state_reading(kind: object, has_g_protein: bool,
+                             motif_states: dict) -> dict:
+    """What can honestly be said about a reference structure's conformational state.
+
+    Only two families have a state this project can read: a GPCR's is set by whether
+    a G protein is bound, a kinase's by its DFG motif and alphaC helix. Everything
+    else has neither, and the panel used to say so anyway -- an ABL1 kinase
+    reference was reported as "no G protein bound", which is true in the way that
+    "no wings" is true of a horse, and reads as a missing component rather than an
+    inapplicable question. Returns state/note/tier; tier None means "no reading",
+    rendered muted rather than as a colour that implies a verdict.
+    """
+    if kind == "gpcr":
+        if has_g_protein:
+            return {"state": "active (G protein bound)", "tier": _TIER_AMBER,
+                    "note": ("A G-protein-coupled reference is in the ACTIVE state, so a "
+                             "motif comparison against it measures active against active "
+                             "and the activation shift cannot appear.")}
+        return {"state": "no G protein bound", "tier": _TIER_GREEN,
+                "note": ("No G protein is bound, so this reference can show an "
+                         "inactive-to-active shift.")}
+    if kind == "kinase":
+        if motif_states:
+            # Insertion order, not sorted: DFG is the primary classifier and is
+            # named first by convention, and "&" sorts ahead of every letter anyway.
+            reading = ", ".join(f"{label}-{value}"
+                                for label, value in motif_states.items())
+            return {"state": reading, "tier": _TIER_GREEN,
+                    "note": ("The DFG motif and αC helix of this reference, as "
+                             "measured by the secondary-structure comparison. A holo "
+                             "structure in the other state is what shows an inhibitor "
+                             "moving the kinase.")}
+        return {"state": "kinase, state not resolved", "tier": _TIER_AMBER,
+                "note": ("A kinase's state is read from its DFG motif and αC helix, "
+                         "and the secondary-structure comparison resolved neither anchor "
+                         "here -- so the state is unknown, not absent.")}
+    return {"state": "not applicable", "tier": None,
+            "note": ("Neither a GPCR nor a kinase, so there is no activation state to "
+                     "read. The comparison below measures motif geometry only.")}
+
+
+def _reference_state(path: Path, kind: object = None,
+                     motif_states: object = None) -> dict:
     """What a reference structure actually is: chains, bound ligands, and its state.
 
     Read from the file rather than trusted from its title. Both of the "apo"
@@ -4881,6 +4988,9 @@ def _reference_state(path: Path) -> dict:
     titled apo and are Gs-coupled, i.e. ligand-free but *active*. A per-motif
     comparison against one of those measures active against active, and the TM6
     activation shift it is read for cannot appear.
+
+    `kind` is the protein's family from `_family_kind()`, and decides which state
+    question is even askable -- see `_reference_state_reading()`.
     """
     chains, ligands = {}, {}
     for row in _mmcif_atom_rows(path):
@@ -4893,13 +5003,37 @@ def _reference_state(path: Path) -> dict:
 
     descriptions = _entity_descriptions(path)
     has_g_protein = any(_G_PROTEIN_NAME.search(name) for name in descriptions)
-    return {
+    info = {
         "chains": len(chains),
         "ligands": sorted(ligands),
         "g_protein": has_g_protein,
         "entities": descriptions,
-        "state": "active (G protein bound)" if has_g_protein else "no G protein bound",
+        "kind": kind,
     }
+    info.update(_reference_state_reading(kind, has_g_protein, motif_states or {}))
+    return info
+
+
+def _sse_state_hint(kinds: set) -> str:
+    """The note under the reference table, saying only what applies to this campaign.
+
+    A fixed sentence about G-protein coupling was printed under every campaign,
+    including kinase ones, where it explained a column that had nothing to do with
+    the proteins in it.
+    """
+    sentences = []
+    if "gpcr" in kinds:
+        sentences.append("A GPCR's state is read from the file, not from its title: a "
+                         "structure titled &ldquo;apo&rdquo; is often ligand-free "
+                         "<em>and</em> G-protein-coupled, which is the active state.")
+    if "kinase" in kinds:
+        sentences.append("A kinase's state is its DFG motif and αC helix, taken "
+                         "from the secondary-structure comparison.")
+    if None in kinds:
+        sentences.append("A protein that is neither a GPCR nor a kinase has no "
+                         "activation state this campaign can read, and none is claimed "
+                         "for it.")
+    return " ".join(sentences)
 
 
 def _build_reference_panel_html(campaign: Campaign, campaign_dir: Path) -> str:
@@ -4917,7 +5051,13 @@ def _build_reference_panel_html(campaign: Campaign, campaign_dir: Path) -> str:
     """
     pocket_rows = []
     references = _reference_structures(campaign_dir)
-    codes = sorted({code for fam in campaign.families for code in (fam.pockets or {})})
+    # Every code the campaign names, including one that defines no site: a
+    # `Pocket source:` with no contacts is a reference molecule shipped purely so a
+    # matching compound's pose can be scored against it, and listing only the codes
+    # with pockets left it out of the one table whose job is saying what the campaign
+    # was built on.
+    codes = sorted({code for fam in campaign.families for code in (fam.pockets or {})}
+                   | set(campaign.pocket_sources))
     for code in codes:
         source = campaign.pocket_sources.get(code)
         path = references.get(code)
@@ -4925,15 +5065,22 @@ def _build_reference_panel_html(campaign: Campaign, campaign_dir: Path) -> str:
             source = path.stem.upper()
         proteins = sorted({fam.id for fam in campaign.families if code in (fam.pockets or {})})
         residues = sum(len((fam.pockets or {}).get(code) or []) for fam in campaign.families)
+        if not residues:
+            # Not "0 contacts", which reads as a site that failed to find any.
+            proteins = proteins or sorted({fam.id for fam in campaign.families})
         origin = html.escape(source) if source else (
             "<span class='cell-na' title='no Pocket source: line and no reference file "
             "containing this ligand'>not recorded</span>")
+        contacts_na = ("<span class='cell-na' title='A reference molecule: its structure "
+                       "ships with the campaign so a matching compound&#39;s pose can be "
+                       "scored against it, but it defines no site and adds no targets.'>"
+                       "reference only</span>")
         pocket_rows.append(
             f"<tr><td>{html.escape(code)}</td><td>{origin}</td>"
             f"<td>{html.escape(', '.join(proteins))}</td>"
-            f"<td class='ft-num'>{residues}</td></tr>")
+            f"<td class='ft-num'>{residues if residues else contacts_na}</td></tr>")
 
-    sse_rows = []
+    sse_rows, sse_kinds = [], set()
     for fam in campaign.families:
         if not fam.apo_structure:
             continue
@@ -4941,25 +5088,28 @@ def _build_reference_panel_html(campaign: Campaign, campaign_dir: Path) -> str:
         if not path.is_absolute():
             path = campaign_dir / path
         if path.is_file():
-            info = _reference_state(path)
-            state = info["state"]
+            kind = _family_kind(fam)
+            info = _reference_state(
+                path, kind,
+                _apo_motif_states(campaign_dir, fam.id) if kind == "kinase" else None)
+            state, note, colour = info["state"], info["note"], info["tier"]
+            sse_kinds.add(kind)
             bound = ", ".join(info["ligands"][:4]) or "none"
             detail = (f"{info['chains']} chain(s), bound: {bound}")
-            colour = _TIER_AMBER if info["g_protein"] else _TIER_GREEN
-            note = ("A G-protein-coupled reference is in the ACTIVE state, so a motif "
-                    "comparison against it measures active against active and the "
-                    "activation shift cannot appear."
-                    if info["g_protein"] else
-                    "No G protein bound, so this reference can show an inactive-to-active "
-                    "shift.")
         else:
             state, detail, colour = "file not found", "", _TIER_RED
             note = "The path in 'Apo structure:' does not resolve."
+        # No colour means there is no verdict to give -- a state that does not apply
+        # is muted like any other n/a, not painted amber as though it were a warning.
+        state_cell = (f"<span style='color:{colour}' "
+                      f"title='{html.escape(note, quote=True)}'>{html.escape(state)}</span>"
+                      if colour else
+                      f"<span class='cell-na' title='{html.escape(note, quote=True)}'>"
+                      f"{html.escape(state)}</span>")
         sse_rows.append(
             f"<tr><td>{html.escape(fam.id)}</td>"
             f"<td>{html.escape(path.name)}</td>"
-            f"<td><span style='color:{colour}' title='{html.escape(note, quote=True)}'>"
-            f"{html.escape(state)}</span></td>"
+            f"<td>{state_cell}</td>"
             f"<td>{html.escape(detail)}</td>"
             f"<td>{html.escape(fam.apo_chain or 'auto')}</td></tr>")
 
@@ -5007,9 +5157,7 @@ def _build_reference_panel_html(campaign: Campaign, campaign_dir: Path) -> str:
             "<table class='full-table'><thead><tr><th>Protein</th><th>Structure</th>"
             "<th>State</th><th>Contents</th><th>Chain</th></tr></thead>"
             f"<tbody>{''.join(sse_rows)}</tbody></table>"
-            "<p class='md-hint'>State is read from the file, not from its title. A "
-            "structure titled &ldquo;apo&rdquo; is often ligand-free <em>and</em> "
-            "G-protein-coupled, which is the active state.</p>")
+            f"<p class='md-hint'>{_sse_state_hint(sse_kinds)}</p>")
     if ligand_rows:
         parts.append(
             "<h3 class='md-sub'>Ligand definitions</h3>"
@@ -5788,7 +5936,13 @@ def _pose_comparisons(campaign: Campaign, campaign_dir: Path) -> tuple:
             continue
         comp, ref_path = _reference_ligand_for(lig, code, references, campaign_dir)
         if not comp:
-            continue                      # no experimental copy of this molecule
+            # Said out loud, not skipped quietly. An ABL1 campaign supplying only
+            # 2gqg.cif compared dasatinib and dropped imatinib without a word, so the
+            # panel read as "imatinib was not predicted" when it had been predicted
+            # perfectly well and merely had nothing to be checked against. Keyed on
+            # the ligand, so every target using it collapses to one line.
+            errors.add(f"{lig.id}: no structure in reference/ contains this molecule")
+            continue
         result = _pose_vs_experimental(predicted, ref_path, comp,
                                        lig.smiles or "", fam.id, lig.id)
         if "error" in result:
@@ -6772,10 +6926,12 @@ def _build_argparser() -> argparse.ArgumentParser:
     cs.add_argument("--out-dir", type=Path, default=None, help="default: alongside boltz_input.md")
     cs.add_argument("--phi-psi-threshold", type=float, default=30.0, help="degrees; per-residue "
                      "phi/psi delta above this is flagged (default 30)")
-    cs.add_argument("--dfg-distance-threshold", type=float, default=8.0, help="angstroms; DFG-Asp to "
-                     "catalytic-Lys Ca-Ca distance below this is classified DFG-in (default 8.0)")
-    cs.add_argument("--alphac-distance-threshold", type=float, default=10.0, help="angstroms; "
-                     "alphaC-Glu to catalytic-Lys Ca-Ca distance below this is classified alphaC-in (default 10.0)")
+    cs.add_argument("--dfg-distance-threshold", type=float, default=11.0, help="angstroms; "
+                     "separates the two DFG-Phe ring distances (to alphaC-Glu+4 Ca and to "
+                     "catalytic-Lys Ca) that classify DFG-in vs DFG-out (default 11.0)")
+    cs.add_argument("--alphac-distance-threshold", type=float, default=4.0, help="angstroms; "
+                     "catalytic-Lys NZ to alphaC-Glu carboxylate below this is the intact salt "
+                     "bridge, i.e. alphaC-in (default 4.0)")
     cs.add_argument("--no-pymol", action="store_true", help="skip writing .pml session scripts")
     cs.add_argument("--refresh-cache", action="store_true", help="bypass the GPCRdb/KLIFS/PDBe "
                      "disk cache for this run")

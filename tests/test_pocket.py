@@ -195,6 +195,96 @@ def test_two_references_sharing_a_ligand_code_are_refused(client, monkeypatch): 
     assert b"would collide" in response.data or b"both use ligand" in response.data
 
 
+def test_a_reference_only_row_ships_the_structure_but_defines_no_site(client, monkeypatch):  # noqa: F811
+    """A reference molecule, not a condition.
+
+    Its bound ligand is what a matching compound's predicted pose is scored against,
+    which is the only reason the structure has to travel; defining a site as well
+    would add a run per ligand, and the point of the mode is that the count is
+    unchanged.
+    """
+    from boltzmaker_web import apo
+    monkeypatch.setattr(apo, "fetch", lambda pdb_id, **kw: (_text("6ln2").encode(), "cif"))
+    seqs = __import__("json").loads((FIXTURES / "sequences.json").read_text())
+    form = _form(use_same_pocket="1", pocket_distance="8")
+    form.setlist("protein_sequence[]", [seqs["GLP1R"]])
+    form.setlist("pocket_owner[]", ["0"])
+    form.setlist("pocket_pdb[]", ["6ln2"])
+    form.setlist("pocket_ligand[]", ["97Y|A|503"])
+    form.setlist("pocket_mode[]", ["reference"])
+    response = client.post("/auto/prepare", data=form, headers=BROWSER)
+    assert response.status_code == 200, response.data[:400]
+    md = _md_from(response)
+    assert "Pocket source: 97Y from 6LN2" in md, "the provenance is still recorded"
+    assert not [l for l in md.splitlines() if l.startswith("Pocket contact:")], (
+        "a reference molecule defines no site")
+
+    # And the structure itself travels, which is the whole point.
+    members = bundle.unpack(response.data)
+    assert any(name.startswith("reference/") and "6ln2" in name.lower()
+               for name in members), sorted(members)
+
+
+def test_every_pocket_structure_travels_in_the_bundle(client, monkeypatch):  # noqa: F811
+    """Fetched for its contacts, then thrown away.
+
+    `reference/` held a pocket's structure only when the same entry happened to be
+    the apo one too, so the pose panel had nothing to score against on any campaign
+    where they differed -- and said nothing about it.
+    """
+    from boltzmaker_web import apo
+    monkeypatch.setattr(apo, "fetch", lambda pdb_id, **kw: (_text("6ln2").encode(), "cif"))
+    seqs = __import__("json").loads((FIXTURES / "sequences.json").read_text())
+    form = _form(use_same_pocket="1", pocket_distance="8")
+    form.setlist("protein_sequence[]", [seqs["GLP1R"]])
+    form.setlist("pocket_owner[]", ["0"])
+    form.setlist("pocket_pdb[]", ["6ln2"])
+    form.setlist("pocket_ligand[]", ["97Y|A|503"])
+    response = client.post("/auto/prepare", data=form, headers=BROWSER)
+    assert response.status_code == 200, response.data[:400]
+    members = bundle.unpack(response.data)
+    assert any(name.startswith("reference/") for name in members), sorted(members)
+
+
+def test_a_blank_row_does_not_shift_the_mode_onto_the_next_reference(client, monkeypatch):  # noqa: F811
+    """The parallel-array trap this form has been bitten by twice.
+
+    An empty pocket row still posts its mode, so the arrays stay the same length and
+    index alignment holds. If the mode were read positionally from only the filled
+    rows, the blank one here would hand "reference" to the second structure and
+    silently drop its site.
+    """
+    from boltzmaker_web import apo
+    monkeypatch.setattr(apo, "fetch", lambda pdb_id, **kw: (_text("6ln2").encode(), "cif"))
+    seqs = __import__("json").loads((FIXTURES / "sequences.json").read_text())
+    form = _form(use_same_pocket="1", pocket_distance="8")
+    form.setlist("protein_sequence[]", [seqs["GLP1R"]])
+    form.setlist("pocket_owner[]", ["0", "0"])
+    form.setlist("pocket_pdb[]", ["", "6ln2"])
+    form.setlist("pocket_ligand[]", ["", "97Y|A|503"])
+    form.setlist("pocket_mode[]", ["reference", "site"])
+    response = client.post("/auto/prepare", data=form, headers=BROWSER)
+    assert response.status_code == 200, response.data[:400]
+    md = _md_from(response)
+    assert [l for l in md.splitlines() if l.startswith("Pocket contact:")], (
+        "the filled row asked for a site and must get one")
+
+
+def test_a_page_without_the_mode_field_still_builds_a_site(client, monkeypatch):  # noqa: F811
+    """An older cached page posts no pocket_mode[] at all; that meant "site"."""
+    from boltzmaker_web import apo
+    monkeypatch.setattr(apo, "fetch", lambda pdb_id, **kw: (_text("6ln2").encode(), "cif"))
+    seqs = __import__("json").loads((FIXTURES / "sequences.json").read_text())
+    form = _form(use_same_pocket="1", pocket_distance="8")
+    form.setlist("protein_sequence[]", [seqs["GLP1R"]])
+    form.setlist("pocket_owner[]", ["0"])
+    form.setlist("pocket_pdb[]", ["6ln2"])
+    form.setlist("pocket_ligand[]", ["97Y|A|503"])
+    response = client.post("/auto/prepare", data=form, headers=BROWSER)
+    md = _md_from(response)
+    assert [l for l in md.splitlines() if l.startswith("Pocket contact:")]
+
+
 def test_an_apo_reference_may_carry_a_ligand(client, monkeypatch):   # noqa: F811
     """The field is "apo OR inactive", and an inactive receptor is usually bound.
 

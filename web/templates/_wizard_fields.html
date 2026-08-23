@@ -260,6 +260,11 @@
         unconstrained baseline. Add several to compare sites: a run is named after the
         pocket's ligand, so 7E14/V6G and 7RBT/41Y give &hellip;_V6G and &hellip;_41Y
         alongside the unconstrained one.</p>
+      <p class="md-hint">Each reference also carries its own <b>reference molecule</b>:
+        the bound ligand is shipped in the bundle, and any of your compounds matching it
+        gets its predicted pose scored against that experimental one. One reference means
+        only one compound can be checked &mdash; add a structure per compound you want
+        measured. For ABL1 that is 2GQG for dasatinib <em>and</em> 1IEP for imatinib.</p>
       <div class="md-pocket-rows"></div>
       <button type="button" class="md-add-row-btn add-pocket">+ Add pocket reference</button>
     </div>
@@ -306,6 +311,21 @@
         <option value="">Enter a PDB id to list its ligands</option>
       </select>
       <p class="md-hint md-pocket-status">Waters, ions, sugars and lipids are filtered out.</p>
+    </div>
+    {#  A select, not a checkbox, for the reason the identifier type is one: an
+        unticked checkbox posts nothing at all, so the array would be shorter than
+        the other three and every later row's mode would attach to the wrong
+        reference. A select always posts a value.  #}
+    <div class="md-field">
+      <label>Use it as</label>
+      <select name="pocket_mode[]">
+        <option value="site" selected>Site &amp; reference molecule</option>
+        <option value="reference">Reference molecule only &mdash; no extra targets</option>
+      </select>
+      <p class="md-hint"><b>Site &amp; reference molecule</b> runs every ligand against
+        this site as well, which is another target each. <b>Reference molecule only</b>
+        just ships the structure so its bound ligand can score a matching compound's
+        pose &mdash; the run count does not change.</p>
     </div>
   </div>
 </template>

@@ -216,12 +216,12 @@ def derive(md_text: str, config: dict | None = None) -> dict:
                 raise DerivationError(f"could not read the pocket contact {raw!r}")
             pockets.setdefault(m.group("code"), []).append(int(m.group("pos")))
 
-        source = _one(f, "Pocket source")
-        pocket_pdb = pocket_ligand = ""
-        if source:
+        # Every line, keyed by the code it names: one reference molecule each.
+        sources: dict[str, str] = {}
+        for source in _all(f, "Pocket source"):
             m = re.match(r"^(?P<code>\S+)\s+from\s+(?P<pdb>\S+)$", source, re.IGNORECASE)
             if m:
-                pocket_ligand, pocket_pdb = m.group("code"), m.group("pdb")
+                sources[m.group("code")] = m.group("pdb")
 
         scoped = [x.strip() for x in _one(f, "Ligands").split(",") if x.strip()]
         protein_rows.append({
@@ -237,9 +237,14 @@ def derive(md_text: str, config: dict | None = None) -> dict:
             "protein_uniprot[]": (config.get("uniprot") or {}).get(name, ""),
             "protein_group[]": _one(f, "Group"),
             "protein_family_type[]": _one(f, "Family type"),
-            "pockets": [{"code": code, "residues": sorted(pos), "owner": name,
-                         "pdb": pocket_pdb, "ligand": pocket_ligand}
-                        for code, pos in sorted(pockets.items())],
+            # Every code the protein names, whether or not it has contacts: a source
+            # with no `Pocket contact:` lines is a reference molecule that defines no
+            # site, and dropping it here lost the row when a bundle was reloaded.
+            "pockets": [{"code": code, "residues": sorted(pockets.get(code, [])),
+                         "owner": name, "pdb": sources.get(code, ""),
+                         "ligand": code if sources.get(code) else "",
+                         "mode": "site" if pockets.get(code) else "reference"}
+                        for code in sorted(set(pockets) | set(sources))],
         })
 
     partner_rows = [{
@@ -421,10 +426,12 @@ def rebuild_spec(state: dict, app) -> str:
         if protein is None:
             continue
         for pocket in row.get("pockets") or []:
-            protein.pockets[pocket["code"]] = list(pocket["residues"])
+            # A reference-only row carries no residues; writing an empty list would
+            # emit a pocket with no contacts, which is a different campaign.
+            if pocket.get("residues"):
+                protein.pockets[pocket["code"]] = list(pocket["residues"])
             if pocket.get("pdb"):
-                protein.pocket_pdb = pocket["pdb"]
-                protein.pocket_ligand = pocket.get("ligand", "")
+                protein.pocket_sources[pocket["code"]] = pocket["pdb"]
     raw_distance = (state.get("scalars") or {}).get("pocket_distance")
     if raw_distance:
         pocket_distance = float(raw_distance)

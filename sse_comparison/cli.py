@@ -16,7 +16,8 @@ from .alignment import InsufficientReferenceRegionError, build_comparison_frame
 from .annotators.gpcrdb import GPCRdbAnnotator
 from .annotators.klifs import KLIFSAnnotator
 from .annotators.pfam import PfamFallbackAnnotator
-from .metrics import classify_state, compute_motif_row
+from .metrics import (ALPHAC_SALT_BRIDGE_A, DFG_PHE_CUTOFF_A,
+                      classify_alphac_state, classify_dfg_state, compute_motif_row)
 from .report import (build_metrics_dataframe, write_csv, write_family_status,
                       write_pymol_script, write_sse_html)
 from .structures import load_structure_for_comparison
@@ -24,6 +25,23 @@ from .structures import load_structure_for_comparison
 _KINASE_DFG_ASP = "DFG"
 _KINASE_CATALYTIC_LYS = "catalytic_Lys"
 _KINASE_ALPHAC_GLU = "alphaC_Glu"
+
+
+def family_kind(family_type: str, sequence: str) -> object:
+    """"gpcr", "kinase", or None when the protein is neither.
+
+    The one place that answers "what kind of protein is this", so that a report can
+    never describe a protein as something different from what the annotator below
+    treated it as. Uses the same network-free `applies_to()` pre-filters as the
+    chain, in the same most-specific-first order.
+    """
+    if family_type in ("gpcr", "kinase"):
+        return family_type
+    if GPCRdbAnnotator().applies_to(sequence):
+        return "gpcr"
+    if KLIFSAnnotator().applies_to(sequence):
+        return "kinase"
+    return None
 
 
 def _resolve_annotator_chain(family_type: str, sequence: str) -> list:
@@ -46,17 +64,23 @@ def _resolve_annotator_chain(family_type: str, sequence: str) -> list:
     return chain
 
 
-def _motif_residue(motifs: list, name: str) -> object:
+def _motif_residue(motifs: list, name: str, index: int = 0) -> object:
+    """A named motif's residue by position within the motif, N->C.
+
+    `index` because the DFG motif is classified on its Phe (index 1), not its Asp.
+    """
     for m in motifs:
-        if m.name == name and m.residues:
-            return m.residues[0]
+        if m.name == name and len(m.residues) > index:
+            return m.residues[index]
     return None
 
 
 def run_compare_sse(campaign: object, campaign_dir: Path, family_id: object = None,
                      target_stem: object = None, out_dir: object = None,
-                     phi_psi_threshold: float = 30.0, dfg_distance_threshold: float = 8.0,
-                     alphac_distance_threshold: float = 10.0, render_pymol: bool = True,
+                     phi_psi_threshold: float = 30.0,
+                     dfg_distance_threshold: float = DFG_PHE_CUTOFF_A,
+                     alphac_distance_threshold: float = ALPHAC_SALT_BRIDGE_A,
+                     render_pymol: bool = True,
                      refresh_cache: bool = False, strict: bool = True) -> dict:
     """Returns {"df": DataFrame, "family_status": dict}.
 
@@ -158,14 +182,16 @@ def run_compare_sse(campaign: object, campaign_dir: Path, family_id: object = No
             dfg_apo = dfg_holo = dfg_changed = None
             alphac_apo = alphac_holo = alphac_changed = None
             if annotator_source == "kinase":
-                dfg_pos = _motif_residue(motifs, _KINASE_DFG_ASP)
+                # The Phe, not the Asp: it is the ring that swings between states.
+                phe_pos = _motif_residue(motifs, _KINASE_DFG_ASP, index=1)
                 lys_pos = _motif_residue(motifs, _KINASE_CATALYTIC_LYS)
                 glu_pos = _motif_residue(motifs, _KINASE_ALPHAC_GLU)
-                if dfg_pos is not None and lys_pos is not None:
-                    dfg_apo, dfg_holo, dfg_changed = classify_state(frame, dfg_pos, lys_pos, dfg_distance_threshold)
+                if None not in (phe_pos, lys_pos, glu_pos):
+                    dfg_apo, dfg_holo, dfg_changed = classify_dfg_state(
+                        frame, phe_pos, lys_pos, glu_pos, dfg_distance_threshold)
                 if glu_pos is not None and lys_pos is not None:
-                    alphac_apo, alphac_holo, alphac_changed = classify_state(frame, glu_pos, lys_pos,
-                                                                              alphac_distance_threshold)
+                    alphac_apo, alphac_holo, alphac_changed = classify_alphac_state(
+                        frame, glu_pos, lys_pos, alphac_distance_threshold)
 
             target_rows = []
             for motif in motifs:

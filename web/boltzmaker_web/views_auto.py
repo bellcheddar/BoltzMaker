@@ -447,16 +447,21 @@ def prepare():
         # a pocket onto the wrong protein.
         row_names = request.form.getlist("protein_name[]")
         pockets_by_protein: dict = {}
-        for owner, pdb_id, chosen in zip(request.form.getlist("pocket_owner[]"),
-                                         request.form.getlist("pocket_pdb[]"),
-                                         request.form.getlist("pocket_ligand[]")):
+        # A row with no mode posted is an older page, and "site" is what it did.
+        modes = request.form.getlist("pocket_mode[]")
+        for index, (owner, pdb_id, chosen) in enumerate(
+                zip(request.form.getlist("pocket_owner[]"),
+                    request.form.getlist("pocket_pdb[]"),
+                    request.form.getlist("pocket_ligand[]"))):
             if not (pdb_id or "").strip() or not (chosen or "").strip():
                 continue
             try:
                 name = row_names[int(owner)]
             except (ValueError, IndexError):
                 continue
-            pockets_by_protein.setdefault(name, []).append((pdb_id.strip(), chosen.strip()))
+            mode = (modes[index] if index < len(modes) else "site") or "site"
+            pockets_by_protein.setdefault(name, []).append(
+                (pdb_id.strip(), chosen.strip(), mode.strip()))
     except WizardValidationError as exc:
         return _render_prepare(defaults=cfg, error=str(exc), form=request.form,
                                error_field=getattr(exc, 'field', ''))
@@ -521,7 +526,7 @@ def prepare():
     if use_same_pocket:
         seen_codes: dict = {}
         for protein in proteins:
-            for pdb_id, chosen in pockets_by_protein.get(protein.name, []):
+            for pdb_id, chosen, mode in pockets_by_protein.get(protein.name, []):
                 try:
                     data, extension = apo.fetch(pdb_id)
                 except apo.ApoFetchError as exc:
@@ -533,6 +538,14 @@ def prepare():
                         defaults=cfg, form=request.form, error_field="pocket_pdb[]",
                         error=f"{protein.name}: {pdb_id.upper()} is only available in a format "
                               "the pocket finder cannot read.")
+                # Every reference structure travels in the bundle, whether or not it
+                # also defines a site. It was fetched, read for its contacts and then
+                # thrown away, so `reference/` held a pocket's structure only when the
+                # same entry happened to be the apo one too -- which is why an ABL1
+                # campaign could score dasatinib (2GQG was both) and silently had
+                # nothing to measure any other compound against.
+                extra_files[apo.reference_path(pdb_id, extension)] = data
+
                 text = data.decode("utf-8", errors="replace")
                 found = pocket_finder.ligand_candidates(text)
                 if not found:
@@ -557,6 +570,18 @@ def prepare():
                               "names are keyed by that code, so they would collide.")
                 seen_codes[(protein.name, candidate.code)] = pdb_id.upper()
 
+                protein.pocket_sources[candidate.code] = pdb_id.upper()
+
+                # "Reference molecule only": the structure and its provenance are
+                # recorded, but no site is defined, so no ligand gains a target here.
+                # A `Pocket source:` line with no `Pocket contact:` lines is exactly
+                # that, and the spec already expressed it. The contact search is
+                # skipped rather than run and discarded -- "no residues lie within
+                # 4 A" is a fair reason to reject a site and no reason at all to
+                # reject a structure that was never going to define one.
+                if mode == "reference":
+                    continue
+
                 chain = pocket_finder.best_chain_for_sequence(text, protein.sequence)
                 if not chain:
                     return _render_prepare(
@@ -571,7 +596,6 @@ def prepare():
                         error=f"{protein.name}: no residues lie within {pocket_distance:g} A of "
                               f"{candidate.code} in {pdb_id.upper()}. Try a larger distance.")
                 protein.pockets[candidate.code] = positions
-                protein.pocket_pdb, protein.pocket_ligand = pdb_id.upper(), candidate.code
 
     try:
         md_text = assemble_boltz_input_md(predict_affinity, proteins, partners, ligands,
@@ -1192,15 +1216,46 @@ def _overlay_payload(session: Path, loaded: bmz.Results) -> dict:
     # single worst target; a union would put the disordered parts back.
     votes: dict[int, int] = {}
     fitted = [f for f in fits if f["transform"]]
-    for fit in fitted:
+    # The reference does not get a vote. It is superposed on itself, so it agrees
+    # everywhere and keeps every residue -- including the disordered ones -- which
+    # adds one to every count and drops the "at least half" rule to "at least one".
+    # On a full-length ABL1 campaign that pulled 485 residues into the shared region
+    # where four real fits agreed on 322, and the disordered remainder held the
+    # numbers at 8-10A for targets that overlay the genuine common core below 2A.
+    voters = [f for f in fitted if f["target"].target_id != (reference or {}).get("id")]
+    for fit in voters:
         for index in fit["kept"]:
             if index >= len(fit["pairs"]):
                 continue
             ref_number = fit["pairs"][index][1]
             if ref_number is not None:
                 votes[ref_number] = votes.get(ref_number, 0) + 1
-    threshold = max(1, len(fitted) // 2)
+    threshold = max(1, len(voters) // 2)
     core = {number for number, count in votes.items() if count >= threshold}
+
+    # Re-fit every target ON the shared region, rather than keeping the transform that
+    # was fitted to that target's own best-agreeing part.
+    #
+    # The two were mismatched: each fit was optimised for its own core and then scored
+    # over the shared one, so the number described a superposition nobody had
+    # performed. On a full-length ABL1 campaign -- 1130 residues, most of them
+    # disordered -- one target's core collapsed to the 40-residue floor, its transform
+    # was fitted to that fragment, and the panel reported 10.71A for a target that
+    # overlays the shared 322 residues at 1.58A. The good fits read four to twelve
+    # times worse than they are, and the picture showed the fragment fit rather than
+    # the one the number claimed.
+    for fit in fitted:
+        indices = [index for index, (mine, ref_number) in enumerate(fit["pairs"])
+                   if ref_number in core and mine is not None]
+        if len(indices) < 3:
+            continue          # nothing shared to fit on; keep its own transform
+        try:
+            rotation, centres, _ = alphafold.superpose(
+                [fit["mobile"][i] for i in indices],
+                [fit["fixed"][i] for i in indices])
+        except (alphafold.AlphaFoldError, KeyError, IndexError):
+            continue
+        fit["transform"] = (rotation, centres)
 
     rows = []
     for fit in fits:

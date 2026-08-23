@@ -127,9 +127,12 @@ class ProteinInput:
     # in the pipeline reads it, so it travels in config.json rather than in
     # boltz_input.md, and BoltzMaker.py never has to learn a key it does not use.
     uniprot: str = ""
-    # The holo structure this protein contributes to the campaign's set of sites.
-    pocket_pdb: str = ""
-    pocket_ligand: str = ""
+    # {pocket code: the holo PDB id its residues were read out of}. A dict, not one
+    # pair: a protein may take a site from each of several structures -- one holo
+    # entry per reference molecule, which is also what gives each of those molecules
+    # an experimental pose to be scored against -- and a single pair meant the last
+    # row silently claimed the provenance of every earlier one.
+    pocket_sources: dict = field(default_factory=dict)
     # {site code: [residue positions]} in THIS protein's numbering -- one entry per
     # site named anywhere in the campaign, including sites taken from another
     # protein's structure and projected here through a sequence alignment.
@@ -283,8 +286,10 @@ def assemble_boltz_input_md(
         # known it -- it downloaded the entry and extracted the contacts -- and used
         # to drop it here, so the report could name a pocket but never say what it
         # was derived from.
-        if p.pocket_pdb and p.pocket_ligand:
-            block.append(f"Pocket source: {p.pocket_ligand} from {p.pocket_pdb.upper()}")
+        # One line per site, sorted so the same form always writes the same spec.
+        for code, pdb_id in sorted(p.pocket_sources.items()):
+            if code and pdb_id:
+                block.append(f"Pocket source: {code} from {pdb_id.upper()}")
         for code, positions in sorted(p.pockets.items()):
             for position in positions:
                 block.append(f"Pocket contact: {p.name} residue {position} as {code}")
