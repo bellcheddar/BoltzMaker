@@ -10,7 +10,8 @@ from sse_comparison.annotators.gpcrdb import GPCRdbAnnotator, _decode_generic_nu
 from sse_comparison.annotators.klifs import KLIFSAnnotator, _map_pocket_to_sequence
 from sse_comparison.annotators.pfam import PfamFallbackAnnotator
 from sse_comparison.cache import cache_key, cached_lookup
-from sse_comparison.metrics import classify_state, compute_motif_row
+from sse_comparison.metrics import (classify_alphac_state, classify_dfg_state,
+                                    compute_motif_row)
 from sse_comparison.motifs import Motif
 from sse_comparison.structures import (AmbiguousApoChainError, load_and_clean,
                                         load_structure_for_comparison, one_letter_sequence,
@@ -282,11 +283,13 @@ def test_full_pipeline_egfr_dfg_state_resolves(egfr_apo_path, egfr_holo_cif_path
     holo = load_structure_for_comparison(egfr_holo_cif_path, "EGFR", egfr_sequence)
     frame = build_comparison_frame(apo, holo, egfr_sequence, motifs, "kinase")
 
-    dfg_pos = next(m.residues[0] for m in motifs if m.name == "DFG")
+    # residues[1] is the Phe: the ring is what moves between the two states.
+    phe_pos = next(m.residues[1] for m in motifs if m.name == "DFG")
     lys_pos = next(m.residues[0] for m in motifs if m.name == "catalytic_Lys")
-    state_apo, state_holo, changed = classify_state(frame, dfg_pos, lys_pos, 8.0)
-    assert state_apo in ("in", "out")
-    assert state_holo in ("in", "out")
+    glu_pos = next(m.residues[0] for m in motifs if m.name == "alphaC_Glu")
+    state_apo, state_holo, changed = classify_dfg_state(frame, phe_pos, lys_pos, glu_pos)
+    assert state_apo in ("in", "out", "other")
+    assert state_holo in ("in", "out", "other")
     assert changed in (True, False)
 
 
@@ -309,27 +312,24 @@ def test_stable_reference_positions_pfam_picks_largest_domain_only():
 
 
 # ---------------------------------------------------------------------------
-# metrics.py: classify_state on synthetic, unambiguous coordinates
+# metrics.py: the kinase state classifiers on synthetic, unambiguous coordinates
 # ---------------------------------------------------------------------------
 
-class _FakePolymerResidue:
-    def __init__(self, pos):
-        self._pos = pos
-
-    def sole_atom(self, name):
-        class _A:
-            pass
-        a = _A()
-        a.pos = self._pos
-        return a
+class _FakeAtom:
+    def __init__(self, name, pos):
+        self.name, self.pos = name, pos
 
 
 class _FakePolymer:
-    def __init__(self, positions):
-        self._positions = positions
+    """Residues as lists of named atoms: the classifiers pick the atom a criterion
+    is defined on, so a residue that answers every name with one position cannot
+    tell a correct implementation from one measuring the wrong thing."""
+
+    def __init__(self, residues):
+        self._residues = residues
 
     def __getitem__(self, i):
-        return _FakePolymerResidue(self._positions[i])
+        return self._residues[i]
 
 
 class _FakeStructure:
@@ -343,24 +343,72 @@ class _FakeFrame:
         self.fam_to_apo, self.fam_to_holo = fam_to_apo, fam_to_holo
 
 
-def test_classify_state_synthetic_in_and_out():
-    # anchor1=0, anchor2=1: apo has them 3A apart ("in"), holo 15A apart ("out").
-    apo_struct = _FakeStructure(_FakePolymer([gemmi.Position(0, 0, 0), gemmi.Position(3, 0, 0)]))
-    holo_struct = _FakeStructure(_FakePolymer([gemmi.Position(0, 0, 0), gemmi.Position(15, 0, 0)]))
-    frame = _FakeFrame(apo_struct, holo_struct, {100: 0, 200: 1}, {100: 0, 200: 1})
-    state_apo, state_holo, changed = classify_state(frame, 100, 200, threshold=8.0)
-    assert state_apo == "in"
-    assert state_holo == "out"
-    assert changed is True
+def _frame(apo_residues, holo_residues, mapping):
+    return _FakeFrame(_FakeStructure(_FakePolymer(apo_residues)),
+                      _FakeStructure(_FakePolymer(holo_residues)), mapping, mapping)
 
 
-def test_classify_state_missing_anchor_returns_none():
-    apo_struct = _FakeStructure(_FakePolymer([gemmi.Position(0, 0, 0)]))
-    holo_struct = _FakeStructure(_FakePolymer([gemmi.Position(0, 0, 0)]))
-    frame = _FakeFrame(apo_struct, holo_struct, {100: 0}, {100: 0})
-    state_apo, state_holo, changed = classify_state(frame, 100, 999, threshold=8.0)
-    assert state_apo is None
-    assert changed is None
+def _lys(x):
+    return [_FakeAtom("CA", gemmi.Position(x, 0, 0)), _FakeAtom("NZ", gemmi.Position(x, 0, 0))]
+
+
+def _glu(x, carboxylate=True):
+    atoms = [_FakeAtom("CA", gemmi.Position(x, 0, 0))]
+    if carboxylate:
+        atoms.append(_FakeAtom("OE1", gemmi.Position(x, 0, 0)))
+    return atoms
+
+
+def _phe(x):
+    return [_FakeAtom("CA", gemmi.Position(x, 0, 0)), _FakeAtom("CZ", gemmi.Position(x, 0, 0))]
+
+
+# ---- alphaC: the salt bridge ------------------------------------------------
+
+def test_alphac_state_is_the_salt_bridge_and_not_a_ca_distance():
+    """3.3A between the charged atoms is alphaC-in however far apart the CAs are."""
+    mapping = {200: 0, 300: 1}
+    frame = _frame([_lys(0), _glu(3.3)], [_lys(0), _glu(8.0)], mapping)
+    assert classify_alphac_state(frame, 300, 200) == ("in", "out", True)
+
+
+def test_alphac_state_is_unknown_rather_than_out_without_a_side_chain():
+    """A backbone-only model has no bridge to measure; "out" would be a claim."""
+    mapping = {200: 0, 300: 1}
+    frame = _frame([_lys(0), _glu(3.3, carboxylate=False)],
+                   [_lys(0), _glu(3.3, carboxylate=False)], mapping)
+    assert classify_alphac_state(frame, 300, 200) == (None, None, None)
+
+
+# ---- DFG: where the Phe ring sits -------------------------------------------
+
+#: phe -> 0, catalytic Lys -> 1, alphaC-Glu+4 -> 2. glu_pos is 300, so the
+#: classifier looks up 304 and must find the third residue there.
+_DFG_MAP = {100: 0, 200: 1, 304: 2}
+
+
+def test_dfg_in_is_the_ring_near_alphac_and_far_from_the_catalytic_lys():
+    frame = _frame([_phe(0), _lys(14), _glu(5)], [_phe(0), _lys(5), _glu(14)], _DFG_MAP)
+    assert classify_dfg_state(frame, 100, 200, 300) == ("in", "out", True)
+
+
+def test_dfg_is_other_when_the_ring_is_close_to_both():
+    """A third conformation is not one of the two, and is not forced into them."""
+    frame = _frame([_phe(0), _lys(6), _glu(5)], [_phe(0), _lys(6), _glu(5)], _DFG_MAP)
+    assert classify_dfg_state(frame, 100, 200, 300) == ("other", "other", False)
+
+
+def test_dfg_uses_the_ring_atom_not_the_backbone():
+    """CZ at the in-distance, CA at the out-distance: reading CA inverts the call."""
+    phe = [_FakeAtom("CA", gemmi.Position(20, 0, 0)), _FakeAtom("CZ", gemmi.Position(0, 0, 0))]
+    frame = _frame([phe, _lys(14), _glu(5)], [phe, _lys(14), _glu(5)], _DFG_MAP)
+    assert classify_dfg_state(frame, 100, 200, 300)[0] == "in"
+
+
+def test_a_missing_anchor_returns_none():
+    frame = _frame([_phe(0)], [_phe(0)], {100: 0})
+    assert classify_dfg_state(frame, 100, 999, 300) == (None, None, None)
+    assert classify_alphac_state(frame, 999, 100) == (None, None, None)
 
 
 # ---------------------------------------------------------------------------
@@ -641,3 +689,57 @@ def test_the_soluble_partners_alongside_a_receptor_are_still_rejected():
         "RYTTPEDATPEPGEDPRVTRAKYFIRDEFLRISTASGDGRHYCYPHFTCAVDTENIRRVFNDCRDIIQRMHLRQYELL")
     assert _count_membrane_spans(gnas) == 0
     assert GPCRdbAnnotator.applies_to(annotator, gnas) is False
+
+
+# ---- a tie between two copies is not an ambiguity ---------------------------
+
+def _synthetic_homodimer(tmp_path, sequence, second=None):
+    """Two chains of the same protein, as most crystal structures have.
+
+    Written out rather than shipped as a PDB fixture: the point is the tie in the
+    scoring, which needs only backbone atoms and the right residue identities.
+    """
+    import gemmi
+    st = gemmi.Structure()
+    st.add_model(gemmi.Model("1"))
+    for name, seq in (("A", sequence), ("B", second or sequence)):
+        chain = gemmi.Chain(name)
+        for index, letter in enumerate(seq, start=1):
+            residue = gemmi.Residue()
+            residue.name = gemmi.expand_one_letter(letter, gemmi.ResidueKind.AA)
+            residue.seqid = gemmi.SeqId(index, " ")
+            atom = gemmi.Atom()
+            atom.name, atom.element = "CA", gemmi.Element("C")
+            atom.pos = gemmi.Position(index * 3.8, 0.0, 0.0)
+            residue.add_atom(atom)
+            chain.add_residue(residue)
+        st[0].add_chain(chain)
+    st.setup_entities()
+    return st
+
+
+def test_two_copies_of_one_protein_resolve_rather_than_refuse(adrb2_sequence):
+    """A homodimer must not read as an ambiguity.
+
+    Reported from the field on ABL1: 2GQG is a homodimer of the kinase domain, both
+    chains scored 0.986 against UniProt P00519, the margin rule called it ambiguous,
+    and every target in the campaign was skipped. Most crystal structures have more
+    than one molecule in the asymmetric unit, so this is the ordinary case.
+    """
+    st = _synthetic_homodimer(None, adrb2_sequence[:120])
+    chain = resolve_protein_chain(st, None, adrb2_sequence[:120])
+    assert chain.name == "A"          # deterministic: first by chain order
+
+
+def test_two_different_chains_that_both_match_still_refuse(adrb2_sequence):
+    """The guard the margin rule exists for has to keep working.
+
+    Two *different* proteins each partly matching a reference is a real ambiguity,
+    and picking one silently would place a site on the wrong protein.
+    """
+    other = adrb2_sequence[:120]
+    # Same length, half the residues changed: scores close, sequences plainly not copies.
+    mutated = "".join(c if i % 2 else "A" for i, c in enumerate(other))
+    st = _synthetic_homodimer(None, other, second=mutated)
+    from sse_comparison.structures import _same_protein
+    assert not _same_protein(st[0]["A"], st[0]["B"])

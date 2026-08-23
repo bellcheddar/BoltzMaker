@@ -143,12 +143,57 @@ def resolve_protein_chain(structure: "gemmi.Structure", expected_chain_id: objec
     scored.sort(key=lambda t: t[0], reverse=True)
     best_score, best_chain = scored[0]
     runner_up_score = scored[1][0] if len(scored) > 1 else -1.0
-    if best_score < min_identity or (runner_up_score >= 0 and best_score - runner_up_score < min_margin):
+    if best_score < min_identity:
+        candidates = [(c.name, round(s, 3)) for s, c in scored[:4]]
+        raise AmbiguousApoChainError(
+            f"could not confidently auto-detect the apo chain (candidates: {candidates}) "
+            f"-- set 'Apo chain:' explicitly in boltz_input.md")
+
+    if runner_up_score >= 0 and best_score - runner_up_score < min_margin:
+        # A tie is not necessarily an ambiguity. Two chains score the same either
+        # because they are two copies of one protein -- the ordinary case, since most
+        # crystal structures have more than one molecule in the asymmetric unit -- or
+        # because two *different* proteins each partly match, which is the case worth
+        # refusing. Reported from the field on ABL1: 2GQG is a homodimer of the kinase
+        # domain, both chains scored 0.986, and every target was skipped for an
+        # ambiguity that did not exist.
+        #
+        # Told apart by asking the direct question rather than guessing from the
+        # scores: align the two candidates to each other. Copies of one protein are
+        # near-identical; two different proteins that happen to match a reference
+        # equally well are not.
+        runner_up_chain = scored[1][1]
+        if _same_protein(best_chain, runner_up_chain):
+            return best_chain
         candidates = [(c.name, round(s, 3)) for s, c in scored[:4]]
         raise AmbiguousApoChainError(
             f"could not confidently auto-detect the apo chain (candidates: {candidates}) "
             f"-- set 'Apo chain:' explicitly in boltz_input.md")
     return best_chain
+
+
+#: Two chains this similar to each other are copies of one protein, whichever the
+#: depositor lettered first. Well clear of the ~70% a real fusion construct scores
+#: against its own native sequence, so it cannot swallow a genuine ambiguity.
+_COPY_IDENTITY = 0.95
+
+
+def _same_protein(first, second) -> bool:
+    """Are these two chains copies of the same protein?
+
+    Used only to resolve a scoring tie. A homodimer is the common case and must not
+    be treated as an ambiguity; two different chains matching a reference equally
+    well genuinely is one, and still refuses.
+    """
+    first_seq = one_letter_sequence(first.get_polymer())
+    second_seq = one_letter_sequence(second.get_polymer())
+    if not first_seq or not second_seq:
+        return False
+    mapping = _align_positions(first_seq, second_seq)
+    if not mapping:
+        return False
+    matches = sum(1 for a, b in mapping.items() if first_seq[a] == second_seq[b])
+    return matches / min(len(first_seq), len(second_seq)) >= _COPY_IDENTITY
 
 
 def dssp_available() -> object:

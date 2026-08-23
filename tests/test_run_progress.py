@@ -1147,6 +1147,38 @@ def test_a_different_molecule_of_the_same_size_is_not_mistaken_for_the_twin(bm, 
     assert comp is None
 
 
+def test_a_ligand_with_no_experimental_twin_is_named_not_dropped(bm, tmp_path):
+    """Silence read as "this ligand was never predicted".
+
+    An ABL1 campaign supplying only the dasatinib-bound 2GQG compared dasatinib and
+    dropped imatinib without a word, so the panel said "2 targets compared" over a
+    four-target campaign and gave no hint that the missing two were missing a
+    *reference*, not a prediction. One line per ligand, however many targets used it.
+    """
+    (tmp_path / "reference").mkdir()
+    _write_cif(tmp_path / "reference" / "1ABC.cif", "A", _ETHANOL)
+    references = bm._reference_structures(tmp_path)
+    propane = types.SimpleNamespace(id="PROP", smiles="CCC")
+    assert bm._reference_ligand_for(propane, None, references, tmp_path)[0] is None
+
+    md = tmp_path / "c.md"
+    md.write_text(POCKET_MD)
+    campaign = bm.parse_md(md)
+    # Every target predicted, so nothing is skipped for the unrelated reason that its
+    # model does not exist yet -- LIG2's absence must be about the reference alone.
+    (tmp_path / "boltz_cif").mkdir()
+    for fam, lig, code in bm._expand_targets(campaign):
+        if lig is None:
+            continue
+        stem = bm._target_stem(fam, lig, code)
+        _write_cif(tmp_path / "boltz_cif" / f"{stem}_model_0.cif", "A", _ETHANOL)
+    _measured, errors = bm._pose_comparisons(campaign, tmp_path)
+    unmatched = [e for e in errors if "no structure in reference/" in e]
+    assert unmatched, f"an unmatched ligand must be reported, got {errors}"
+    assert unmatched == ["LIG2: no structure in reference/ contains this molecule"], (
+        "one line per ligand, not one per target using it")
+
+
 def test_the_pose_panel_is_silent_without_reference_structures(bm, tmp_path):
     """An empty card would only pose a question the campaign cannot answer."""
     md = tmp_path / "c.md"
@@ -1349,7 +1381,10 @@ def test_a_g_protein_coupled_reference_is_reported_as_active(bm, tmp_path):
         ["Glucagon-like peptide 1 receptor",
          "Isoform Gnas-2 of Guanine nucleotide-binding protein G(s) subunit alpha"],
         chains=("R", "A"))
-    info = bm._reference_state(path)
+    # Told it is a GPCR, because that is the only family for which "is a G protein
+    # bound" is the question. A kinase reference asked the same way used to come
+    # back "no G protein bound", which is true and says nothing.
+    info = bm._reference_state(path, "gpcr")
     assert info["g_protein"] is True
     assert "active" in info["state"]
 
@@ -1378,6 +1413,54 @@ def test_an_inactive_reference_is_not_mistaken_for_active_by_its_ligand(bm, tmp_
     info = bm._reference_state(path)
     assert info["g_protein"] is False
     assert info["ligands"] == ["97Y"], "the modulator is reported, not ignored"
+
+
+def test_a_protein_may_read_a_site_from_each_of_several_structures(bm, tmp_path):
+    """One `Pocket source:` line per reference molecule, not one per protein.
+
+    Each pocket reference brings the ligand bound in it, and that is what a predicted
+    pose is scored against -- so one reference means only one compound can be checked.
+    An ABL1 campaign supplying only 2GQG scored dasatinib and had nothing to measure
+    imatinib against. The spec had room for both sites but not both provenances: a
+    repeated field overwrote, so the campaign claimed the last structure for every
+    pocket and the first showed as "not recorded".
+    """
+    md = tmp_path / "c.md"
+    md.write_text("""Settings:
+Pocket distance: 4
+
+Protein: ABL1
+Sequence: MKTAYIAKQRQISFVKSHFSRQLEERLGLIEVQ
+Pocket source: 1N1 from 2GQG
+Pocket source: STI from 1IEP
+Pocket contact: ABL1 residue 12 as 1N1
+Pocket contact: ABL1 residue 20 as STI
+
+Ligand: IMATI
+SMILES: CCO
+""")
+    assert bm.parse_md(md).pocket_sources == {"1N1": "2GQG", "STI": "1IEP"}
+
+
+def test_one_pocket_code_claimed_by_two_structures_is_refused(bm, tmp_path):
+    """A code names one site; two structures for it means the residues depend on
+    which line happened to be read last, which is not a campaign anyone meant."""
+    md = tmp_path / "c.md"
+    md.write_text("""Settings:
+Pocket distance: 4
+
+Protein: ABL1
+Sequence: MKTAYIAKQRQISFVKSHFSRQLEERLGLIEVQ
+Pocket source: 1N1 from 2GQG
+Pocket source: 1N1 from 1IEP
+Pocket contact: ABL1 residue 12 as 1N1
+
+Ligand: IMATI
+SMILES: CCO
+""")
+    with pytest.raises(bm.MDParseError) as caught:
+        bm.parse_md(md)
+    assert "claimed by two structures" in str(caught.value)
 
 
 def test_a_pocket_records_the_structure_it_came_from(bm, tmp_path):

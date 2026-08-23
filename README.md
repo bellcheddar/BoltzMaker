@@ -360,12 +360,19 @@ Partners: CHNX, CHNY            # optional: co-folded chains, defined as their o
                                 # point `Apo structure:` at its output in `boltz_cif/`.
 # Apo chain: A                 # optional: explicit chain id in the apo structure above
                                 # (omit to auto-detect via sequence identity)
-# Pocket source: LIG1 from 7XYZ # optional: records which experimental structure a
-                                # `Pocket contact:` set was derived from. Reporting only
-                                # -- never affects generate/run. Without it the reference
-                                # panel reads "not recorded" for that pocket, and the
-                                # pose panel can only find the experimental ligand if
-                                # that structure happens to be sitting in `reference/`
+# Pocket source: LIG1 from 7XYZ # optional, and repeatable: records which experimental
+                                # structure a `Pocket contact:` set was derived from.
+                                # Reporting only -- never affects generate/run. Without
+                                # it the reference panel reads "not recorded" for that
+                                # pocket, and the pose panel can only find the
+                                # experimental ligand if that structure happens to be
+                                # sitting in `reference/`. Repeat it once per structure
+                                # a protein takes a site from; one code claimed by two
+                                # structures is an error. A `Pocket source:` line with
+                                # NO matching `Pocket contact:` lines is a **reference
+                                # molecule**: the structure ships so its bound ligand can
+                                # score a matching compound's pose, and it defines no
+                                # site, so it adds no targets
 # Family type: gpcr            # optional: gpcr / kinase / auto (default) -- selects
                                 # `compare-sse`'s motif annotator
 # Group: RECP1                  # optional: shared display/report name for multiple
@@ -479,8 +486,8 @@ for re-running just this analysis, e.g. after adding an apo structure without re
 | `--target` | every target for the selected family | Restrict to one target stem |
 | `--out-dir` | alongside `boltz_input.md` | Where to write the CSV/HTML/PyMOL scripts |
 | `--phi-psi-threshold` | `30` (degrees) | Per-residue phi/psi delta above this is flagged |
-| `--dfg-distance-threshold` | `8.0` (Angstrom) | DFG-Asp to catalytic-Lys Ca-Ca distance below this is classified DFG-in |
-| `--alphac-distance-threshold` | `10.0` (Angstrom) | alphaC-Glu to catalytic-Lys Ca-Ca distance below this is classified alphaC-in |
+| `--dfg-distance-threshold` | `11.0` (Angstrom) | Separates the two DFG-Phe ring distances (ring to alphaC-Glu+4 Ca, ring to catalytic-Lys Ca) that classify DFG-in vs DFG-out |
+| `--alphac-distance-threshold` | `4.0` (Angstrom) | Catalytic-Lys NZ to alphaC-Glu carboxylate below this is an intact salt bridge, i.e. alphaC-in |
 | `--no-pymol` | off | Skip writing `.pml` session scripts |
 | `--refresh-cache` | off | Bypass the GPCRdb/KLIFS/PDBe disk cache for this run |
 
@@ -1052,7 +1059,7 @@ Each motif then gets:
 | Helix kink angle (apo/holo/delta) | Whether a helix straightened or kinked more |
 | SSE boundary shift | Did the helix/strand get longer or shorter -- needs deposited HELIX/SHEET records, or an optional external `mkdssp`/`dssp` binary as a fallback (see **One-time setup** above); every other metric works without it |
 | Flagged phi/psi residues | Per-residue backbone dihedral outliers above `--phi-psi-threshold` |
-| DFG-in/out, alphaC-in/out (kinases only) | A coarse Ca-Ca distance classifier, not a full dihedral model -- good for detecting a state *change* between apo and holo, not publication-grade conformational classification |
+| DFG-in/out, alphaC-in/out (kinases only) | DFG uses Dunbrack's two-distance criterion on the DFG-Phe ring; alphaC uses the catalytic-Lys/alphaC-Glu salt bridge. Both are distance criteria on the atoms that actually move, not full dihedral models, and DFG reports `other` for a conformation that is neither. alphaC is unresolved rather than `out` when the side chains are unmodelled |
 
 A metric that genuinely wasn't computed for a motif (axis rotation for a loop, DFG state for a
 non-kinase family, boundary shift with no DSSP data) shows as an explicit `N/A` in both the CSV
@@ -1534,6 +1541,11 @@ campaigns.
 - [x] Prove the pocket restraint can **fail**, not just succeed: a wrong-pocket arm on every ligand. The tightness series showed a 4 A pocket reproducing a crystal pose, which is only evidence if the same machinery misses when aimed somewhere else. Running each ligand against its own site, the other ligand's site and no site at all put own-site at 0.91/2.79 A, unconstrained at 6.17/13.57 A and wrong-site at 24.93/29.40 A -- worse than no constraint -- on two ligands across two receptors. The conformer column stays low (0.81, 1.78) through the wrong-site failures, so the molecule's shape is right and only its placement is wrong, which is the decomposition the three columns exist for. See **Does the restraint just manufacture the pose?** above.
 - [x] Resolve pocket codes against the chemical component dictionary instead of treating them as opaque labels. A pocket carried through a campaign as the string `41Y` is a PDB component id defining a real molecule, and it turned out to be the same compound as one of that campaign's own ligands -- which had an experimental structure nobody had fetched. Pulling 7RBT into `reference/` doubled the pose panel's coverage and supplied the second ligand of the wrong-pocket control above.
 - [x] Record where a pocket came from, via **`Pocket source: <code> from <PDB>`**. The reference panel previously read "not recorded" for any pocket whose provenance lived only in whoever built the spec, and the pose panel could pair a prediction with its experiment only when that structure happened to already be in `reference/`. Reporting only -- it never reaches generate/run.
+- [x] Take **more than one reference structure per protein**, and ship every one of them. `Pocket source:` is now repeatable, and each pocket reference downloaded for its contacts is written into `reference/` instead of being discarded -- previously a pocket's structure travelled only when the same entry happened to be the apo one too, so on any campaign where they differed the pose panel had nothing to score against and said nothing about it. One code claimed by two structures is a parse error rather than last-write-wins.
+- [x] Offer **"reference molecule only"** on a pocket reference: ship the structure so its bound ligand can score a matching compound's pose, without defining a site. A site is another run for every ligand; a reference molecule costs nothing. Expressed in the spec as a `Pocket source:` line with no `Pocket contact:` lines, so no new grammar was needed, and listed in the reference panel as "reference only" rather than as a site with zero contacts. Measured on ABL1: imatinib had no experimental twin at all until 1IEP was added this way, and then reproduced its crystal pose at 0.56 A constrained against 18.39 A unconstrained.
+- [x] Say which ligands were **not** compared and why. A four-target ABL1 campaign reported "2 target(s) compared" and dropped imatinib silently, which read as "it was never predicted" rather than "it had no reference".
+- [x] Make the **Reference structures** panel ask only the question that applies to the protein in front of it: G-protein coupling for a GPCR, DFG and alphaC for a kinase, and nothing at all for anything else. A kinase reference was reported as "no G protein bound" -- true, and as informative as "no wings" is of a horse. Family comes from the same `applies_to()` filters that pick the annotator, so a panel cannot label a protein differently from what measured it.
+- [x] Replace the **kinase state classifier**, which was wrong in one direction for every structure it ever saw. DFG-Asp Ca to catalytic-Lys Ca barely moves between states, so an 8 A threshold called dasatinib-bound 2GQG (plainly DFG-in) "DFG-out" at 11.15 A -- as it called everything. Now Dunbrack's two-distance test on the DFG-Phe ring, and the Lys-Glu salt bridge for alphaC, which read 2GQG correctly as DFG-in/alphaC-in. alphaC is unresolved rather than "out" when side chains are unmodelled, and DFG reports `other` for a conformation that is neither.
 - [x] Put the **pocket code in the target name** (`2_RECP1_GNAS_LIG1_41Y`, `Unc` when unconstrained). In a matrix campaign a ligand is predicted once per pocket, so a bare run number reads as an index rather than a condition; the suffix says what was done differently. Derived from the same value the Pocket column shows, so a name and its column cannot disagree, and skipped for apo targets, which have no pocket.
 - [x] Add **`Class: control` / `Class: experimental`** to a `Ligand:` block, and mark the experimental ones on the pIC50-vs-confidence, pIC50-vs-binder-probability and both ranked charts. Marked by a thin red outline rather than a colour, because colour is already carrying confidence and affinity tiers on those plots and a third meaning would collide with both. A campaign that sets no `Class:` sees no outlines, unchanged from before.
 - [x] Add **Use potentials** as the first Prediction setting, on by default: Boltz's FK steering and physical-guidance coordinate update were hardcoded on, with no way to turn them off from the web form or the CLI. `--no-potentials` now threads through to `boltz predict`, which matters because that guidance update is one of the places a diffusion trajectory can diverge to NaN.
