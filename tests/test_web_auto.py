@@ -1052,3 +1052,23 @@ def test_a_saved_form_cannot_revive_a_default_the_page_has_moved_on_from(client)
           / "web" / "static" / "js" / "form_state.js").read_text()
     assert "state.version !== STATE_VERSION" in js
     assert "var STATE_VERSION = 2;" in js
+
+
+def test_the_front_page_does_not_list_destroyed_runs(tmp_path, monkeypatch):
+    """Removing a run has to remove it from every listing.
+
+    The registry is append-only, so `forget` tombstones a run rather than erasing
+    it and leaves it with no files. /runs filtered those out; the front page did
+    not, so three runs deleted at the owner's request went on being advertised
+    there with their files already gone.
+    """
+    from boltzmaker_web.runs import Archive
+
+    archive = Archive(tmp_path)
+    archive.record_bundle("keepme", "Keeper", 2, "keeper.command", b"x" * 32)
+    archive.record_bundle("goneaway", "Gone", 1, "gone.command", b"y" * 32)
+    archive.forget("goneaway")
+
+    listable = [run.campaign for run in archive.list()
+                if run.has_bundle or run.has_results]
+    assert listable == ["Keeper"], listable

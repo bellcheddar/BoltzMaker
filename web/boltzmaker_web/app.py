@@ -142,7 +142,13 @@ def create_app() -> Flask:
         # sign of life -- what the site has actually been used for lately.
         from .runs import Archive
         try:
-            recent = Archive(Path(app.config["RUNS_ROOT"])).list()[:5]
+            # Same filter /runs applies. A destroyed run is tombstoned rather than
+            # erased -- the registry is append-only -- so without this the front page
+            # kept listing runs that had been removed at the owner's request, with
+            # their files already deleted. Removing a run has to remove it from every
+            # listing, not from the one that happens to filter.
+            recent = [run for run in Archive(Path(app.config["RUNS_ROOT"])).list()
+                      if run.has_bundle or run.has_results][:5]
         except OSError:
             recent = []
         return render_template("index.html", active="index", recent_runs=recent)
