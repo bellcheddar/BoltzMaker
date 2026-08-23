@@ -4509,6 +4509,20 @@ img, canvas { max-width: 100%; height: auto; }
 .md-card { background: var(--md-surface); border: 1px solid var(--md-border); border-radius: var(--md-radius); padding: 20px; box-shadow: var(--md-shadow-sm); margin-bottom: 24px; }
 .md-card h2 { margin-top: 0; font-size: 16px; }
 .md-card.table-card { overflow-x: auto; max-width: 100%; }
+.landlord-table td { vertical-align: top; }
+.landlord-overview { font-size: 15px; line-height: 1.55; margin: 0 0 14px; }
+.landlord-stats { max-width: 46em; margin-bottom: 18px; }
+.landlord-stats th { text-align: left; white-space: nowrap; width: 11em;
+                     color: var(--md-text-muted, #6b7c93); font-weight: 600; }
+.md-card h3 { font-size: 14px; margin: 18px 0 6px; }
+.md-card h3 + ul { margin-top: 0; }
+.landlord-table td:nth-child(3) { min-width: 26em; }
+.landlord-verdict { font-weight: 600; text-transform: capitalize; white-space: nowrap; }
+/* The same three tiers the shield icons use, so one judgement never appears in two
+   different colours on the same page. */
+.landlord-ok { color: #00934a; }
+.landlord-warn { color: #b56a00; }
+.landlord-bad { color: #b3162a; }
 .md-chart-grid, .md-side-by-side { display: grid; gap: 16px; grid-template-columns: repeat(2, 1fr); margin-bottom: 24px; }
 .md-side-by-side.md-side-3col { grid-template-columns: repeat(3, 1fr); }
 .md-chart-grid .md-card, .md-side-by-side { margin-bottom: 0; }
@@ -6298,6 +6312,87 @@ def _build_heatmap_pair_card(selectivity_html: str, motif_chart_html: str) -> st
             f"<div class='heatmap-pair-grid'>{''.join(halves)}</div></div>")
 
 
+#: What a verdict means, in the report's own colour language. Matches the shield
+#: tiers used elsewhere so the same judgement never appears in two different colours.
+_LANDLORD_VERDICT_TIER = {"proceed": "ok", "caution": "warn", "discard": "bad"}
+
+
+def _build_landlord_card(campaign_dir: Path) -> str:
+    """Landlord's prose, if `analyze` wrote any.
+
+    Silent when it did not. Narration is optional, can be switched off, and is
+    unavailable on most machines, so an empty card promising a summary that is not
+    coming would be worse than no card.
+
+    Says which targets were written by the model and which by the template. A reader
+    weighing a sentence deserves to know whether it was composed or interpolated, and
+    a campaign can legitimately be a mixture of both.
+    """
+    source = campaign_dir / "boltz_summary_prose.json"
+    if not source.is_file():
+        return ""
+    try:
+        data = json.loads(source.read_text())
+    except (ValueError, OSError):
+        return ""
+
+    targets = data.get("targets") or []
+    by_model = sum(1 for t in targets if t.get("generated_by") == "foundation-models")
+    provenance = (
+        f"{by_model} of {len(targets)} target summaries written on-device by the "
+        f"Apple Neural Engine; {len(targets) - by_model} rendered from the template"
+        if by_model else
+        f"All {len(targets)} target summaries rendered from the template")
+
+    def esc(value) -> str:
+        return html.escape(str(value or ""))
+
+    # The campaign facts as a table, not a paragraph. They were one run-on sentence --
+    # counts, receptor list, ligand list, verdict tally and pose result all in a row --
+    # which is a shape nobody reads. Every one of them is a label and a value.
+    stats = data.get("stats") or {}
+    stat_rows = "".join(f"<tr><th>{esc(label)}</th><td>{esc(value)}</td></tr>"
+                        for label, value in (stats.get("rows") or []))
+    stats_table = (f"<table class='md-table landlord-stats'><tbody>{stat_rows}"
+                   "</tbody></table>") if stat_rows else ""
+
+    top = "".join(f"<li>{esc(entry)}</li>" for entry in (stats.get("topByPotency") or []))
+    top_block = (f"<h3>Highest predicted potency</h3><ul>{top}</ul>") if top else ""
+
+    findings = "".join(f"<li>{esc(f)}</li>" for f in (data.get("keyFindings") or []))
+    findings_block = f"<h3>Key findings</h3><ul>{findings}</ul>" if findings else ""
+
+    caveats = data.get("caveats")
+    caveat_block = f"<h3>Caveats</h3><p>{esc(caveats)}</p>" if caveats else ""
+
+    rows = []
+    for entry in targets:
+        summary = entry.get("summary") or {}
+        verdict = str(summary.get("recommendation") or "")
+        tier = _LANDLORD_VERDICT_TIER.get(verdict, "")
+        notes = " ".join(str(n) for n in (summary.get("ligandNotes") or []))
+        rows.append(
+            "<tr>"
+            f"<td><code>{esc(entry.get('target_id'))}</code></td>"
+            f"<td class='landlord-verdict landlord-{tier}'>{esc(verdict)}</td>"
+            f"<td>{esc(summary.get('confidence'))} {esc(notes)}</td>"
+            f"<td>{esc(summary.get('caveat'))}</td>"
+            f"<td class='md-hint'>{'model' if entry.get('generated_by') == 'foundation-models' else 'template'}</td>"
+            "</tr>")
+
+    return (
+        "<div class='md-card table-card'><h2>Landlord narration</h2>"
+        f"<p class='md-hint'>{esc(provenance)}. Every number here is checked against "
+        "the figures the analysis computed; a summary stating one it was not given was "
+        "replaced by the template.</p>"
+        f"<p class='landlord-overview'>{esc(data.get('overview'))}</p>"
+        + stats_table + findings_block + top_block + caveat_block
+        + "<h3>Per target</h3>"
+          "<table class='md-table landlord-table'><thead><tr>"
+          "<th>Target</th><th>Verdict</th><th>Summary</th><th>Caveat</th><th>Written by</th>"
+          "</tr></thead><tbody>" + "".join(rows) + "</tbody></table></div>")
+
+
 def write_html(df: pd.DataFrame, path: Path, campaign_dir: Path, campaign: Campaign) -> None:
     summary_rows = _build_campaign_summary(campaign, campaign_dir)
     summary_html = pd.DataFrame(summary_rows, columns=["Field", "Value", "Details"]).to_html(
@@ -6527,6 +6622,11 @@ def write_html(df: pd.DataFrame, path: Path, campaign_dir: Path, campaign: Campa
 
     if not any("heatmap-pair" in part for part in parts):
         parts.append(_build_heatmap_pair_card(selectivity_heatmap, ""))
+
+    # Last, deliberately. It is a summary of everything above it, so it reads after
+    # the evidence rather than before it -- and a reader who wants only the prose can
+    # jump to the end rather than scroll past it to reach the data.
+    parts.append(_build_landlord_card(campaign_dir))
 
     if PLOTLY_JS_PATH.exists():
         plotly_script = f"<script>{PLOTLY_JS_PATH.read_text()}</script>"
@@ -6822,10 +6922,16 @@ def main() -> None:
             # picked up by write_html below -- never aborts analyze over this.
             from sse_comparison.cli import run_compare_sse
             run_compare_sse(campaign, campaign_dir, strict=False)
+        # Narrate before writing the dashboard, not after. The Landlord panel reads
+        # boltz_summary_prose.json off disk, so with the old order it rendered the
+        # *previous* run's prose -- and nothing at all on a first run. It looked
+        # right, because a stale summary of the same campaign is still a plausible
+        # summary; the giveaway was a panel claiming 19 of 20 narrated while the run
+        # that produced it had just reported 16.
+        _run_landlord(campaign_dir, getattr(args, "narration", "auto"))
         write_html(df, campaign_dir / "boltz_dashboard.html", campaign_dir, campaign)
         _ok(f"analysis written to {campaign_dir} "
             "(boltz_summary.csv / .xlsx / boltz_summary_view.csv / boltz_dashboard.html)")
-        _run_landlord(campaign_dir, getattr(args, "narration", "auto"))
 
 
 def _run_landlord(campaign_dir: Path, mode: str) -> None:

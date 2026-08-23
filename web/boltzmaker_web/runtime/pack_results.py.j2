@@ -113,6 +113,11 @@ def main() -> int:
         if path.is_file():
             members.append((f"reports/{name}", path))
     add("config.json", CAMPAIGN_DIR / "config.json", "config")
+    # Landlord's prose, when narration was on. Optional by nature -- switched off, or
+    # unavailable on this machine -- so `add` records it as skipped rather than
+    # failing, and the explorer simply shows no narration panel.
+    add("boltz_summary_prose.json", CAMPAIGN_DIR / "boltz_summary_prose.json",
+        "narration")
     for name in ("boltz_summary.csv", "boltz_interactions.csv",
                  "boltz_sse_comparison.csv", "boltz_sse_family_status.json"):
         path = CAMPAIGN_DIR / name

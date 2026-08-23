@@ -2,7 +2,7 @@
 
 > **BoltzMaker: Boltz2 campaign-scale structure and affinity prediction, binding analysis, and run control, orchestrated end to end from a single spec file.**
 
-[![live](https://img.shields.io/badge/live-boltzmaker.mdeller.com-00d084?logo=icloud&logoColor=white)](https://boltzmaker.mdeller.com) ![python](https://img.shields.io/badge/python-3.12.3-3776AB?logo=python&logoColor=white) ![flask](https://img.shields.io/badge/flask-3.1.3-000000?logo=flask&logoColor=white) ![gunicorn](https://img.shields.io/badge/gunicorn-26.0.0-499848?logo=gunicorn&logoColor=white) ![nginx](https://img.shields.io/badge/nginx-1.24.0-009639?logo=nginx&logoColor=white) ![boltz](https://img.shields.io/badge/boltz-2-00897B) ![rdkit](https://img.shields.io/badge/RDKit-2026.03-00d084) ![gemmi](https://img.shields.io/badge/gemmi-0.6.5-8a3ffc) ![biopython](https://img.shields.io/badge/Biopython-1.84-1a6b8f) ![plip](https://img.shields.io/badge/PLIP-2025-9b51e0) ![pymol](https://img.shields.io/badge/PyMOL-3.1-ff6900) ![plotly](https://img.shields.io/badge/Plotly.js-2.35.2-3F4F75?logo=plotly&logoColor=white) ![3dmoljs](https://img.shields.io/badge/3Dmol.js-3D%20viewer-fcb900) ![molstar](https://img.shields.io/badge/Mol*-4.9.0-1a6b8f) ![pytest](https://img.shields.io/badge/pytest-432%20passing-0A9EDC?logo=pytest&logoColor=white) ![data](https://img.shields.io/badge/data-GPCRdb%20%C2%B7%20KLIFS%20%C2%B7%20PDBe-467FF7) ![licence](https://img.shields.io/badge/licence-MIT-467FF7) ![author](https://img.shields.io/badge/author-Marc%20C.%20Deller%2C%20D.Phil.-1C244B)
+[![live](https://img.shields.io/badge/live-boltzmaker.mdeller.com-00d084?logo=icloud&logoColor=white)](https://boltzmaker.mdeller.com) ![python](https://img.shields.io/badge/python-3.12.3-3776AB?logo=python&logoColor=white) ![flask](https://img.shields.io/badge/flask-3.1.3-000000?logo=flask&logoColor=white) ![gunicorn](https://img.shields.io/badge/gunicorn-26.0.0-499848?logo=gunicorn&logoColor=white) ![nginx](https://img.shields.io/badge/nginx-1.24.0-009639?logo=nginx&logoColor=white) ![boltz](https://img.shields.io/badge/boltz-2-00897B) ![rdkit](https://img.shields.io/badge/RDKit-2026.03-00d084) ![gemmi](https://img.shields.io/badge/gemmi-0.6.5-8a3ffc) ![biopython](https://img.shields.io/badge/Biopython-1.84-1a6b8f) ![plip](https://img.shields.io/badge/PLIP-2025-9b51e0) ![pymol](https://img.shields.io/badge/PyMOL-3.1-ff6900) ![plotly](https://img.shields.io/badge/Plotly.js-2.35.2-3F4F75?logo=plotly&logoColor=white) ![3dmoljs](https://img.shields.io/badge/3Dmol.js-3D%20viewer-fcb900) ![molstar](https://img.shields.io/badge/Mol*-4.9.0-1a6b8f) ![pytest](https://img.shields.io/badge/pytest-455%20passing-0A9EDC?logo=pytest&logoColor=white) ![data](https://img.shields.io/badge/data-GPCRdb%20%C2%B7%20KLIFS%20%C2%B7%20PDBe-467FF7) ![licence](https://img.shields.io/badge/licence-MIT-467FF7) ![author](https://img.shields.io/badge/author-Marc%20C.%20Deller%2C%20D.Phil.-1C244B)
 
 <table>
 <tr>
@@ -1082,6 +1082,71 @@ optional, additive feature. The standalone command still exits with a clear erro
 explicitly pass a `--family`/`--target` matching nothing, since that's a real mistake worth
 stopping for.
 
+## 🍺 Landlord: a summary in plain English
+
+Named after Timothy Taylor's flagship, as BoltzMaker is named after their Boltmaker.
+
+At the end of `analyze`, Landlord writes a summary of the campaign and of every target
+in it: what the confidence means, what each ligand's contacts and predicted potency
+show, whether a pose reproduced its experimental structure, and a verdict. It appears
+as the last panel of the dashboard and of the hosted explorer, and as
+`boltz_summary_prose.json` beside the CSVs.
+
+On an Apple Silicon Mac running macOS 26 with Apple Intelligence switched on, the prose
+is written **on-device by the Neural Engine**. No weights ship, no data leaves the
+machine, no API key exists to leak. Everywhere else -- Intel Macs, Linux, an older
+macOS, Apple Intelligence off -- the same summary is rendered from a template, and the
+campaign neither notices nor cares.
+
+| Setting | What it does |
+|---|---|
+| `--narration auto` | On-device if possible, template otherwise. The default. |
+| `--narration template` | Template even where the model would work. Deterministic, so the output is reproducible. |
+| `--narration off` | No summary. |
+| `--narration model` | On-device only, failing loudly. For testing that path; deliberately not offered in the web form. |
+
+### It never computes, and it is checked when it does
+
+Every number a summary can contain is computed, rounded, given its units and turned
+into a string *before* the model sees it, and every ranking and threshold judgement is
+already made. The model is handed `"ipTM 0.84"` and `rank: "2 of 4"` -- it has nothing
+to round and no list to sort.
+
+That is not fastidiousness. Asked to compose the campaign-level findings, the model
+wrote the caution count as the number of discards and the flagged count as the
+confidence count. Both figures were in its input. So anything that is arithmetic --
+the verdict, the tallies, the rankings -- is computed in Python, and the model
+narrates rather than derives. Per-target verdict mismatches went from three in six to
+none.
+
+What the model does write is then gated: **every numeric token in generated prose must
+appear verbatim in the fact block it came from**, or the summary is discarded and the
+template used instead. On its first run against real output the gate caught the model
+inventing "confidence scores above 0.8" -- true, as it happens, and never supplied.
+
+The gate checks presence, not attribution. It cannot tell that a supplied number has
+been attached to the wrong noun, which is exactly why the tallies are not narrated.
+
+### Nothing here can fail a campaign
+
+Missing binary, Apple Intelligence off, model still downloading, a timeout, unreadable
+output, a summary rejected by the gate: every one of those ends at the template.
+Narration runs after the analysis is already on disk, at low QoS, and a failure costs
+the summary and nothing else.
+
+### It does not compete with the GPU
+
+Measured on an M1 Max: GPU power *fell* during narration, 15.0 to 8.2 mW, so nothing
+contends with a folding run -- narration can happen while a campaign is still going.
+The inference path uses about 6% of one core. `powermetrics` exposes no ANE rail on
+this SoC, so the work is placed on the Neural Engine by attribution rather than by a
+power reading: not the GPU, not the CPU, and `aned` busy throughout.
+
+`docs/landlord_spike.md` has the feasibility findings, including a 0% refusal rate
+across 26 fact blocks weighted towards the vocabulary most likely to trip a content
+filter. `docs/landlord_bench.md` has the timings -- including why concurrency is 1 --
+and `docs/landlord_packaging.md` why there is nothing to notarise.
+
 ## 🌐 Web deployment
 
 **Live at [boltzmaker.mdeller.com](https://boltzmaker.mdeller.com).** A Flask frontend for the
@@ -1375,7 +1440,7 @@ Local runs first, then the hosted site.
 .venv/bin/pytest tests/
 ```
 
-432 tests here, plus 609 for the web app. The `compare-sse` annotators are covered against real
+455 tests here, plus 616 for the web app. The `compare-sse` annotators are covered against real
 fixture data (a real apo EGFR kinase-domain structure vs the `egfr_covalent` example's real holo
 prediction; a real apo beta2-adrenergic-receptor structure vs `adrb2_gs_panel`'s real holo
 predictions), with GPCRdb/KLIFS/PDBe network calls swapped for an injectable fake client seeded
@@ -1465,6 +1530,7 @@ campaigns.
 - [x] **Read a PDB id back** under the box, the way the UniProt accession already was: title, method, resolution and the bound ligands. Every typo in a four-character id is another valid id, and "apo" in a title is not a guarantee -- this project has twice measured against a reference that was not what it claimed. Needs one GraphQL call rather than the REST entry endpoint, whose `nonpolymer_bound_components` is absent on many entries including 5VEW, which has three ligands: REST would report "no ligands" for exactly the case the check exists to catch.
 - [x] **Upload an apo structure** from the machine, for anything not in the PDB, copied into the bundle under `reference/`. Two things that would fail silently: the form needs `multipart/form-data` or the browser posts the filename without the file, and the input is named per row rather than as a `[]` array because an empty file input posts nothing and an array would attach each upload to the wrong protein. Contents are sniffed rather than trusted from the extension, filenames sanitised, 20MB ceiling.
 - [x] Fix the UniProt autofill **announcing nothing when it fills a field**. Assigning `.value` from script fires no event, so a partner filled from its accession did not reach the proteins' partner pickers until some later edit triggered a re-sync -- which read as "partners only appear when I add another one". Autosave missed it identically: an autofilled name and sequence were never written to browser storage until the next keystroke elsewhere, so filling a protein from its accession and reloading lost it.
+- [x] Write the campaign up in plain English, on the machine that ran it: **Landlord**, narrating each target and the campaign from the Apple Neural Engine where macOS 26 and Apple Intelligence allow it, and from a template everywhere else. No weights ship and no data leaves the machine. Measured before building anything: 0 refusals across 26 fact blocks deliberately loaded with the vocabulary a content filter dislikes, and GPU power *falling* during narration (15.0 to 8.2 mW), so it does not compete with a folding run. Everything that is arithmetic is computed in Python and merely narrated -- asked to compose the campaign tallies the model named the caution count as discards, and both figures were in its input, so the numeric gate could not see it. What the model does write is gated on every number appearing verbatim in its fact block, and a rejected summary falls through to the template. Nothing in the path can fail a campaign. See **Landlord** above, and `docs/landlord_spike.md`, `docs/landlord_bench.md` and `docs/landlord_packaging.md`.
 - [x] Prove the pocket restraint can **fail**, not just succeed: a wrong-pocket arm on every ligand. The tightness series showed a 4 A pocket reproducing a crystal pose, which is only evidence if the same machinery misses when aimed somewhere else. Running each ligand against its own site, the other ligand's site and no site at all put own-site at 0.91/2.79 A, unconstrained at 6.17/13.57 A and wrong-site at 24.93/29.40 A -- worse than no constraint -- on two ligands across two receptors. The conformer column stays low (0.81, 1.78) through the wrong-site failures, so the molecule's shape is right and only its placement is wrong, which is the decomposition the three columns exist for. See **Does the restraint just manufacture the pose?** above.
 - [x] Resolve pocket codes against the chemical component dictionary instead of treating them as opaque labels. A pocket carried through a campaign as the string `41Y` is a PDB component id defining a real molecule, and it turned out to be the same compound as one of that campaign's own ligands -- which had an experimental structure nobody had fetched. Pulling 7RBT into `reference/` doubled the pose panel's coverage and supplied the second ligand of the wrong-pocket control above.
 - [x] Record where a pocket came from, via **`Pocket source: <code> from <PDB>`**. The reference panel previously read "not recorded" for any pocket whose provenance lived only in whoever built the spec, and the pose panel could pair a prediction with its experiment only when that structure happened to already be in `reference/`. Reporting only -- it never reaches generate/run.

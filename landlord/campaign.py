@@ -60,6 +60,12 @@ class CampaignStats:
     #: whole class of error rather than trying to detect it.
     key_findings: list[str] = field(default_factory=list)
 
+    #: (label, value) pairs for tabular display. The fields above are written to be
+    #: narrated -- whole sentences -- which makes them poor table cells. These are the
+    #: same facts as short values, so the report can lay them out as a table without
+    #: the card having to unpick prose it was handed.
+    rows: list[tuple[str, str]] = field(default_factory=list)
+
     def to_json(self) -> str:
         return json.dumps(self.__dict__, separators=(",", ":"), sort_keys=True)
 
@@ -101,6 +107,17 @@ def summarise_stats(blocks: list[FactBlock], campaign_name: str) -> CampaignStat
         top_by_potency=[f"{name} on {target}, predicted pIC50 {value}"
                         for name, target, value in ranked],
         key_findings=_findings(blocks, verdicts, bands, flagged, posed, reproduced),
+        rows=[
+            ("Targets", f"{len(blocks)} predicted, {len(with_ligand)} with a ligand"),
+            ("Receptors", ", ".join(receptors) or "none"),
+            ("Ligands", ", ".join(ligands) or "none"),
+            ("Verdicts", ", ".join(f"{n} {v}" for v, n in verdicts.most_common())),
+            ("Confidence", ", ".join(f"{n} {b}" for b, n in bands.most_common())),
+            ("Flagged", f"{len(flagged)} of {len(blocks)}"),
+            ("Pose validated",
+             (f"{len(reproduced)} of {len(posed)} reproduced the experimental pose"
+              if posed else "no experimental structure to compare against")),
+        ],
     )
 
 

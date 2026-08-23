@@ -90,13 +90,17 @@ def render_summary(block: FactBlock) -> dict:
 
 
 _CAMPAIGN = _ENV.from_string("""\
-{{ s.campaign_name }}: {{ s.targets }}.
-Receptors -- {{ s.receptors }}. Ligands -- {{ s.ligands }}.
-Verdicts: {{ s.verdicts }}. Confidence: {{ s.confidence_spread }}.
-{{ s.flagged|capitalize }}. {{ s.pose_validated|capitalize }}.
+{{ s.campaign_name }}
+
+{% for label, value in s.rows %}
+{{ label }}: {{ value }}
+{% endfor %}
 {% if s.top_by_potency %}
-Highest predicted potency: {% for t in s.top_by_potency %}{{ t }}\
-{% if not loop.last %}; {% endif %}{% endfor %}.
+
+Highest predicted potency:
+{% for t in s.top_by_potency %}
+  - {{ t }}
+{% endfor %}
 {% endif %}
 """)
 

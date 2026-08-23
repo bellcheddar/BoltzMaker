@@ -28,3 +28,7 @@ biopython
 plotly
 reportlab
 requests
+# Landlord: pydantic validates the FactBlock, jinja2 renders the template
+# summaries it falls back to. Both are imported unconditionally by landlord/.
+pydantic
+jinja2

@@ -33,6 +33,13 @@ biopython = "1.84.*"
 scipy = "1.13.*"
 requests = "2.32.3.*"
 pyyaml = "6.0.2.*"
+# Landlord's two. jinja2 renders the template summaries and pydantic validates the
+# FactBlock. Both were present transitively for a while, which is not the same as
+# being available: a real campaign env had jinja2 by luck and no pydantic at all, so
+# `analyze` finished and then reported "Landlord wrote no summary: No module named
+# 'pydantic'". Neither is heavy, and neither touches the numpy<2 pin boltz needs.
+pydantic = ">=2"
+jinja2 = "*"
 # The three below have NO wheel on PyPI at all for the exact version boltz's own pip
 # metadata pins (sdist-only) -- declared explicitly here as real conda-forge
 # dependencies instead of left to boltz's own transitive pip resolution, because
