@@ -5036,6 +5036,12 @@ def _sse_state_hint(kinds: set) -> str:
     return " ".join(sentences)
 
 
+#: Stands in for a `Pocket source:` line that does not parse, so the panel's lookup
+#: can read `.group("code")` unconditionally. parse_md has already rejected those, so
+#: this only ever covers the empty-string case.
+_NO_MATCH = type("_NoMatch", (), {"group": staticmethod(lambda _name: None)})()
+
+
 def _build_reference_panel_html(campaign: Campaign, campaign_dir: Path) -> str:
     """Every experimental structure this campaign leaned on, and what it is.
 
@@ -5065,9 +5071,14 @@ def _build_reference_panel_html(campaign: Campaign, campaign_dir: Path) -> str:
             source = path.stem.upper()
         proteins = sorted({fam.id for fam in campaign.families if code in (fam.pockets or {})})
         residues = sum(len((fam.pockets or {}).get(code) or []) for fam in campaign.families)
-        if not residues:
-            # Not "0 contacts", which reads as a site that failed to find any.
-            proteins = proteins or sorted({fam.id for fam in campaign.families})
+        if not proteins:
+            # A reference molecule defines no site, so no protein *carries* it. It was
+            # still declared in one protein's block, and naming every family instead
+            # -- as listing them all did -- credited it to the apo companion too.
+            proteins = sorted({fam.id for fam in campaign.families
+                               for line in fam.pocket_source_lines
+                               if (_POCKET_SOURCE_RE.match((line or "").strip()) or
+                                   _NO_MATCH).group("code") == code})
         origin = html.escape(source) if source else (
             "<span class='cell-na' title='no Pocket source: line and no reference file "
             "containing this ligand'>not recorded</span>")
