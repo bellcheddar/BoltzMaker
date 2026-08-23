@@ -898,6 +898,7 @@ def _render_explorer(token: str, loaded: bmz.Results):
         payload=bmz.to_json(loaded),
         low_confidence=bmz.LOW_CONFIDENCE_THRESHOLD,
         slots=slots, nav=report_panels.navigation(slots),
+        last_panel=report_panels.LAST_PANEL,
         has_panels=bool(panels), report_charts=json.dumps(charts),
         ligand_cards=json.dumps(ligands),
         counts=bmz.campaign_counts(loaded),
@@ -1333,6 +1334,7 @@ def _package_bytes(session: Path, token: str, loaded: bmz.Results) -> bytes:
     markup = render_template(
         "_explorer_panels.html", results=loaded, token="", package=True,
         slots=slots, nav=report_panels.navigation(slots),
+        last_panel=report_panels.LAST_PANEL,
         has_panels=bool(panels), low_confidence=bmz.LOW_CONFIDENCE_THRESHOLD,
         # Same context as the live page: this template is rendered from two places,
         # and a variable added for one of them leaves the other rendering an

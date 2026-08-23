@@ -117,6 +117,11 @@ def main() -> int:
     # Without it, extending a finished campaign means retyping every protein,
     # ligand and pocket into the form, or hand-editing the spec.
     add("page_state.json", CAMPAIGN_DIR / "page_state.json", "wizard state")
+    # Landlord's prose, when narration was on. Optional by nature -- switched off, or
+    # unavailable on this machine -- so `add` records it as skipped rather than
+    # failing, and the explorer simply shows no narration panel.
+    add("boltz_summary_prose.json", CAMPAIGN_DIR / "boltz_summary_prose.json",
+        "narration")
     for name in ("boltz_summary.csv", "boltz_interactions.csv",
                  "boltz_sse_comparison.csv", "boltz_sse_family_status.json"):
         path = CAMPAIGN_DIR / name

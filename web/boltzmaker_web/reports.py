@@ -124,6 +124,15 @@ PANEL_ORDER = (
     "Motif x target RMSD",
 )
 
+#: Pinned to the very end, after even the panels PANEL_ORDER does not name.
+#:
+#: Listing it last in PANEL_ORDER is not enough: anything absent from that tuple is
+#: appended afterwards, so the narration landed above three unlisted panels. Naming
+#: those three instead would work until the next panel arrives unlisted, which is the
+#: same bug deferred. This says what is meant -- it summarises everything above it, so
+#: nothing may come after it.
+LAST_PANEL = "Landlord narration"
+
 
 #: The per-family fingerprint heatmaps. There is one per family and one per
 #: family-with-partners, so a campaign of three receptors produces six -- six
@@ -171,11 +180,19 @@ def ordered_slots(panels: list) -> list:
             slots.append({"kind": "report", "panel": by_title[entry]})
             placed.add(entry)
 
+    trailing = None
     for panel in panels:
         title = _panel_title(panel)
-        if title not in placed:
-            slots.append({"kind": "report", "panel": panel})
+        if title in placed:
+            continue
+        if title == LAST_PANEL:
+            trailing = panel
             placed.add(title)
+            continue
+        slots.append({"kind": "report", "panel": panel})
+        placed.add(title)
+    if trailing is not None:
+        slots.append({"kind": "report", "panel": trailing})
 
     # Consecutive fingerprints become one grouped slot. Grouping here rather than
     # in CSS because they are siblings in the page's flow: no selector can put

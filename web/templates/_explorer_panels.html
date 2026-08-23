@@ -99,6 +99,9 @@
 {% endif %}
 
 {% for slot in slots %}
+{#  The narration is rendered after everything, including the downloads card below,
+    so skip it here. It summarises the whole page and nothing should follow it.  #}
+{% if not (slot.kind == 'report' and slot.panel.title == last_panel) %}
 
 {% if slot.kind == 'own' and slot.which == 'targets' %}
 <div class="md-card" id="{{ slot.anchor }}">
@@ -273,6 +276,7 @@
 </div>
 {% endif %}
 
+{% endif %}
 {% endfor %}
 
 {% if not has_panels %}
@@ -308,3 +312,13 @@
 </div>
 {% endif %}
 
+{#  Last on the page, after even the downloads card: it is a summary of everything
+    above it, so nothing follows it.  #}
+{% for slot in slots %}
+{% if slot.kind == 'report' and slot.panel.title == last_panel %}
+<div class="md-card{% if slot.panel.wide %} md-card-wide{% endif %}" id="{{ slot.anchor }}">
+  <h2>{{ slot.panel.title }}</h2>
+  <div class="md-report-panel md-report-{{ slot.panel.kind }}">{{ slot.panel.html | safe }}</div>
+</div>
+{% endif %}
+{% endfor %}

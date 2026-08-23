@@ -47,19 +47,35 @@ class Narration:
     note: str = ""             # why it fell back, when it did
 
 
-def find_binary(explicit: str | Path | None = None) -> Path | None:
-    """The built narrator, or None if this machine has no business running one."""
+def find_binary(explicit: str | Path | None = None, build: bool = True) -> Path | None:
+    """The narrator binary, built on first use if it is not there yet.
+
+    Building is the normal path, not a fallback. A campaign bundle ships the Swift
+    sources and not the binary -- 117MB of build tree compiled for one machine has no
+    business travelling -- so on a fresh machine there is nothing to find until
+    something compiles it, which takes about 30 seconds against the CommandLineTools.
+
+    Without this the bundle narrated every campaign from the template while a perfectly
+    good on-device path sat one `swift build` away. Measured exactly that: 0 of 20
+    targets on-device on a campaign directory that had the sources.
+    """
     if explicit:
         path = Path(explicit)
         return path if path.is_file() else None
     here = Path(__file__).resolve().parent.parent
     for candidate in (
-        here / "swift/Landlord/.build/release/boltzmaker-landlord",
         here / "bin/boltzmaker-landlord",
+        here / "swift/Landlord/.build/release/boltzmaker-landlord",
     ):
         if candidate.is_file():
             return candidate
-    return None
+    if not build:
+        return None
+    # Local import: install.status() calls back into this module.
+    from .install import ensure
+
+    ready = ensure(build=True)
+    return ready.binary if ready else None
 
 
 def available(binary: Path | None = None, timeout_s: int = 20) -> tuple[bool, str]:
@@ -192,6 +208,7 @@ def narrate_campaign(blocks, campaign_name: str,
             "campaign": campaign_name,
             "overview": fallback.render_campaign(stats),
             "keyFindings": stats.key_findings,
+            "stats": {"rows": stats.rows, "topByPotency": stats.top_by_potency},
             "caveats": stats.flagged + ".",
             "generatedBy": "template",
             "note": note,
@@ -243,6 +260,7 @@ def narrate_campaign(blocks, campaign_name: str,
                 "generatedBy": "foundation-models",
                 "note": ("; ".join(notes) if notes else ""),
                 "reduceRounds": rounds,
+                "stats": {"rows": stats.rows, "topByPotency": stats.top_by_potency},
                 "targets": [n.__dict__ for n in per_target],
             }
 
