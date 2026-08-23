@@ -37,6 +37,17 @@ boltz_sse_comparison_sessions/
 # Local staging bundle for manual upload to WordPress -- not tracked in git
 wordpress/
 
+# Exported Claude Code session transcripts. `/export` writes them into the repo
+# folder, and a transcript carries the whole conversation -- compound codenames,
+# share passwords, private run keys. This repo is public. One `git add -A` is all
+# it would take, so they are ignored rather than left to discipline.
+*-this-session-is-being-continued-*.txt
+20[0-9][0-9]-[0-9][0-9]-[0-9][0-9]-[0-9]*.txt
+
+# README backups taken before a rewrite. Working copies, not history --
+# git already has that.
+README.backup*.md
+
 # Elementor README/report forge output (regenerate with readme_forge.py as needed)
 *.polished.md
 README.html
@@ -54,3 +65,19 @@ elementor-widget-markdown.css
 *.command
 *.bmz
 .pixi/
+
+# Landlord
+#
+# The Swift build tree is ~117MB of artefacts compiled for one machine, and the
+# narrator is rebuilt from source in 30s wherever it is needed.
+swift/Landlord/.build/
+swift/Landlord/.swiftpm/
+
+# Phase 0 scratch: a throwaway spike plus the binaries it built. The plan says it may
+# be discarded, and the findings it produced live in docs/landlord_spike.md.
+landlord/spike/
+
+# Marc's worked example of the target output. It names a confidential compound -- once,
+# in a note recording that the compound was renamed for the example -- and this repo is
+# public. The plan beside it is clean and is committed.
+landlord/landlord_example_output.md
