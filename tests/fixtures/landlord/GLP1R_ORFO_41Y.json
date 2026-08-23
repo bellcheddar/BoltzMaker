@@ -1,0 +1,46 @@
+{
+ "confidence": {
+  "complex_plddt": "0.816",
+  "confidence_score": "0.83",
+  "interpretation": "well determined",
+  "iptm": "0.884",
+  "ligand_iptm": "0.973",
+  "ptm": "0.875"
+ },
+ "display_name": "2_GLP1R_GNAS+GNB1+GNG2_ORFO_41Y",
+ "flags": [
+  "the predicted pose disagrees with the experimental structure"
+ ],
+ "ligands": [
+  {
+   "binder_probability": "0.579",
+   "contacts_summary": "7 in total: 7 hydrophobic contacts",
+   "ligand_class": "control",
+   "name": "ORFO",
+   "pic50_spread": "0.19",
+   "pocket": "41Y",
+   "predicted_pic50": "11.18",
+   "rank": "2 of 18 by predicted potency",
+   "role": "not specified"
+  }
+ ],
+ "ligands_omitted": 0,
+ "partners": "GNAS, GNB1, GNG2",
+ "pose": {
+  "pose_rmsd": "29.4 \u00c5",
+  "reference": "7E14",
+  "site_rmsd": "28.23 \u00c5",
+  "verdict": "does not reproduce the experimental pose"
+ },
+ "receptor": "GLP1R",
+ "recommendation": "discard",
+ "sequence_length": "not recorded",
+ "sse": {
+  "largest_shift": "TM6 moved 9.08 \u00c5",
+  "motif_count": "10 motifs",
+  "note": "",
+  "reference": "GLP1R",
+  "reference_state": "compared against this family's apo or inactive reference"
+ },
+ "target_id": "GLP1R_ORFO_41Y"
+}

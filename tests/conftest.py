@@ -9,6 +9,24 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 # silently does nothing on this machine (site.py skips hidden .pth files).
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "web"))
 
+def pytest_configure(config):
+    # Opt-in only. The placement tests need root for powermetrics and an idle machine
+    # to mean anything, so they must never run as part of the ordinary suite or in CI.
+    config.addinivalue_line(
+        "markers",
+        "hardware: needs this specific Mac, root, and an idle machine "
+        "(run with -m hardware under sudo)")
+
+
+def pytest_collection_modifyitems(config, items):
+    if config.getoption("-m") and "hardware" in str(config.getoption("-m")):
+        return
+    skip = pytest.mark.skip(reason="hardware test; run with -m hardware under sudo")
+    for item in items:
+        if "hardware" in item.keywords:
+            item.add_marker(skip)
+
+
 FIXTURES = Path(__file__).parent / "fixtures"
 SSE_FIXTURES = FIXTURES / "sse"
 EXAMPLES = Path(__file__).parent.parent / "examples"

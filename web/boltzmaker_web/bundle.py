@@ -64,11 +64,17 @@ REPO_FILES = ("BoltzMaker.py", "pixi.toml", "pixi.lock")
 # vendor/ is 4.9MB of third-party JavaScript and dominates the bundle size. It
 # is included anyway: the whole promise is a self-contained run, and without it
 # the offline dashboard cannot embed its own charts.
-REPO_DIRS = ("sse_comparison", "vendor")
+REPO_DIRS = ("sse_comparison", "vendor", "landlord", "swift")
 
 # Never packed: compiled bytecode is per-interpreter, and the bundle's Python is
 # not necessarily the one that produced it.
-_SKIP_DIR_NAMES = {"__pycache__", ".pytest_cache"}
+#
+# `landlord` and `swift` ship for the same reason sse_comparison does: `analyze`
+# imports landlord to write its summary, and swift/Landlord is what the narrator is
+# built from on the user's machine. Their bulk is excluded rather than the directories
+# being left out -- swift/.build is ~117MB of artefacts for one machine, and
+# landlord/spike is Phase 0 scratch.
+_SKIP_DIR_NAMES = {"__pycache__", ".pytest_cache", ".build", "spike", ".swiftpm"}
 _SKIP_SUFFIXES = {".pyc", ".pyo"}
 
 # Guard against a pathological spec turning into a multi-hundred-MB download.

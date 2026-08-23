@@ -65,3 +65,19 @@ elementor-widget-markdown.css
 *.command
 *.bmz
 .pixi/
+
+# Landlord
+#
+# The Swift build tree is ~117MB of artefacts compiled for one machine, and the
+# narrator is rebuilt from source in 30s wherever it is needed.
+swift/Landlord/.build/
+swift/Landlord/.swiftpm/
+
+# Phase 0 scratch: a throwaway spike plus the binaries it built. The plan says it may
+# be discarded, and the findings it produced live in docs/landlord_spike.md.
+landlord/spike/
+
+# Marc's worked example of the target output. It names a confidential compound -- once,
+# in a note recording that the compound was renamed for the example -- and this repo is
+# public. The plan beside it is clean and is committed.
+landlord/landlord_example_output.md

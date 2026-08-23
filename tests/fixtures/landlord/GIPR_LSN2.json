@@ -1,0 +1,41 @@
+{
+ "confidence": {
+  "complex_plddt": "0.745",
+  "confidence_score": "0.735",
+  "interpretation": "moderately determined",
+  "iptm": "0.692",
+  "ligand_iptm": "0.443",
+  "ptm": "0.734"
+ },
+ "display_name": "16_GIPR_GNAS+GNB1+GNG2_LSN2_Unc",
+ "flags": [
+  "overall confidence is below the well-determined threshold",
+  "the ligand is poorly placed relative to the receptor"
+ ],
+ "ligands": [
+  {
+   "binder_probability": "0.488",
+   "contacts_summary": "22 in total: 18 hydrophobic contacts, 4 hydrogen bonds",
+   "ligand_class": "control",
+   "name": "LSN2",
+   "pic50_spread": "0.47",
+   "pocket": "Unc",
+   "predicted_pic50": "7.7",
+   "rank": "17 of 18 by predicted potency",
+   "role": "not specified"
+  }
+ ],
+ "ligands_omitted": 0,
+ "partners": "GNAS, GNB1, GNG2",
+ "receptor": "GIPR",
+ "recommendation": "caution",
+ "sequence_length": "not recorded",
+ "sse": {
+  "largest_shift": "H8 moved 9.45 \u00c5",
+  "motif_count": "10 motifs",
+  "note": "",
+  "reference": "GIPR",
+  "reference_state": "compared against this family's apo or inactive reference"
+ },
+ "target_id": "GIPR_LSN2"
+}

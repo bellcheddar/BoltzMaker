@@ -6696,6 +6696,15 @@ def _build_argparser() -> argparse.ArgumentParser:
                         "at a time -- lets a multi-hour campaign recover unattended instead of stopping on "
                         "a transient memory failure (0 to disable and match the old fail-once behavior)")
         sp.add_argument("--strict", action="store_true", help="promote preflight WARN to FAIL")
+        sp.add_argument("--narration", choices=["auto", "model", "template", "off"],
+                        default="auto",
+                        help="Landlord's plain-English summary of the finished campaign. "
+                             "auto narrates on-device where Apple Intelligence is available "
+                             "and falls back to a template everywhere else; template forces "
+                             "the template, which makes the output reproducible; off writes "
+                             "nothing. `model` is for testing the on-device path and fails "
+                             "loudly rather than falling back, so it is not offered in the "
+                             "web form -- narration must never be able to fail a campaign.")
         sp.add_argument("-y", "--yes", action="store_true")
         sp.add_argument("--mps-watermark", type=float, default=1.0, help="PYTORCH_MPS_HIGH_WATERMARK_RATIO -- "
                         "caps MPS memory at this x the device's recommended max, so an oversized complex fails "
@@ -6816,6 +6825,39 @@ def main() -> None:
         write_html(df, campaign_dir / "boltz_dashboard.html", campaign_dir, campaign)
         _ok(f"analysis written to {campaign_dir} "
             "(boltz_summary.csv / .xlsx / boltz_summary_view.csv / boltz_dashboard.html)")
+        _run_landlord(campaign_dir, getattr(args, "narration", "auto"))
+
+
+def _run_landlord(campaign_dir: Path, mode: str) -> None:
+    """Write Landlord's summary, or quietly do without one.
+
+    Wrapped in a bare except on purpose. This runs after the analysis is already on
+    disk, and INV-4 says narration must never delay or break a campaign -- so a broken
+    narrator costs the summary and nothing else. A traceback here would be the tail
+    wagging the dog: hours of prediction, a complete dashboard, and a non-zero exit
+    because some prose could not be written.
+    """
+    if mode == "off":
+        return
+    try:
+        from landlord.build import build_blocks
+        from landlord.bridge import narrate_campaign
+        from landlord.config import NarrationConfig
+
+        blocks = build_blocks(campaign_dir)
+        if not blocks:
+            return
+        summary = narrate_campaign(blocks, campaign_dir.name,
+                                   NarrationConfig(mode=mode))
+        out = campaign_dir / "boltz_summary_prose.json"
+        out.write_text(json.dumps(summary, indent=1, sort_keys=True) + "\n")
+        written = sum(1 for t in summary.get("targets", [])
+                      if t.get("generated_by") == "foundation-models")
+        how = (f"{written} of {len(blocks)} narrated on-device"
+               if written else "rendered from the template")
+        _ok(f"Landlord summary written to {out.name} ({how})")
+    except Exception as exc:                                  # noqa: BLE001
+        _warn(f"Landlord wrote no summary: {exc}")
 
 
 if __name__ == "__main__":

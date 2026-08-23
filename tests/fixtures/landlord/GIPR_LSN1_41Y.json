@@ -1,0 +1,44 @@
+{
+ "confidence": {
+  "complex_plddt": "0.842",
+  "confidence_score": "0.854",
+  "interpretation": "well determined",
+  "iptm": "0.905",
+  "ligand_iptm": "0.984",
+  "ptm": "0.89"
+ },
+ "display_name": "14_GIPR_GNAS+GNB1+GNG2_LSN1_41Y",
+ "flags": [],
+ "ligands": [
+  {
+   "binder_probability": "0.742",
+   "contacts_summary": "11 in total: 9 hydrophobic contacts, 1 hydrogen bond, 1 pi-stack",
+   "ligand_class": "control",
+   "name": "LSN1",
+   "pic50_spread": "0.34",
+   "pocket": "41Y",
+   "predicted_pic50": "8.85",
+   "rank": "8 of 18 by predicted potency",
+   "role": "not specified"
+  }
+ ],
+ "ligands_omitted": 0,
+ "partners": "GNAS, GNB1, GNG2",
+ "pose": {
+  "pose_rmsd": "0.91 \u00c5",
+  "reference": "7RBT",
+  "site_rmsd": "0.66 \u00c5",
+  "verdict": "reproduces the experimental pose"
+ },
+ "receptor": "GIPR",
+ "recommendation": "proceed",
+ "sequence_length": "not recorded",
+ "sse": {
+  "largest_shift": "TM6 moved 7.26 \u00c5",
+  "motif_count": "10 motifs",
+  "note": "",
+  "reference": "GIPR",
+  "reference_state": "compared against this family's apo or inactive reference"
+ },
+ "target_id": "GIPR_LSN1_41Y"
+}

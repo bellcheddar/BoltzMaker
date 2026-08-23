@@ -1,0 +1,22 @@
+{
+ "confidence": {
+  "complex_plddt": "0.815",
+  "confidence_score": "0.823",
+  "interpretation": "well determined",
+  "iptm": "0.858",
+  "ligand_iptm": "0",
+  "ptm": "0.858"
+ },
+ "display_name": "19_GLPAP_GNAS+GNB1+GNG2_apo",
+ "flags": [
+  "the ligand is poorly placed relative to the receptor",
+  "interaction analysis did not complete for this target"
+ ],
+ "ligands": [],
+ "ligands_omitted": 0,
+ "partners": "GNAS, GNB1, GNG2",
+ "receptor": "GLPAP",
+ "recommendation": "caution",
+ "sequence_length": "not recorded",
+ "target_id": "GLPAP"
+}

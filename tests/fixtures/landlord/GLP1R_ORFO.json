@@ -1,0 +1,47 @@
+{
+ "confidence": {
+  "complex_plddt": "0.769",
+  "confidence_score": "0.765",
+  "interpretation": "moderately determined",
+  "iptm": "0.745",
+  "ligand_iptm": "0.799",
+  "ptm": "0.797"
+ },
+ "display_name": "1_GLP1R_GNAS+GNB1+GNG2_ORFO_Unc",
+ "flags": [
+  "overall confidence is below the well-determined threshold",
+  "the predicted pose disagrees with the experimental structure"
+ ],
+ "ligands": [
+  {
+   "binder_probability": "0.491",
+   "contacts_summary": "14 in total: 12 hydrophobic contacts, 2 hydrogen bonds",
+   "ligand_class": "control",
+   "name": "ORFO",
+   "pic50_spread": "0.48",
+   "pocket": "Unc",
+   "predicted_pic50": "9.19",
+   "rank": "7 of 18 by predicted potency",
+   "role": "not specified"
+  }
+ ],
+ "ligands_omitted": 0,
+ "partners": "GNAS, GNB1, GNG2",
+ "pose": {
+  "pose_rmsd": "13.57 \u00c5",
+  "reference": "7E14",
+  "site_rmsd": "11.64 \u00c5",
+  "verdict": "does not reproduce the experimental pose"
+ },
+ "receptor": "GLP1R",
+ "recommendation": "discard",
+ "sequence_length": "not recorded",
+ "sse": {
+  "largest_shift": "TM6 moved 8.81 \u00c5",
+  "motif_count": "10 motifs",
+  "note": "",
+  "reference": "GLP1R",
+  "reference_state": "compared against this family's apo or inactive reference"
+ },
+ "target_id": "GLP1R_ORFO"
+}
