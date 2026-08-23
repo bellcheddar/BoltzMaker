@@ -1127,6 +1127,38 @@ def test_the_receptors_own_chain_is_not_pooled_with_the_rest_of_the_complex(bm, 
     assert result["residues"] == 40 and result["pose"] < 0.01
 
 
+def test_a_trimmed_construct_is_still_superposed_on_its_reference(bm, tmp_path):
+    """Boltz numbers a prediction from 1; a PDB entry numbers the construct it holds.
+
+    A trimmed ABL1 kinase domain came out 1-272 against references numbered 223-500
+    and shared not one residue number with either, so the pose panel reported "2GQG
+    is not a structure of ABL1" -- alarming, and untrue. One integer reconciles a
+    contiguous slice, and it is found by which shift makes the residue *types* agree
+    rather than assumed.
+    """
+    offset = 228
+    pred = {i: ("ALA" if i % 3 else "GLY", [0.0, 0.0, 0.0]) for i in range(1, 121)}
+    ref = {i + offset: pred[i] for i in pred}
+    found, shared, identity = bm._numbering_offset(pred, ref)
+    assert found == offset
+    assert len(shared) == len(pred) and identity == 1.0
+
+
+def test_matching_numbering_still_wins_with_no_shift(bm, tmp_path):
+    """The original behaviour is a special case, not something the search replaced."""
+    pred = {i: ("ALA" if i % 3 else "GLY", [0.0, 0.0, 0.0]) for i in range(1, 121)}
+    found, shared, _identity = bm._numbering_offset(pred, dict(pred))
+    assert found == 0 and len(shared) == len(pred)
+
+
+def test_a_shift_that_only_lines_up_numbers_is_not_taken(bm, tmp_path):
+    """Residue types still have to agree, or a fit is made against the wrong protein."""
+    pred = {i: ("ALA", [0.0, 0.0, 0.0]) for i in range(1, 121)}
+    ref = {i + 40: ("TRP", [0.0, 0.0, 0.0]) for i in range(1, 121)}
+    _found, shared, identity = bm._numbering_offset(pred, ref)
+    assert shared == [] and identity == 0.0
+
+
 def test_an_unconstrained_target_still_finds_its_experimental_twin(bm, tmp_path):
     """The baseline is the comparison worth having, and it carries no pocket code."""
     (tmp_path / "reference").mkdir()

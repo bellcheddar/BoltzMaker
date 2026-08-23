@@ -5640,6 +5640,43 @@ def _ligand_atoms(path: Path, chain: str = None, comp: str = None) -> list:
 POSE_MIN_RECEPTOR_IDENTITY = 0.7
 
 
+def _numbering_offset(pred: dict, ref: dict) -> tuple:
+    """The constant shift putting a prediction's residue numbers onto a reference's.
+
+    Matching on number is the right correspondence when both number the same
+    protein the same way, and it is still what this returns for that case -- offset
+    zero, chosen because it matches most. But a construct is often not numbered like
+    the entry it is compared against: Boltz numbers a prediction from 1, so a trimmed
+    ABL1 kinase domain came out 1-272 against references numbered 223-500 and shared
+    not one residue with either. The pose panel then reported "2GQG is not a
+    structure of ABL1", which is both alarming and untrue.
+
+    A trim is a contiguous slice, so one integer reconciles the two, and it is found
+    rather than assumed: every offset that could bring the ranges into contact is
+    scored by how many residues then agree in *type*. That keeps the property the
+    number-matching had -- a fit is only made where the residues really correspond --
+    while dropping the assumption that two numbering schemes agree. An alignment
+    would also solve it and can be subtly wrong in a way a single integer cannot.
+
+    Returns (offset, [predicted residue numbers used], identity).
+    """
+    if not pred or not ref:
+        return 0, [], 0.0
+    lo = min(ref) - max(pred)
+    hi = max(ref) - min(pred)
+    # Ranges are a few hundred residues, so this is a few hundred thousand integer
+    # comparisons -- far cheaper than the superposition it feeds.
+    best = (0, [], 0.0)
+    for offset in range(lo, hi + 1):
+        overlap = [r for r in pred if r + offset in ref]
+        if len(overlap) <= len(best[1]):
+            continue                      # cannot beat the incumbent on count
+        shared = [r for r in overlap if pred[r][0] == ref[r + offset][0]]
+        if len(shared) > len(best[1]):
+            best = (offset, shared, len(shared) / len(overlap))
+    return best
+
+
 def _receptor_superposition(pred_path: Path, ref_path: Path, receptor_id: str):
     """Kabsch rotation putting the predicted receptor onto the experimental one.
 
@@ -5682,20 +5719,18 @@ def _receptor_superposition(pred_path: Path, ref_path: Path, receptor_id: str):
     best = None
     for chain in sorted(c for c in chains if c):
         ref = alpha_carbons(ref_path, chain)
-        overlap = set(pred) & set(ref)
-        if not overlap:
+        if not ref:
             continue
-        shared = [r for r in sorted(overlap) if pred[r][0] == ref[r][0]]
-        identity = len(shared) / len(overlap)
+        offset, shared, identity = _numbering_offset(pred, ref)
         if len(shared) >= 30 and identity >= POSE_MIN_RECEPTOR_IDENTITY:
             if best is None or len(shared) > len(best[2]):
-                best = (ref, identity, shared)
+                best = (ref, identity, shared, offset)
     if best is None:
         return None
-    ref, identity, shared = best
+    ref, identity, shared, offset = best
 
     P = np.array([pred[r][1] for r in shared])
-    Q = np.array([ref[r][1] for r in shared])
+    Q = np.array([ref[r + offset][1] for r in shared])
     pc, qc = P.mean(0), Q.mean(0)
     U, _, Vt = np.linalg.svd((P - pc).T @ (Q - qc))
     d = float(np.sign(np.linalg.det(Vt.T @ U.T)))
