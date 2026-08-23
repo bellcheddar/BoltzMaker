@@ -65,6 +65,35 @@
     </div>
   </div>
 
+  {#  Its own card, directly under Settings. It belongs with the campaign-wide
+      choices rather than with the per-run tuning knobs three screens below.
+
+      Guarded because this partial is shared with the Stepwise page at /new, which
+      assembles a boltz_input.md and nothing else -- no run script, no run settings.
+      A narration control there would post a value that never reaches a command.  #}
+  {% if narration_option %}
+  <div class="md-card">
+    <h2>Landlord narration</h2>
+    <div class="md-field">
+      <label for="narration">{{ narration_option.label }}</label>
+      <select id="narration" name="narration">
+        {% for choice in narration_option.choices %}
+        <option value="{{ choice }}"
+                {% if (form.narration if form else narration_option.default) == choice %}selected{% endif %}>
+          {{ choice }}
+        </option>
+        {% endfor %}
+      </select>
+      <p class="md-hint">A plain-English summary of the finished campaign. On an Apple
+        Silicon Mac with Apple Intelligence on, it is written on-device by the Neural
+        Engine &mdash; nothing leaves the machine and the GPU stays free for folding.
+        Everywhere else the same summary comes from a template.
+        <b>auto</b> uses whichever works; <b>template</b> forces the template, which
+        makes the output reproducible; <b>off</b> writes none.</p>
+    </div>
+  </div>
+  {% endif %}
+
   <div class="md-card">
     <h2>Proteins <span class="md-hint">(at least one required)</span></h2>
     <div id="protein-rows"></div>

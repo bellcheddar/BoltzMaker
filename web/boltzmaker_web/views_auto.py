@@ -383,8 +383,14 @@ def _page_state_from(form) -> str:
 def _render_prepare(**kwargs):
     return render_template(
         "auto_prepare.html", active="prepare",
+        # narration is excluded: it renders as its own card directly under Settings,
+        # near the top of the form, rather than as a fourth block of run settings
+        # three screens down. Still one Option in the registry, so it posts, validates
+        # and reaches config.json exactly like the rest.
         option_groups=[(key, title, [o for o in options.RUN_OPTIONS if o.group == key])
-                       for key, title in options.GROUP_TITLES.items()],
+                       for key, title in options.GROUP_TITLES.items()
+                       if key != "narration"],
+        narration_option=options.OPTIONS_BY_NAME["narration"],
         **kwargs,
     )
 

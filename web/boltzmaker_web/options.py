@@ -191,15 +191,11 @@ RUN_OPTIONS: tuple[Option, ...] = (
         name="narration", flag="--narration", kind="choice", default="auto",
         choices=("auto", "template", "off"), group="narration",
         label="Summary prose",
-        hint="Landlord writes a plain-English summary of each target and of the campaign "
-             "as a whole, at the end of analysis. On an Apple Silicon Mac running macOS 26 "
-             "with Apple Intelligence switched on, the prose is written on-device by the "
-             "Neural Engine: no data leaves the machine, no API key, no model weights, and "
-             "measurably no GPU use, so it does not compete with a folding run. Anywhere "
-             "else, and whenever the model is unavailable, the same summary is rendered "
-             "from a template instead. auto does whichever is possible; template forces the "
-             "template even where the model would work, which makes the output "
-             "reproducible; off writes no summary at all.",
+        hint="A plain-English summary of the finished campaign. Written on-device by "
+             "the Neural Engine on an Apple Silicon Mac with Apple Intelligence on, so "
+             "nothing leaves the machine and the GPU stays free for folding; from a "
+             "template everywhere else. template forces the template and makes the "
+             "output reproducible; off writes none.",
     ),
 )
 
