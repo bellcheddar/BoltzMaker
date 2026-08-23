@@ -641,3 +641,57 @@ def test_the_soluble_partners_alongside_a_receptor_are_still_rejected():
         "RYTTPEDATPEPGEDPRVTRAKYFIRDEFLRISTASGDGRHYCYPHFTCAVDTENIRRVFNDCRDIIQRMHLRQYELL")
     assert _count_membrane_spans(gnas) == 0
     assert GPCRdbAnnotator.applies_to(annotator, gnas) is False
+
+
+# ---- a tie between two copies is not an ambiguity ---------------------------
+
+def _synthetic_homodimer(tmp_path, sequence, second=None):
+    """Two chains of the same protein, as most crystal structures have.
+
+    Written out rather than shipped as a PDB fixture: the point is the tie in the
+    scoring, which needs only backbone atoms and the right residue identities.
+    """
+    import gemmi
+    st = gemmi.Structure()
+    st.add_model(gemmi.Model("1"))
+    for name, seq in (("A", sequence), ("B", second or sequence)):
+        chain = gemmi.Chain(name)
+        for index, letter in enumerate(seq, start=1):
+            residue = gemmi.Residue()
+            residue.name = gemmi.expand_one_letter(letter, gemmi.ResidueKind.AA)
+            residue.seqid = gemmi.SeqId(index, " ")
+            atom = gemmi.Atom()
+            atom.name, atom.element = "CA", gemmi.Element("C")
+            atom.pos = gemmi.Position(index * 3.8, 0.0, 0.0)
+            residue.add_atom(atom)
+            chain.add_residue(residue)
+        st[0].add_chain(chain)
+    st.setup_entities()
+    return st
+
+
+def test_two_copies_of_one_protein_resolve_rather_than_refuse(adrb2_sequence):
+    """A homodimer must not read as an ambiguity.
+
+    Reported from the field on ABL1: 2GQG is a homodimer of the kinase domain, both
+    chains scored 0.986 against UniProt P00519, the margin rule called it ambiguous,
+    and every target in the campaign was skipped. Most crystal structures have more
+    than one molecule in the asymmetric unit, so this is the ordinary case.
+    """
+    st = _synthetic_homodimer(None, adrb2_sequence[:120])
+    chain = resolve_protein_chain(st, None, adrb2_sequence[:120])
+    assert chain.name == "A"          # deterministic: first by chain order
+
+
+def test_two_different_chains_that_both_match_still_refuse(adrb2_sequence):
+    """The guard the margin rule exists for has to keep working.
+
+    Two *different* proteins each partly matching a reference is a real ambiguity,
+    and picking one silently would place a site on the wrong protein.
+    """
+    other = adrb2_sequence[:120]
+    # Same length, half the residues changed: scores close, sequences plainly not copies.
+    mutated = "".join(c if i % 2 else "A" for i, c in enumerate(other))
+    st = _synthetic_homodimer(None, other, second=mutated)
+    from sse_comparison.structures import _same_protein
+    assert not _same_protein(st[0]["A"], st[0]["B"])
