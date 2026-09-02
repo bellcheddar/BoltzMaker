@@ -526,6 +526,99 @@ import boltz.model.layers.initialize as init""",
                             resample_weights, 1.0 / resample_weights.shape[-1])""",
     ),
     dict(
+        name="steering: flat-bottom shape reporter",
+        relpath="boltz/model/potentials/potentials.py",
+        marker="# BOLTZMAKER-PATCH: flatbottom-report",
+        old="""class FlatBottomPotential(Potential):""",
+        new="""# BOLTZMAKER-PATCH: flatbottom-report -- the masked assignments in
+# FlatBottomPotential can raise "shape mismatch: value tensor of shape [N] cannot be
+# broadcast to indexing result of shape [M]", which names neither the operand that is
+# mis-sized nor the potential it came from, and kills the whole predict process with
+# every target queued behind it. This prints every operand's shape and then re-raises
+# the original exception unchanged -- diagnosis only, it can never alter a result.
+# Written after eight such crashes across a 58-target campaign produced nothing to act
+# on; one run with this in place identified the cause immediately.
+def _bm_safe(fn):
+    try:
+        return fn()
+    except Exception as e:
+        return f"<{type(e).__name__}>"
+
+
+def _bm_flat_report(which, value, k, lower_bounds, upper_bounds, neg_mask, pos_mask):
+    def s(t):
+        try:
+            return tuple(t.shape)
+        except AttributeError:
+            return repr(t)
+    print(
+        f"| FLATBOTTOM_SHAPE_MISMATCH in {which}: "
+        f"value={s(value)} k={s(k)} lower={s(lower_bounds)} upper={s(upper_bounds)} "
+        f"neg_mask={s(neg_mask)} pos_mask={s(pos_mask)} "
+        f"neg_true={int(neg_mask.sum())} pos_true={int(pos_mask.sum())} "
+        f"k*(lower-value)={_bm_safe(lambda: tuple((k * (lower_bounds - value)).shape))} "
+        f"k.expand_as(mask)={_bm_safe(lambda: tuple(k.expand_as(neg_mask).shape))}",
+        flush=True,
+    )
+
+
+class FlatBottomPotential(Potential):""",
+    ),
+    dict(
+        name="steering: elementwise select dodges the MPS masked-select miscount",
+        relpath="boltz/model/potentials/potentials.py",
+        marker="# BOLTZMAKER-PATCH: flatbottom-where",
+        old="""        energy = torch.zeros_like(value)
+        energy[neg_overflow_mask] = (k * (lower_bounds - value))[neg_overflow_mask]
+        energy[pos_overflow_mask] = (k * (value - upper_bounds))[pos_overflow_mask]
+        if not compute_derivative:
+            return energy
+
+        dEnergy = torch.zeros_like(value)
+        dEnergy[neg_overflow_mask] = (
+            -1 * k.expand_as(neg_overflow_mask)[neg_overflow_mask]
+        )
+        dEnergy[pos_overflow_mask] = (
+            1 * k.expand_as(pos_overflow_mask)[pos_overflow_mask]
+        )""",
+        new="""        # BOLTZMAKER-PATCH: flatbottom-where -- `t[mask] = other[mask]` compacts twice
+        # through MPS's masked-select kernel, and on a large tensor with a sparse mask
+        # the two compactions disagree. Measured live at value=(3, 35830451) with the
+        # SAME mask object: energy[mask] gave 73 elements (== mask.sum()) while
+        # (k*(lower-value))[mask] gave 82, so the assignment raised "value tensor of
+        # shape [82] cannot be broadcast to indexing result of shape [73]" and killed
+        # the predict process. Across eight crashes the discrepancy was +1, -2, -3, -4,
+        # -6, -2, -71 and -623 -- mixed sign and magnitude, i.e. a racy compaction, not
+        # an off-by-one. torch.where is elementwise: no compaction, no count to
+        # disagree about, and arithmetically the identical function. Verified identical
+        # to the masked form on 600 randomised CPU cases (rank-1 and rank-2, +/-inf and
+        # None bounds, scalar and vector k, both branches, the negation_mask path), on
+        # the production geometry (3, 200000), and exact against CPU when run on MPS.
+        energy = torch.zeros_like(value)
+        try:
+            energy = torch.where(neg_overflow_mask, k * (lower_bounds - value), energy)
+            energy = torch.where(pos_overflow_mask, k * (value - upper_bounds), energy)
+        except Exception:
+            _bm_flat_report("energy", value, k, lower_bounds, upper_bounds,
+                            neg_overflow_mask, pos_overflow_mask)
+            raise
+        if not compute_derivative:
+            return energy
+
+        dEnergy = torch.zeros_like(value)
+        try:
+            dEnergy = torch.where(
+                neg_overflow_mask, -1 * k.expand_as(neg_overflow_mask), dEnergy
+            )
+            dEnergy = torch.where(
+                pos_overflow_mask, 1 * k.expand_as(pos_overflow_mask), dEnergy
+            )
+        except Exception:
+            _bm_flat_report("dEnergy", value, k, lower_bounds, upper_bounds,
+                            neg_overflow_mask, pos_overflow_mask)
+            raise""",
+    ),
+    dict(
         name="report peak MPS memory per target",
         relpath="boltz/model/models/boltz2.py",
         marker="# BOLTZMAKER-PATCH: mps-peak",
