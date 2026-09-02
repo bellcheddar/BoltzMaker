@@ -623,6 +623,29 @@ wedged, stops it, and lets the retry ladder rerun the affected targets one at a 
 processes. Nothing already computed is lost. This used to need a separate watchdog program
 alongside; it is now part of the run, so an unattended campaign needs nothing watching it.
 
+**9. The same mask, two different answers.** The steering potentials clamp a value between a
+lower and an upper bound, and wrote the result with `energy[mask] = other[mask]`: ordinary Python,
+and correct everywhere except here. On Apple silicon that line compacts the array twice through
+the same mask, and on a large tensor with very few flagged elements the two compactions disagree.
+Measured live: a tensor of 3 x 35,830,451 values with 73 flagged, where the left-hand side
+selected 73 elements and the right-hand side 82, and the assignment failed with `shape mismatch:
+value tensor of shape [82] cannot be broadcast to indexing result of shape [73]`. That kills the
+whole `boltz predict` process and every target queued behind it. It cost **nine crashes and
+eighteen lost targets across three days** of a 58-target campaign before the cause was found, and
+it hid well: the discrepancy was +1, -2, -3, -4, -6, -2, -71 and -623 across those nine, so it
+read as a different bug each time; and it only fires once a coordinate actually leaves its bounds,
+which depends on the trajectory rather than on the molecule, so the same target could fail twice
+and then succeed. The fix replaces the assignment with `torch.where`, which decides element by
+element and never compacts, so there is no count left to disagree about. It is the same
+arithmetic, not an approximation: verified identical to the original on 600 randomised cases (both
+the energy and derivative branches, infinite and absent bounds, scalar and vector force
+constants), on the production tensor shape, and exactly against a CPU reference when run on the
+GPU. A companion patch prints every operand's shape and re-raises the original error unchanged, so
+a future mis-shape says what it was rather than dying mutely -- that reporter is what identified
+this one, in a single run, after two rounds of theorising from crash patterns had got nowhere.
+The campaign went from crashing in seven of its first fifteen invocations to twenty-six
+consecutive clean ones, and finished all 58 targets with steering left on throughout.
+
 ## ⚙️ Progress, and how long a run will take
 
 Two rows during `run`, laid out as a metrics rail: a state mark, a label, the bar, then every
@@ -1439,6 +1462,7 @@ Local runs first, then the hosted site.
 | A target's YAML/CIF exists on disk but BoltzMaker says it's missing, or `preflight` hangs | Check for iCloud "Optimize Mac Storage" dataless files -- `preflight`'s `icloud_materialize` check handles this automatically, but a very large campaign can take a while to force-download everything on first run. |
 | `boltz` fails during `setup` with a `numpy` build error | You're likely on Python 3.13+. `boltz` pins `numpy<2.0`, which has no prebuilt wheel past cp312 -- `_find_boltz_python()` already looks for a `python3.12` specifically; install one (`brew install python@3.12`) if it can't find one. |
 | A run dies with `torch._C._LinAlgError: linalg.svd ... failed to converge because the input matrix is ill-conditioned` | Not a conditioning problem, and not an OOM. Measured on this hardware: of every degenerate 3x3 (rank-1, zeros, repeated singular values, 1e-20, 1e20) plus 2000 random matrices, the only input that raises it is one containing **NaN** -- the diffusion coordinates have already diverged before the alignment runs. `linalg.svd` is not even an MPS op (it falls back to CPU), so forcing it to CPU changes nothing. Apply `patches/apply_boltz_patches.py` so the failure is contained to that one target, then try that target with `--no-potentials`, since the physical-guidance coordinate update is one of the places a trajectory can diverge. |
+| A run dies with `RuntimeError: shape mismatch: value tensor of shape [N] cannot be broadcast to indexing result of shape [M]`, part-way through a target | An Apple-silicon masked-select miscount inside boltz's flat-bottom steering potential, not a problem with your inputs. The same boolean mask compacts to a different number of elements on two tensors of identical shape, so an assignment that is arithmetically fine raises. It is intermittent (it needs a coordinate to leave its bounds on that particular trajectory), so the same target can fail twice and then succeed, and N and M differ by anything from 1 to 623. Run `python3 patches/apply_boltz_patches.py`, which replaces the assignment with `torch.where` (identical arithmetic, no compaction) and installs a reporter that names every operand shape if anything similar recurs. Re-run it after any `boltz` upgrade. |
 | One target's failure kills the whole `boltz predict`, and targets behind it never run | `boltz`'s `predict_step` skips a batch on out-of-memory but re-raises everything else, and `LinAlgError` subclasses `RuntimeError`. Run `python3 patches/apply_boltz_patches.py` (idempotent, keeps `.orig` backups) -- `preflight`'s `boltz_patches` row reports whether it is applied. Re-run it after any `boltz` upgrade, which silently reverts it. |
 | A target fails preflight with a chain-id-length error | Boltz truncates chain IDs to 5 characters internally (a fixed-width field in its own schema) and silently corrupts longer ones rather than erroring at parse time -- shorten the protein/partner/ligand name in `boltz_input.md`. |
 | The dashboard's charts (or the binding-site 3D view) don't render, or look unstyled | plotly.js and 3Dmol.js are vendored and inlined (not CDN-loaded), so a missing network connection shouldn't cause this -- Google Fonts is still CDN-loaded for styling, so the page needs internet access at least once for the fonts to look right (falls back to a generic sans-serif otherwise; charts, 3D views and data are unaffected). If they genuinely don't render, check that `vendor/plotly-2.35.2.min.js` and `vendor/3Dmol-2.5.5-min.js` exist next to `BoltzMaker.py` -- `analyze` prints a warning and falls back to the relevant CDN (known not to work in some HTML-preview contexts) if either is missing. |
@@ -1502,6 +1526,17 @@ campaigns.
 [MIT](LICENSE) &copy; Marc C. Deller
 
 ## 📋 To do
+
+- [x] Fix the **Apple-silicon masked-select miscount** in boltz's flat-bottom steering
+  potential, which cost a 58-target campaign nine crashes and eighteen lost targets over three
+  days. `energy[mask] = other[mask]` compacts twice through the same mask, and on a large tensor
+  with a sparse mask the two compactions return different counts (73 against 82, on 3 x 35,830,451
+  values with 73 flagged), killing the whole `boltz predict` process and every target queued
+  behind it. Replaced with `torch.where`, which is elementwise and never compacts: verified
+  identical on 600 randomised cases, on the production tensor shape, and exactly against a CPU
+  reference on the GPU. Shipped with a shape reporter that re-raises the original error unchanged,
+  since the message named neither the mis-sized operand nor the potential it came from. See
+  **What we fixed in Boltz** item 9.
 
 - [x] Give the dashboard one number that is not Boltz grading its own work: a
   **Ligand pose vs experiment** panel comparing the docked ligand with the same molecule in an
